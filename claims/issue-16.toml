@@ -1,0 +1,7 @@
+claim_id = "08bf1e122cb34557ba57353a4708963f"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "36bdcaad48a175e66f536858c24c7e48f985cddb"
+branch = "claude/issue-16-tla-kernel-slice-1"
+scope = ["specs/README.md", "specs/kernel"]
+opened_commit = "5843e19a0635c417b0beb9b2128a8a316093eb72"
