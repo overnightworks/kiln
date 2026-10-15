@@ -203,6 +203,19 @@ async function earlyReturn(first, second, flag) {
     [],
   ],
   [
+    "an arm that returns while the transaction is still open leaves the start unmatched",
+    `\
+async function leakingReturn(first, second, flag) {
+  await qr.startTransaction();
+  if (flag) return;
+  await qr.manager.save(first);
+  await qr.commitTransaction();
+}
+`,
+    [["S3", 4, ["first"], [4]]],
+    [2],
+  ],
+  [
     "a catch that rolls back and rethrows leaves the code after the try reachable",
     `\
 async function rethrow(first, second, flag) {

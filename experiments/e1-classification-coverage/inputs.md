@@ -673,7 +673,12 @@ it is applied to TypeScript.
   `switch` clauses are separate arms only when they end in `break`,
   `continue`, `return` or `throw`, clauses that fall through run in sequence,
   and `try`, `catch` and `finally` run in sequence. A path that ends in
-  `return` or `throw` does not continue into the join. At the join, a
+  `return` does not continue into the join, but is checked at its exit: a
+  transaction still open there is an unmatched marker (`start; if (c) {
+  rollback; return; } ...; commit` is matched, `start; if (c) return; ...;
+  commit` is not). A path that ends in `throw` does not continue either and
+  is not checked, because judging it needs a model of which `catch` or
+  `finally` receives the exception, which this walk does not carry. At the join, a
   transaction open before the conditional stays open if every continuing arm
   leaves it open and is closed if every one closes it; open in some arms and
   closed in others, it is an unmatched marker. A start made inside the arms

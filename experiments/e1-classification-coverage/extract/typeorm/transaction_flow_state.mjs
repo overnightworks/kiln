@@ -56,7 +56,14 @@ export function terminated(flow, receiver, end) {
   return { ...flow, unmatched: withMembers(flow.unmatched, crossed), ends: extendedEnds(flow.ends, state.closed, end) };
 }
 
-export const leftByReturnOrThrow = (flow) => ({ ...flow, exited: true });
+/** A `return` ends the path: every transaction still open on it is left open, so it is unmatched. */
+export function leftByReturn(flow) {
+  const stillOpen = [...flow.receivers.values()].flatMap((state) => state.open);
+  return { ...flow, unmatched: withMembers(flow.unmatched, stillOpen), exited: true };
+}
+
+/** A `throw` ends the path unchecked: judging it needs the exception modelling of `try`/`catch`. */
+export const leftByThrow = (flow) => ({ ...flow, exited: true });
 export const resumed = (flow) => ({ ...flow, exited: false });
 
 /** A loop body sees no transaction from outside: its terminators cannot close one. */

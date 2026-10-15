@@ -13,7 +13,8 @@ import {
   endsOfStarts,
   hidingOpenTransactions,
   joined,
-  leftByReturnOrThrow,
+  leftByReturn,
+  leftByThrow,
   opened,
   resumed,
   terminated,
@@ -58,7 +59,8 @@ class FlowWalk {
   #node(node, flow) {
     if (isFunctionLike(node)) return flow;
     if (ts.isCallExpression(node)) return this.#call(node, this.#children(node, flow));
-    if (ts.isReturnStatement(node) || ts.isThrowStatement(node)) return leftByReturnOrThrow(this.#children(node, flow));
+    if (ts.isReturnStatement(node)) return leftByReturn(this.#children(node, flow));
+    if (ts.isThrowStatement(node)) return leftByThrow(this.#children(node, flow));
     if (ts.isIfStatement(node)) return this.#conditional(node.expression, [node.thenStatement, node.elseStatement], flow);
     if (ts.isConditionalExpression(node)) return this.#conditional(node.condition, [node.whenTrue, node.whenFalse], flow);
     if (ts.isSwitchStatement(node)) return this.#switch(node, flow);
