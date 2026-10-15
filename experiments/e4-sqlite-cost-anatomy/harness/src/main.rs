@@ -253,8 +253,10 @@ fn run_pilot(args: &[String]) {
     let (cells, rejected_attempts) = comparison::run_pilot_comparisons(
         &self_binary,
         &pilot_args.passthrough_binary,
-        pilot_args.warmup,
-        pilot_args.operations,
+        |_| kiln_e4_harness::driver::OperationPlan {
+            warmup: pilot_args.warmup,
+            timed: pilot_args.operations,
+        },
         &rejected_log_path,
     )
     .unwrap_or_else(|err| {

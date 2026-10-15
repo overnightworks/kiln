@@ -10,6 +10,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use kiln_e4_harness::comparison::{CellComparison, WorkloadComparison, run_pilot_comparisons};
+use kiln_e4_harness::driver::OperationPlan;
 use kiln_e4_harness::machine::REPETITIONS_PER_CELL;
 use kiln_e4_harness::pilot::{PilotWorkload, run_measure_cell_child};
 
@@ -17,14 +18,24 @@ fn harness_binary() -> &'static Path {
     Path::new(env!("CARGO_BIN_EXE_kiln-e4-harness"))
 }
 
+const TINY_PLAN: OperationPlan = OperationPlan {
+    warmup: 1,
+    timed: 1,
+};
+
 /// Both builds' roles point at the same real binary: this proves the
 /// orchestration wiring (driver, interference gate, child spawns) runs
 /// end to end, not the §5 overhead comparison itself (which needs a
 /// genuinely separate passthrough build and is covered by the night run).
 fn run_tiny_pilot(rejected_log: &Path) -> Vec<WorkloadComparison> {
-    run_pilot_comparisons(harness_binary(), harness_binary(), 1, 1, rejected_log)
-        .expect("run_pilot_comparisons must succeed against the real compiled binary")
-        .0
+    run_pilot_comparisons(
+        harness_binary(),
+        harness_binary(),
+        |_| TINY_PLAN,
+        rejected_log,
+    )
+    .expect("run_pilot_comparisons must succeed against the real compiled binary")
+    .0
 }
 
 /// One shared tiny pilot for the tests that only read its rows: nine
@@ -49,6 +60,31 @@ mod kiln_e4_07 {
         assert!(
             mean > 100.0,
             "expected a real measured mean well above a stub constant, got {mean}"
+        );
+    }
+
+    #[test]
+    fn a_comparison_whose_passthrough_build_cannot_start_is_an_error_not_interference() {
+        let output_dir = tempfile::tempdir().expect("tempdir");
+        let rejected_log = output_dir.path().join("rejected.log");
+
+        let result = run_pilot_comparisons(
+            harness_binary(),
+            Path::new("/nonexistent-kiln-e4-passthrough-binary"),
+            |_| TINY_PLAN,
+            &rejected_log,
+        );
+
+        let message = result
+            .expect_err("an unstartable build must stop the pilot")
+            .to_string();
+        assert!(
+            message.contains("measurement child failed"),
+            "got: {message}"
+        );
+        assert!(
+            !rejected_log.exists(),
+            "an execution failure is not interference and must not reach the rejected-attempt log"
         );
     }
 

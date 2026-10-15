@@ -15,7 +15,7 @@ use std::io;
 use std::path::Path;
 use std::time::Instant;
 
-use crate::driver::{self, AttemptOutcome};
+use crate::driver::{self, AttemptOutcome, OperationPlan};
 use crate::generators;
 use crate::machine;
 use crate::pilot::{PilotWorkload, run_measure_cell_child};
@@ -287,20 +287,20 @@ impl BuildBinaries<'_> {
 /// One gated pair attempt: samples interference around both builds'
 /// isolated `measure-cell` children, run in the pair's counterbalanced
 /// order, and judges the bracketed window against protocol §9's frozen
-/// limits. A rejected window, or either child failing, rejects the whole
-/// pair for the driver's retry budget to absorb (§5 repeat policy).
+/// limits. A rejected window rejects the whole pair for the driver's retry
+/// budget to absorb (§5 repeat policy); a monitor or measurement child
+/// that cannot run is an execution failure, never interference (§9).
 fn run_gated_pair_attempt(
     binaries: &BuildBinaries,
     workload: PilotWorkload,
     repetition_index: usize,
-    warmup: usize,
-    operations: usize,
+    plan: OperationPlan,
     seed: u64,
 ) -> AttemptOutcome<ComparisonMeasurement> {
     let start = match crate::interference::sample_interference(binaries.instrumented) {
         Ok(sample) => sample,
         Err(err) => {
-            return AttemptOutcome::Rejected(format!(
+            return AttemptOutcome::ExecutionFailed(format!(
                 "could not sample interference before the pair: {err}"
             ));
         }
@@ -308,15 +308,27 @@ fn run_gated_pair_attempt(
     let window_start = Instant::now();
     let first = first_build(repetition_index);
     let measure = |build: Build| {
-        run_measure_cell_child(binaries.path(build), workload, warmup, operations, seed)
+        run_measure_cell_child(
+            binaries.path(build),
+            workload,
+            plan.warmup,
+            plan.timed,
+            seed,
+        )
     };
     let first_mean = measure(first);
     let second_mean = measure(first.other());
     let elapsed = window_start.elapsed();
+    let (first_mean, second_mean) = match (first_mean, second_mean) {
+        (Ok(first_mean), Ok(second_mean)) => (first_mean, second_mean),
+        (Err(err), _) | (_, Err(err)) => {
+            return AttemptOutcome::ExecutionFailed(format!("measurement child failed: {err}"));
+        }
+    };
     let end = match crate::interference::sample_interference(binaries.instrumented) {
         Ok(sample) => sample,
         Err(err) => {
-            return AttemptOutcome::Rejected(format!(
+            return AttemptOutcome::ExecutionFailed(format!(
                 "could not sample interference after the pair: {err}"
             ));
         }
@@ -324,22 +336,15 @@ fn run_gated_pair_attempt(
     if let Some(reason) = crate::interference::judge_attempt(&start, &end, elapsed) {
         return AttemptOutcome::Rejected(reason);
     }
-    match (first_mean, second_mean) {
-        (Ok(first_mean), Ok(second_mean)) => {
-            let (instrumented, passthrough) = match first {
-                Build::Instrumented => (first_mean, second_mean),
-                Build::Passthrough => (second_mean, first_mean),
-            };
-            AttemptOutcome::Accepted(ComparisonMeasurement {
-                operations_measured: operations,
-                instrumented_mean_wall_ns: instrumented,
-                passthrough_mean_wall_ns: passthrough,
-            })
-        }
-        (Err(err), _) | (_, Err(err)) => {
-            AttemptOutcome::Rejected(format!("measurement child failed: {err}"))
-        }
-    }
+    let (instrumented, passthrough) = match first {
+        Build::Instrumented => (first_mean, second_mean),
+        Build::Passthrough => (second_mean, first_mean),
+    };
+    AttemptOutcome::Accepted(ComparisonMeasurement {
+        operations_measured: plan.timed,
+        instrumented_mean_wall_ns: instrumented,
+        passthrough_mean_wall_ns: passthrough,
+    })
 }
 
 /// Runs every gated pilot workload's pairs through
@@ -347,12 +352,15 @@ fn run_gated_pair_attempt(
 /// retry budget and immediate rejected-attempt log — and reports every
 /// workload: gated ones judged, read-only ones as not gated. Writes a
 /// terminal `FAILED-INTERFERENCE` line for any pair that exhausted its
-/// budget. The thin adapter; [`judge_cell`] carries the tested reduction.
+/// budget; an attempt that cannot execute is an error, not a log line. Each
+/// workload's warm-up and timed counts come from `plan_for`: the pilot
+/// passes the frozen protocol counts, and only a test of the mechanics
+/// passes smaller ones. The thin adapter; [`judge_cell`] carries the tested
+/// reduction.
 pub fn run_pilot_comparisons(
     self_binary: &Path,
     passthrough_binary: &Path,
-    warmup: usize,
-    operations: usize,
+    plan_for: impl Fn(PilotWorkload) -> OperationPlan,
     rejected_log_path: &Path,
 ) -> io::Result<(Vec<WorkloadComparison>, usize)> {
     let binaries = BuildBinaries {
@@ -375,8 +383,7 @@ pub fn run_pilot_comparisons(
                 &binaries,
                 gated[id.cell_index],
                 id.repetition_index,
-                warmup,
-                operations,
+                plan_for(gated[id.cell_index]),
                 seed,
             )
         },
@@ -389,6 +396,7 @@ pub fn run_pilot_comparisons(
     if let Some(err) = log_err {
         return Err(err);
     }
+    let result = result.map_err(io::Error::other)?;
     for (cell_index, repetition_index) in
         driver::exhausted_repetitions(&result.rejected_attempts, machine::MAX_RETRIES)
     {

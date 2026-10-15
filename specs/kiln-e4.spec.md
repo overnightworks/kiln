@@ -18,7 +18,7 @@ in its check names. One criterion per module; several tests may share it.
 - [KILN-E4-04] Every rejected attempt is appended to the rejected-attempt log immediately, with timestamp, cell, attempt and reason, and every repetition that exhausted its budget gets a `FAILED-INTERFERENCE` line; an existing log is never overwritten (§9, §11).
 - [KILN-E4-05] Each attempt runs the cell's fixed operation count after a discarded warm-up, 500 operations for the insert workload and 2,000 for the others (§8.1-§8.2), and reports the mean wall time over the timed operations only (§8.5).
 - [KILN-E4-06] An attempt is accepted when its monitor window shows no CPU 8 activity, at most 1 ms of CPU 2 scheduler wait and a 1-minute load below 18, and otherwise rejected with a reason naming the violated limit (§9).
-- [KILN-E4-07] Every repetition and every comparison attempt runs as its own child process pinned to CPU 2, sampled by a separate monitor process pinned to the CPUs outside {2, 8}; a child that cannot be started or exits unsuccessfully is an error (§9).
+- [KILN-E4-07] Every repetition and every comparison attempt runs as its own child process pinned to CPU 2, sampled by a separate monitor process pinned to the CPUs outside {2, 8}; a child that cannot be started or exits unsuccessfully is an error that stops the run: it is never rejected as interference, never retried and never logged as a rejected attempt (§9).
 - [KILN-E4-08] A repetition's measurement and a monitor sample cross the process boundary as one line each and read back exactly; a line missing a field is rejected rather than defaulted.
 - [KILN-E4-18] The measurement child selects its workload by the documented spelling (`point-read`, `point-update`), and an unknown spelling is rejected.
 

@@ -5,7 +5,7 @@
 //! SQLite, no process spawning, no real clock — so the mechanics are
 //! tested without a live benchmark; the real per-repetition work (restore,
 //! warm-up, timed window, interference sampling) is the caller's injected
-//! `attempt` closure, read by [`run`] exactly like [`crate::preflight`]'s
+//! `attempt` closure, read by [`run_with_logging`] exactly like [`crate::preflight`]'s
 //! checks are read by `run_real`.
 
 use std::fs;
@@ -23,14 +23,19 @@ pub struct AttemptId {
     pub attempt_index: usize,
 }
 
-/// What one attempt of a repetition reports back to [`run`]: either it
-/// produced a usable measurement, or it was discarded for a named reason
-/// (protocol §9: an interference sample failing the window) and must be
-/// retried from warm-up with the same input trace.
+/// What one attempt of a repetition reports back to [`run_with_logging`]:
+/// it produced a usable measurement, it was discarded for a named
+/// interference reason (protocol §9: a monitor window failing a limit) and
+/// must be retried from warm-up with the same input trace, or it could not
+/// run at all.
 #[derive(Debug, Clone)]
 pub enum AttemptOutcome<T> {
     Accepted(T),
     Rejected(String),
+    /// A child that cannot start or fails, or output that cannot be read:
+    /// an error in the harness or its environment, not interference, so it
+    /// uses no retry budget and stops the run.
+    ExecutionFailed(String),
 }
 
 /// One repetition's final outcome after its retry budget (protocol §9:
@@ -41,7 +46,29 @@ pub enum RepetitionOutcome<T> {
     /// Every attempt in the retry budget was rejected: "marked
     /// `FAILED-INTERFERENCE` and logged" (protocol §9).
     FailedInterference,
+    /// An attempt could not run at all; see [`AttemptOutcome::ExecutionFailed`].
+    ExecutionFailed(ExecutionFailure),
 }
+
+/// The attempt that stopped a run because it could not execute (as opposed
+/// to being rejected for interference).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionFailure {
+    pub id: AttemptId,
+    pub reason: String,
+}
+
+impl std::fmt::Display for ExecutionFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "cell {} repetition {} attempt {} could not run: {}",
+            self.id.cell_index, self.id.repetition_index, self.id.attempt_index, self.reason
+        )
+    }
+}
+
+impl std::error::Error for ExecutionFailure {}
 
 /// One cell's outcome once every one of its repetitions has run (protocol
 /// §9: "A cell's verdict... requires all 9 repetitions to succeed; one
@@ -96,7 +123,9 @@ pub fn interleaved_order(cell_count: usize, repetitions_per_cell: usize) -> Vec<
 /// attempt indices `0..=max_retries`, stopping at the first
 /// [`AttemptOutcome::Accepted`]; every [`AttemptOutcome::Rejected`] is
 /// reported to `on_rejected` before the next attempt (or, on the last
-/// attempt, before returning [`RepetitionOutcome::FailedInterference`]).
+/// attempt, before returning [`RepetitionOutcome::FailedInterference`]). An
+/// [`AttemptOutcome::ExecutionFailed`] ends the repetition at once, without
+/// a retry.
 pub fn run_repetition<T>(
     cell_index: usize,
     repetition_index: usize,
@@ -108,6 +137,16 @@ pub fn run_repetition<T>(
     for attempt_index in 0..=max_retries {
         match attempt(attempt_index) {
             AttemptOutcome::Accepted(value) => return RepetitionOutcome::Succeeded(value),
+            AttemptOutcome::ExecutionFailed(reason) => {
+                return RepetitionOutcome::ExecutionFailed(ExecutionFailure {
+                    id: AttemptId {
+                        cell_index,
+                        repetition_index,
+                        attempt_index,
+                    },
+                    reason,
+                });
+            }
             AttemptOutcome::Rejected(reason) => {
                 on_rejected(RejectedAttempt {
                     id: AttemptId {
@@ -139,31 +178,12 @@ pub struct DriverRun<T> {
 /// collected repetition outcomes to a [`CellOutcome`] — "the remaining
 /// cells still run to completion" even once one repetition has already
 /// exhausted its retries, so a late cell is never skipped because an
-/// earlier one failed. Equivalent to [`run_with_logging`] with a no-op
-/// rejection hook — the one caller (a test, or a caller that only wants
-/// the final tally) that genuinely has nothing to do per rejection.
-pub fn run<T>(
-    cell_count: usize,
-    repetitions_per_cell: usize,
-    max_retries: usize,
-    now: impl Fn() -> std::time::Duration,
-    attempt: impl FnMut(AttemptId) -> AttemptOutcome<T>,
-) -> DriverRun<T> {
-    run_with_logging(
-        cell_count,
-        repetitions_per_cell,
-        max_retries,
-        now,
-        attempt,
-        |_| {},
-    )
-}
-
-/// Like [`run`], but also calls `on_rejected` for every discarded attempt
-/// as it happens — before the next attempt starts, not batched until the
+/// earlier one failed. Calls `on_rejected` for every discarded attempt as
+/// it happens — before the next attempt starts, not batched until the
 /// whole run finishes — so a caller can append it to protocol §9's
 /// rejected-attempt log immediately (`data/rejected.log`: "never
-/// overwritten").
+/// overwritten"). An attempt that cannot execute is no interference
+/// outcome: it stops the run with its [`ExecutionFailure`].
 pub fn run_with_logging<T>(
     cell_count: usize,
     repetitions_per_cell: usize,
@@ -171,7 +191,7 @@ pub fn run_with_logging<T>(
     now: impl Fn() -> std::time::Duration,
     mut attempt: impl FnMut(AttemptId) -> AttemptOutcome<T>,
     mut on_rejected: impl FnMut(&RejectedAttempt),
-) -> DriverRun<T> {
+) -> Result<DriverRun<T>, ExecutionFailure> {
     let mut per_cell_successes: Vec<Vec<T>> = (0..cell_count).map(|_| Vec::new()).collect();
     let mut rejected_attempts = Vec::new();
 
@@ -193,8 +213,10 @@ pub fn run_with_logging<T>(
                 rejected_attempts.push(rejected);
             },
         );
-        if let RepetitionOutcome::Succeeded(value) = outcome {
-            per_cell_successes[cell_index].push(value);
+        match outcome {
+            RepetitionOutcome::Succeeded(value) => per_cell_successes[cell_index].push(value),
+            RepetitionOutcome::FailedInterference => {}
+            RepetitionOutcome::ExecutionFailed(failure) => return Err(failure),
         }
     }
 
@@ -212,10 +234,10 @@ pub fn run_with_logging<T>(
         })
         .collect();
 
-    DriverRun {
+    Ok(DriverRun {
         cell_outcomes,
         rejected_attempts,
-    }
+    })
 }
 
 /// Which (cell, repetition) pairs exhausted their whole retry budget
@@ -256,7 +278,7 @@ pub fn failed_interference_log_line(cell_index: usize, repetition_index: usize) 
 }
 
 /// The real clock, for a real driver run: seconds since the Unix epoch, as
-/// a plain [`std::time::Duration`] so [`run`]/[`run_repetition`] stay
+/// a plain [`std::time::Duration`] so [`run_with_logging`]/[`run_repetition`] stay
 /// clock-agnostic and testable against an injected one.
 pub fn real_clock() -> std::time::Duration {
     SystemTime::now()
@@ -311,6 +333,23 @@ mod tests {
 
     fn fixed_clock(seconds: u64) -> impl Fn() -> Duration {
         move || Duration::from_secs(seconds)
+    }
+
+    fn run_without_logging<T>(
+        cell_count: usize,
+        repetitions_per_cell: usize,
+        max_retries: usize,
+        attempt: impl FnMut(AttemptId) -> AttemptOutcome<T>,
+    ) -> DriverRun<T> {
+        run_with_logging(
+            cell_count,
+            repetitions_per_cell,
+            max_retries,
+            fixed_clock(0),
+            attempt,
+            |_| {},
+        )
+        .expect("no attempt in these tests fails to execute")
     }
 
     mod kiln_e4_01 {
@@ -404,9 +443,8 @@ mod tests {
 
         #[test]
         fn a_cell_with_every_repetition_succeeding_is_completed() {
-            let result: DriverRun<usize> = run(2, 3, 3, fixed_clock(0), |id| {
-                AttemptOutcome::Accepted(id.repetition_index)
-            });
+            let result =
+                run_without_logging(2, 3, 3, |id| AttemptOutcome::Accepted(id.repetition_index));
             assert_eq!(result.rejected_attempts.len(), 0);
             assert_eq!(result.cell_outcomes.len(), 2);
             for outcome in &result.cell_outcomes {
@@ -425,7 +463,7 @@ mod tests {
             // keeps running the remaining cells and repetitions rather than
             // stopping the whole run (protocol §9: "the remaining cells still
             // run to completion").
-            let result: DriverRun<usize> = run(2, 3, 3, fixed_clock(0), |id| {
+            let result = run_without_logging(2, 3, 3, |id| {
                 if id.cell_index == 0 && id.repetition_index == 1 {
                     AttemptOutcome::Rejected("pinned cpu waited".to_string())
                 } else {
@@ -504,14 +542,15 @@ mod tests {
         #[test]
         fn run_with_logging_calls_on_rejected_for_every_discarded_attempt_before_the_run_ends() {
             let mut logged = Vec::new();
-            let result: DriverRun<()> = run_with_logging(
+            let result = run_with_logging(
                 1,
                 1,
                 3,
                 fixed_clock(5),
-                |_id| AttemptOutcome::Rejected("sibling not idle".to_string()),
+                |_id| AttemptOutcome::<()>::Rejected("sibling not idle".to_string()),
                 |rejected| logged.push(rejected.clone()),
-            );
+            )
+            .unwrap();
             // "up to 3 retries (4 attempts)" — every one of them logged, in
             // the same order as the final rejected_attempts list.
             assert_eq!(logged.len(), 4);
@@ -520,19 +559,6 @@ mod tests {
                 assert_eq!(a.id, b.id);
                 assert_eq!(a.reason, b.reason);
             }
-        }
-
-        #[test]
-        fn run_delegates_to_run_with_logging_and_reports_identically() {
-            let plain: DriverRun<usize> = run(2, 2, 1, fixed_clock(0), |id| {
-                if id.cell_index == 0 && id.attempt_index == 0 {
-                    AttemptOutcome::Rejected("noise".to_string())
-                } else {
-                    AttemptOutcome::Accepted(id.repetition_index)
-                }
-            });
-            assert_eq!(plain.rejected_attempts.len(), 2);
-            assert_eq!(plain.cell_outcomes.len(), 2);
         }
 
         #[test]
@@ -639,6 +665,62 @@ mod tests {
                     }
                 );
             }
+        }
+    }
+
+    mod kiln_e4_07 {
+        use super::*;
+
+        #[test]
+        fn an_attempt_that_cannot_execute_ends_its_repetition_without_a_retry() {
+            let mut rejections = Vec::new();
+            let mut calls = 0;
+            let outcome: RepetitionOutcome<()> = run_repetition(
+                1,
+                2,
+                3,
+                fixed_clock(10),
+                |_attempt_index| {
+                    calls += 1;
+                    AttemptOutcome::ExecutionFailed("spawn failed".to_string())
+                },
+                |r| rejections.push(r),
+            );
+            assert_eq!(calls, 1);
+            assert!(rejections.is_empty());
+            let RepetitionOutcome::ExecutionFailed(failure) = outcome else {
+                panic!("expected an execution failure, got {outcome:?}");
+            };
+            assert_eq!(failure.reason, "spawn failed");
+            assert_eq!(
+                failure.id,
+                AttemptId {
+                    cell_index: 1,
+                    repetition_index: 2,
+                    attempt_index: 0
+                }
+            );
+        }
+
+        #[test]
+        fn an_execution_failure_stops_the_run_after_the_interference_already_logged() {
+            let mut logged = 0;
+            let result = run_with_logging(
+                2,
+                3,
+                3,
+                fixed_clock(0),
+                |id| match (id.cell_index, id.repetition_index, id.attempt_index) {
+                    (0, 0, 0) => AttemptOutcome::Rejected("sibling not idle".to_string()),
+                    (1, 0, _) => AttemptOutcome::ExecutionFailed("no such binary".to_string()),
+                    _ => AttemptOutcome::Accepted(()),
+                },
+                |_| logged += 1,
+            );
+            let failure = result.expect_err("an unexecutable attempt must stop the run");
+            assert_eq!((failure.id.cell_index, failure.id.repetition_index), (1, 0));
+            assert!(failure.to_string().contains("no such binary"));
+            assert_eq!(logged, 1);
         }
     }
 }
