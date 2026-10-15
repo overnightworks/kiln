@@ -329,19 +329,21 @@ Every deterministic database re-read this pass resolves an unknown footprint at
 batch analysis — never by static derivation from source code; this remains true after
 re-checking each primary text. What the first draft overstated was turning that
 observation into a strict "declared or discovered, nothing else" dichotomy: §3.2
-below re-opens it with two mechanisms found this pass that are static, code-derived,
-*and* per-call-instance — located outside the OLTP lineage entirely.
+below re-opens it with mechanisms found this pass that are static and code-derived,
+located outside the OLTP lineage entirely — Bartoletti et al.'s abstract-model key
+approximation is per-call-instance, while Conthereum's implemented, running
+mechanism works on pairs of functions instead, not per-call-instance.
 
 ### 3.2 New partial overlaps found by the fresh search
 
 - **QURO**, Yan & Cheung, VLDB 2016, [full VLDB PDF obtained and read this pass](https://www.vldb.org/pvldb/vol9/p444-yan.pdf) — corrected from the first draft's project-page characterization, and from an over-read "deployed" that the paper's text does not support. A build-time compiler that statically analyzes real OLTP application transaction code (C/C++ with embedded ODBC calls) and reorders statements to reduce lock-hold time, up to 6.53× throughput and 85% latency reduction. The paper states plainly: *"we implemented a prototype of QURO"* (§1) and *"our current prototype is built on Clang"* (§3); the one "deploys" in the text ("QURO deploys the instrumented version using the same settings as the original application," §3) describes deploying its own profiling build for benchmarking, not a production rollout. **Classification: partial overlap** for "build-time static analysis of real transaction code" — implemented and benchmarked, not deployed in production; the output is a within-transaction statement reordering, not a cross-transaction footprint export, so it does not touch C2's admission-protocol half at all.
 - **Beta**, arXiv 1807.09887, §7.4 (re-read this pass, §2.5) — *proposes*, without reporting an implementation or benchmark, precomputing the accessed/modified columns of each compiled OLTP program at compile time to drive attribute-level OMVCC validation ("a better approach is to precompute these columns during compilation," §7.4; its §7 experiments evaluate record-level OMVCC instead, §2.5). Even taken as implemented it would be a build-time static footprint at the wrong granularity for C2: per-*program*, not per-call-argument, and feeding a single concurrency-control mechanism rather than C2's one logical-resource admission protocol. **Classification: adjacent** for C2.
-- **Bartoletti, Galletta & Murgia**, arXiv 1905.04366, [full text read, §2 and p.10 Example 6](https://arxiv.org/pdf/1905.04366) — the most materially relevant new finding for C2, inside an abstraction, not on deployed Ethereum. Their model "abstract[s] from the actual smart contracts language" (§2): a contract is a set of functions with an unspecified body semantics, not EVM bytecode. Within that model, "we over-approximate the set of keys read and written by transactions, by statically analysing the code of the called functions" (p.10), and the approximation is **per transaction instance**: Example 6 derives concrete key sets such as `{A.balance, C.balance, C.k1}` for one specific call with a concrete sender `A`, not a per-function or per-contract set — the mechanism half of C2 the first draft's "declared or discovered" dichotomy implied did not exist anywhere. Applying it to real Ethereum is explicitly unfinished work: "Applying our approach to Ethereum would require a static analysis of read/written keys at the level of EVM bytecode[; the only tool implementing such an analysis] ... make[s] ES-ETH not directly usable to the purposes of our work" (§6). It targets a pairwise swappability test for a scheduler, not a general OLTP admission protocol, with no one-hop dependent-read carve-out or application-code setting. **Classification: partial overlap** — for the abstract model; not yet for EVM bytecode or OLTP code.
+- **Bartoletti, Galletta & Murgia**, arXiv 1905.04366, [full text read, §2, Definition 7, and p.10 Example 6](https://arxiv.org/pdf/1905.04366) — the most materially relevant new finding for C2, inside an abstraction, not on deployed Ethereum, and conditional rather than demonstrated. Their model "abstract[s] from the actual smart contracts language" (§2): a contract is a set of functions with an unspecified body semantics, not EVM bytecode. Strong swappability itself "abstracts from the actual static analysis used to obtain the safe approximations: it is sufficient that such an analysis exists" (§3, before Definition 7) — Definition 7 parameterizes the result over *any* W and R satisfying a safe-approximation property; the paper assumes such an analysis exists rather than constructing or proving one. Example 6 hand-derives concrete key sets such as `{A.balance, C.balance, C.k1}` for one specific call with a concrete sender `A` — one worked instantiation of what an assumed analysis's output looks like, per transaction instance, not a per-function or per-contract set, and not a demonstrated general extractor. Applying it to real Ethereum is explicitly unfinished work: "Applying our approach to Ethereum would require a static analysis of read/written keys at the level of EVM bytecode[; the only tool implementing such an analysis] ... make[s] ES-ETH not directly usable to the purposes of our work" (§6). It targets a pairwise swappability test for a scheduler, not a general OLTP admission protocol, with no one-hop dependent-read carve-out or application-code setting. **Classification: partial overlap** — a conditional framework plus one hand-worked instantiation, not a demonstrated per-call extractor; not yet for EVM bytecode or OLTP code.
 - **Conthereum**, Zareh Chahoki/Herlihy/Roveri, arXiv 2504.07280, [full text read, §III-B](https://arxiv.org/pdf/2504.07280) — "statically analyzes Solidity code to construct a repository of potential conflicts between pairs of public and external functions callable by Ethereum transactions" (§III-B): **function-pair** granularity, not per-call-instance — coarser than Bartoletti's approximation, and a different mechanism, not an operationalization of it. Genuinely implemented and running in a real multi-core scheduler, not only a correctness test. Still blockchain-specific. **Classification: partial overlap.**
 - **"Static Analysis for Detecting Transaction Conflicts in Ethereum Smart Contracts,"** Zareh Chahoki & Roveri, arXiv 2507.04357 — the conflict-detection method Conthereum cites and operationalizes as its own static-analysis step (Conthereum's reference [16], same first author); extracts conflicts between **function pairs**, the same granularity as Conthereum's repository and coarser than Bartoletti's per-call-argument approximation. **Classification: adjacent** (per-function-pair, not per-instance).
 - **FAFO / ParaLyze**, arXiv 2507.10757 (2025), blockchain/EVM setting. Determines an approximate read/write set from node-supplied metadata or from simulation — no static-analysis-of-code path. **Classification: adjacent.**
 - **Afek, Korland & Zilberstein**, LCPC 2010/2011, "Lowering STM Overhead with Static Analysis." Compile-time data-flow analysis that removes redundant STM instrumentation — a genuine build-time static analysis, but of STM bookkeeping overhead in a general in-process program, not of a database transaction's footprint. **Classification: adjacent.**
-- **CoqSQL**, Suriyakarn thesis, [full text read this pass, §1.2, §4.3](https://adam.chlipala.net/theses/sorawit.pdf) — classified for C1 in §2.5; for C2 the first draft's exclusion ground does not hold. "A predicate is parameterized by the schema on which the test is performed" (§4.3) is a fact about the Coq **type** of a predicate (which schema it type-checks against), not about whether its runtime value depends on a call's arguments — it can: the bookstore example's `placeOrder id isbn` method builds the predicate `VAR("b.Isbn") == VAL(isbn)` directly from the call argument `isbn` (§1.2). CoqSQL's predicates are therefore call-argument-parametric, the same axis C2 needs; what keeps this **adjacent** rather than a stronger overlap is scope, not parameterization — CoqSQL synthesizes a whole implementation from a specification rather than deriving a footprint for already-written procedure code, and drives no admission protocol. **Classification: adjacent** for C2.
+- **CoqSQL**, Suriyakarn thesis, [full text read this pass, §1.2, §4.3](https://adam.chlipala.net/theses/sorawit.pdf) — classified for C1 in §2.5; for C2 the first draft's exclusion ground does not hold. "A predicate is parameterized by the schema on which the test is performed" (§4.3) is a fact about the Coq **type** of a predicate (which schema it type-checks against), not about whether its runtime value depends on a call's arguments — it can: the bookstore example's `placeOrder id isbn` method builds the predicate `VAR("b.Isbn") == VAL(isbn)` directly from the call argument `isbn` (§1.2). CoqSQL's predicates are therefore call-argument-parametric, the same axis C2 needs; what keeps this **adjacent** rather than a stronger overlap is scope, not parameterization — CoqSQL synthesizes a whole implementation from a specification rather than deriving a footprint for already-written procedure code, and drives none of C2's specific arrangement (an argument-derived footprint feeding a separate admission decision). That narrow absence is not an absence of conflict handling: transactional predication itself, the technique CoqSQL's `PStruct` builds on, resolves conflicts directly — under optimistic concurrency control "an operation may get aborted when a conflict arises" (§2.4) — it is simply not C2's footprint-to-admission shape. **Classification: adjacent** for C2.
 
 ### 3.3 Conclusion for C2
 
@@ -353,9 +355,10 @@ itself does not state (C2 names only "one logical-resource protocol," opening
 paragraph); the honest basis for exclusion is that Amato's approximation is tuned
 relative to an abstract snapshot of the whole schema's state space, not derived purely
 from a call's own arguments. Second, and more materially, Bartoletti, Galletta & Murgia
-(2019) do exactly what C2's build-time, per-call, code-derived half requires — but
-inside their own abstraction, which "abstract[s] from the actual smart contracts
-language" (§2), not on deployed Ethereum, where the paper itself says the analysis
+(2019) assume, and illustrate with one hand-worked instance, exactly the shape C2's
+build-time, per-call, code-derived half requires — a conditional framework, not a
+demonstrated extractor, and inside their own abstraction, which "abstract[s] from the
+actual smart contracts language" (§2), not on deployed Ethereum, where the paper itself says the analysis
 would still need to be done (§6, §3.2). Conthereum (2025) operationalizes a
 *different*, coarser mechanism into a real scheduler — conflicts "between pairs of
 public and external functions" (§III-B), function-pair granularity, not Bartoletti's
@@ -368,28 +371,38 @@ mechanism (Conthereum) is function-pair, not per-call-argument.
 **Confidence: medium** (down from the first draft's medium-high), reflecting
 Bartoletti et al.'s per-instance static key approximation — the strongest single data
 point for "can a per-call, code-derived footprint be statically approximated at all" —
-but demonstrated only inside an abstract model, not on deployed EVM bytecode or OLTP
-source. What C2 needs that is not yet found anywhere: the per-call, static,
-code-derived footprint mechanism *transplanted* into ordinary OLTP application source
-code, driving admission under one logical-resource protocol, with a one-hop carve-out
-for dependent reads resolved through a statically-known foreign key. Medium, not low,
-because the one implemented blockchain-setting mechanism (Conthereum) is coarser
-(function-pair) than C2 needs, and the per-instance mechanism (Bartoletti) is
-unimplemented outside its own abstract model — the transplant is not mechanical either
-way. Medium, not medium-high, because "can a per-call, code-derived footprint be
-statically approximated at all" — most of what made the first draft's dichotomy feel
-airtight — is no longer open in the abstract: it has a confirmed yes, just not yet
-implemented in kiln's setting or at kiln's granularity.
+but, read precisely, the paper *assumes* rather than demonstrates that a safe
+key-extraction analysis exists ("it is sufficient that such an analysis exists,"
+§3/Definition 7) and illustrates that assumption with one hand-worked instance
+(Example 6), not a general extractor it builds or proves; neither form is on deployed
+EVM bytecode or OLTP source. What C2 needs that is not yet found anywhere: the
+per-call, static, code-derived footprint mechanism *transplanted* into ordinary OLTP
+application source code, driving admission under one logical-resource protocol, with
+a one-hop carve-out for dependent reads resolved through a statically-known foreign
+key. Medium, not low, because the one implemented blockchain-setting mechanism
+(Conthereum) is coarser (function-pair) than C2 needs, and Bartoletti's framework is
+unimplemented outside its own abstract model and conditional on an assumed analysis —
+the transplant is not mechanical either way. Medium, not medium-high, because "can a
+per-call, code-derived footprint be statically approximated at all" — most of what
+made the first draft's dichotomy feel airtight — is no longer open in the abstract as
+a blanket "no," but the honest form of that "yes" is an assumed existence illustrated
+once, not a confirmed, demonstrated mechanism; implemented or not, it is not yet at
+kiln's setting or granularity. **This correction does not move C2 off medium**: the
+"medium, not low" reasoning already rested on Bartoletti being unimplemented outside
+its abstract model, and sharpening "unimplemented" to "assumed and illustrated once,
+not demonstrated" narrows the same gap further without crossing into low.
 
 **Narrowest honest restatement:** unchanged in substance from `docs/concept.md` §15 —
 *static, build-time derivation of a transaction's read/write footprint as a pure
 function of its declared call arguments (plus at most one dependent read resolved
 through a statically-known foreign key), from compiled OLTP application code, feeding
 one logical-resource admission protocol.* This review found the per-call-instance
-static-derivation half of that sentence demonstrated only inside an abstract model that
-itself abstracts from the contract language (Bartoletti et al., 2019), not yet carried
-to EVM bytecode or OLTP code; the one blockchain-setting system that is implemented
-and running (Conthereum, 2025) works at a coarser, function-pair granularity instead.
+static-derivation half of that sentence assumed to exist and illustrated by one
+hand-worked instance, inside an abstract model that itself abstracts from the
+contract language (Bartoletti et al., 2019) — not demonstrated by a general
+extractor, and not yet carried to EVM bytecode or OLTP code; the one blockchain-setting
+system that is implemented and running (Conthereum, 2025) works at a coarser,
+function-pair granularity instead.
 No source occupies the whole sentence, including the OLTP/application-code setting and
 the per-call-argument granularity together.
 
@@ -493,9 +506,10 @@ specifically.
 - **Mergeable Replicated Data Types / Quark** (OOPSLA 2019) — automatic synthesis of a
   three-way merge for explicitly non-commuting operations, restated this pass as
   state-merge synthesis rather than summary synthesis (§2.3).
-- **Bartoletti, Galletta & Murgia** (arXiv 1905.04366, 2019) derives per-call-instance
-  key sets, but inside an abstraction that "abstract[s] from the actual smart
-  contracts language" and is not yet applied to EVM bytecode; **Conthereum** (arXiv
+- **Bartoletti, Galletta & Murgia** (arXiv 1905.04366, 2019) assumes a per-call-instance
+  key-extraction analysis exists and hand-illustrates it with one example, inside an
+  abstraction that "abstract[s] from the actual smart contracts language," neither
+  demonstrated as a general extractor nor yet applied to EVM bytecode; **Conthereum** (arXiv
   2504.07280, 2025) and the 2025 Ethereum static-conflict-analysis paper it cites and
   operationalizes (arXiv 2507.04357, same first author) instead derive conflicts
   between **function pairs** — a coarser, implemented, blockchain-specific lineage,
@@ -520,7 +534,8 @@ specifically.
   Coq-checked certificate, but only from the query plan onward — the SQL-to-query-plan
   translation is itself unverified, §1.3); adjacent for C2 (its predicates are
   call-argument-parametric, e.g. `placeOrder`'s `isbn`, but it synthesizes a whole
-  implementation and drives no admission protocol) (§2.5, §3.2).
+  implementation and drives none of C2's specific footprint-to-admission arrangement —
+  transactional predication itself already resolves conflicts, by aborting) (§2.5, §3.2).
 - Corrected bibliographic facts carried forward: **Caracal is SOSP 2021** (unchanged
   from the first draft); the Abadi et al. **TypeORM threshold is ≥300 stars** and the
   **0.9% Attribute Dependency figure averages over the 33 affected applications**, not
@@ -535,8 +550,12 @@ specifically.
   claim to be.
 - **The original pass's general web-search queries were not logged with per-hit
   screening counts** — §1.6's register states this plainly for rows 1–3 rather than
-  retrofitting invented numbers onto a session this review did not run; every query
-  this pass ran itself has an exact count in §1.6.
+  retrofitting invented numbers onto a session this review did not run. Every work
+  this pass opened and read is classified individually in §§2–4, not pooled into a
+  query-level tally. Screened-but-not-opened hits are counted, not listed one by one,
+  in §1.6: exact for a direct fetch (rows 4–17, one document each) and approximate —
+  marked "~", not claimed as exact — for the two bibliographic web searches that
+  confirmed a fact without opening the paper (rows 18–19).
 - **Two primary sources could not be obtained despite repeated attempts, in either
   pass:** Shasha/Llirbat/Simon/Valduriez's full ACM TODS 1995 text (two mirrors, both
   403) and Faleiro/Abadi/Hellerstein's PWV, PVLDB 2017 (NSF Public Access mirror
