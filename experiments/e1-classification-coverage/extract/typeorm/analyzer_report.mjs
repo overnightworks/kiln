@@ -3,7 +3,7 @@
 import path from "node:path/posix";
 
 import { ExtractorError } from "./extractor_error.mjs";
-import { isFallbackExcluded } from "./file_selection.mjs";
+import { isSelected } from "./file_selection.mjs";
 
 const ORM_METHOD_TYPES = new Set(["read", "write", "other"]);
 const TRANSACTION_METHOD_TYPE = "transaction";
@@ -57,6 +57,5 @@ function addMethodMessage(content, located, sites, markers) {
 function applicationFile(reportedPath, selection) {
   const file = path.join(selection.directory, reportedPath);
   const leavesRoot = path.isAbsolute(file) || file === ".." || file.startsWith("../");
-  if (leavesRoot || (selection.fallback && isFallbackExcluded(file))) return undefined;
-  return file;
+  return leavesRoot || !isSelected(selection, file) ? undefined : file;
 }

@@ -2,13 +2,11 @@
 
 import { spawnSync } from "node:child_process";
 
+import { assertOnlyFilesOutsideTheProject } from "./analyzer_errors.mjs";
 import { ExtractorError } from "./extractor_error.mjs";
 import { analyzerArguments } from "./file_selection.mjs";
 
-/**
- * The analyzer reports a file it could not read only on its error stream and
- * still exits 0, so any error output means the denominator lost a file.
- */
+/** Returns the analyzer's error output, which is only ever files outside the project. */
 export function runAnalyzer({ script, workingDirectory, selection, applicationRoot, output }) {
   const run = spawnSync("node", [script, ...analyzerArguments(selection, applicationRoot, output)], {
     cwd: workingDirectory,
@@ -17,5 +15,6 @@ export function runAnalyzer({ script, workingDirectory, selection, applicationRo
   });
   if (run.error) throw run.error;
   if (run.status !== 0) throw new ExtractorError(`the analyzer exited with status ${run.status}: ${run.stderr}`);
-  if (run.stderr.trim() !== "") throw new ExtractorError(`the analyzer reported errors:\n${run.stderr}`);
+  assertOnlyFilesOutsideTheProject(run.stderr);
+  return run.stderr;
 }

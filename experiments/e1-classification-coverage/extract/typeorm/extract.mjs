@@ -61,7 +61,8 @@ function writeUnits(row, corpus, outputDirectory) {
   const selection = selectionOf(trackedFiles(root));
   verifySnapshot(row, root, selection);
   const messages = `${stem}.analyzer.json`;
-  runAnalyzer({ script: analyzerScript(corpus), workingDirectory: corpus, selection, applicationRoot: root, output: path.resolve(messages) });
+  const analyzerLog = runAnalyzer({ script: analyzerScript(corpus), workingDirectory: corpus, selection, applicationRoot: root, output: path.resolve(messages) });
+  writeFileSync(`${stem}.analyzer.log`, analyzerLog);
   const report = parseAnalyzerJson(readFileSync(messages, "utf8"), selection);
   const files = new Set([...report.sites, ...report.markers].map((located) => located.file));
   const sources = new Map([...files].sort().map((file) => [file, readFileSync(path.join(root, file), "utf8")]));

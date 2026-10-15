@@ -53,21 +53,15 @@ function finalName(expression) {
 
 /** The start up to the last commit or rollback on the same receiver, within the same function. */
 function startedBlock(start, sourceText) {
-  const receiverText = withoutWhitespace(start.expression.expression.getText(sourceText.sourceFile));
-  const sameReceiver = (call) => withoutWhitespace(call.expression.expression?.getText(sourceText.sourceFile) ?? "") === receiverText;
-  const inFunction = sourceText.calls.filter((call) => sameFunction(call, start) && sameReceiver(call));
-  const startedAt = start.getEnd();
-  const nextStart = inFunction.find((call) => calledMethodName(call) === START && call.getStart(sourceText.sourceFile) >= startedAt);
-  const limit = nextStart ? nextStart.getStart(sourceText.sourceFile) : Infinity;
-  const terminators = inFunction.filter(
-    (call) => TERMINATORS.has(calledMethodName(call)) && call.getStart(sourceText.sourceFile) >= startedAt && call.getEnd() <= limit,
-  );
+  const receiverOf = (call) => withoutWhitespace(call.expression.expression?.getText(sourceText.sourceFile) ?? "");
+  const startOf = (call) => sourceText.startOf(call);
+  const sameReceiver = sourceText.calls.filter((call) => sameFunction(call, start) && receiverOf(call) === receiverOf(start));
+  const after = sameReceiver.filter((call) => startOf(call) >= start.getEnd());
+  const nextStart = after.find((call) => calledMethodName(call) === START);
+  const limit = nextStart ? startOf(nextStart) : Infinity;
+  const terminators = after.filter((call) => TERMINATORS.has(calledMethodName(call)) && call.getEnd() <= limit);
   if (terminators.length === 0) return undefined;
-  return {
-    position: sourceText.startOf(start),
-    start: sourceText.startOf(start),
-    end: Math.max(...terminators.map((call) => call.getEnd())),
-  };
+  return { position: startOf(start), start: startOf(start), end: Math.max(...terminators.map((call) => call.getEnd())) };
 }
 
 function withoutWhitespace(text) {

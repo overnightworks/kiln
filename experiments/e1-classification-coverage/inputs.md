@@ -634,6 +634,37 @@ text above, ruled so the extractor applies them mechanically. They add no rule; 
   its location in a side output of the run and never aborts it, so the
   uncounted transaction stays visible rather than silent.
 
+**Clarification 16.10.2026 (TypeORM enumeration).** Readings of the text above
+for TypeScript, ruled so the extractor applies them mechanically. They add no
+rule; none states or implies a count. Where the Django clarification above
+applies unchanged (S3 parameters, application boundary, transaction markers),
+it is applied to TypeScript.
+
+- **Nearest `tsconfig.json`.** "The shortest path from the root" is the path
+  with the fewest characters; equal lengths are ordered lexically. It is not
+  the shallowest path.
+- **S3 parameters.** "The enclosing function" is the innermost function, method,
+  constructor, accessor or arrow function whose body holds the call. Parameters
+  are the names that function declares (destructured names and rest included),
+  then its `const`/`let`/`var`, loop and `catch` variables bound before the
+  site, as the Django clarification orders them; a name of an outer function is
+  not one. For an S5 chain the call is the whole written chain.
+- **S5 chain.** A chain is one written receiver chain: the `createQueryBuilder()`
+  call and every call whose callee is a member access on the result of the call
+  before it, up to the last such call. A reported call on a variable that
+  holds a builder, or inside an argument of a chain method, is not in the
+  chain. A chain holding several `createQueryBuilder()` calls belongs to the
+  first one written.
+- **S2 forms.** `X.startTransaction()` ends at the last
+  `X.commitTransaction()` or `X.rollbackTransaction()` with the same receiver
+  text written directly in the same function before the next
+  `X.startTransaction()`; a start without one opens no unit.
+  `X.transaction(...)` opens a unit when `X` is, or ends in a property named,
+  `dataSource`, `manager` or `connection`, and its body is the last function
+  or arrow function argument. A method decorated `@Transaction` or
+  `@LazyTransaction`, and any other `transaction` call, is a marker that opens
+  no unit, recorded as the Django clarification states.
+
 ### 3.1 Worked examples: full unit counts against the frozen rule
 
 Both examples below were recounted by actually running the two pinned

@@ -1,0 +1,453 @@
+{
+  "messages": [
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 33,
+      "toLine": 33,
+      "fromColumn": 14,
+      "toColumn": 44,
+      "content": {
+        "type": "method",
+        "name": "startTransaction",
+        "methodType": "transaction",
+        "object": "queryRunner",
+        "objectTypes": [
+          "QueryRunner"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 38,
+      "toLine": 38,
+      "fromColumn": 18,
+      "toColumn": 59,
+      "content": {
+        "type": "method",
+        "name": "delete",
+        "methodType": "write",
+        "object": "manager",
+        "objectTypes": [
+          "EntityManager"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 39,
+      "toLine": 39,
+      "fromColumn": 18,
+      "toColumn": 59,
+      "content": {
+        "type": "method",
+        "name": "delete",
+        "methodType": "write",
+        "object": "manager",
+        "objectTypes": [
+          "EntityManager"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 40,
+      "toLine": 40,
+      "fromColumn": 18,
+      "toColumn": 58,
+      "content": {
+        "type": "method",
+        "name": "delete",
+        "methodType": "write",
+        "object": "manager",
+        "objectTypes": [
+          "EntityManager"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 44,
+      "toLine": 44,
+      "fromColumn": 22,
+      "toColumn": 64,
+      "content": {
+        "type": "method",
+        "name": "insert",
+        "methodType": "write",
+        "object": "manager",
+        "objectTypes": [
+          "EntityManager"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 67,
+      "toLine": 67,
+      "fromColumn": 29,
+      "toColumn": 69,
+      "content": {
+        "type": "method",
+        "name": "insert",
+        "methodType": "write",
+        "object": "createQueryBuilder()",
+        "objectTypes": [
+          "SelectQueryBuilder<any>",
+          "QueryBuilder<Entity>"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 67,
+      "toLine": 67,
+      "fromColumn": 29,
+      "toColumn": 60,
+      "content": {
+        "type": "method",
+        "name": "createQueryBuilder",
+        "methodType": "other",
+        "object": "connection",
+        "objectTypes": [
+          "Connection"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 82,
+      "toLine": 82,
+      "fromColumn": 29,
+      "toColumn": 77,
+      "content": {
+        "type": "method",
+        "name": "update",
+        "methodType": "write",
+        "object": "createQueryBuilder()",
+        "objectTypes": [
+          "SelectQueryBuilder<any>",
+          "QueryBuilder<Entity>"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 82,
+      "toLine": 82,
+      "fromColumn": 29,
+      "toColumn": 60,
+      "content": {
+        "type": "method",
+        "name": "createQueryBuilder",
+        "methodType": "other",
+        "object": "connection",
+        "objectTypes": [
+          "Connection"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 105,
+      "toLine": 107,
+      "fromColumn": 29,
+      "toColumn": 29,
+      "content": {
+        "type": "method",
+        "name": "update",
+        "methodType": "write",
+        "object": "createQueryBuilder()",
+        "objectTypes": [
+          "SelectQueryBuilder<any>",
+          "QueryBuilder<Entity>"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 105,
+      "toLine": 106,
+      "fromColumn": 29,
+      "toColumn": 33,
+      "content": {
+        "type": "method",
+        "name": "createQueryBuilder",
+        "methodType": "other",
+        "object": "connection",
+        "objectTypes": [
+          "Connection"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 124,
+      "toLine": 126,
+      "fromColumn": 29,
+      "toColumn": 29,
+      "content": {
+        "type": "method",
+        "name": "update",
+        "methodType": "write",
+        "object": "createQueryBuilder()",
+        "objectTypes": [
+          "SelectQueryBuilder<any>",
+          "QueryBuilder<Entity>"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 124,
+      "toLine": 125,
+      "fromColumn": 29,
+      "toColumn": 33,
+      "content": {
+        "type": "method",
+        "name": "createQueryBuilder",
+        "methodType": "other",
+        "object": "connection",
+        "objectTypes": [
+          "Connection"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 143,
+      "toLine": 145,
+      "fromColumn": 29,
+      "toColumn": 29,
+      "content": {
+        "type": "method",
+        "name": "update",
+        "methodType": "write",
+        "object": "createQueryBuilder()",
+        "objectTypes": [
+          "SelectQueryBuilder<any>",
+          "QueryBuilder<Entity>"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 143,
+      "toLine": 144,
+      "fromColumn": 29,
+      "toColumn": 33,
+      "content": {
+        "type": "method",
+        "name": "createQueryBuilder",
+        "methodType": "other",
+        "object": "connection",
+        "objectTypes": [
+          "Connection"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 173,
+      "toLine": 175,
+      "fromColumn": 29,
+      "toColumn": 29,
+      "content": {
+        "type": "method",
+        "name": "update",
+        "methodType": "write",
+        "object": "createQueryBuilder()",
+        "objectTypes": [
+          "SelectQueryBuilder<any>",
+          "QueryBuilder<Entity>"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 173,
+      "toLine": 174,
+      "fromColumn": 29,
+      "toColumn": 33,
+      "content": {
+        "type": "method",
+        "name": "createQueryBuilder",
+        "methodType": "other",
+        "object": "connection",
+        "objectTypes": [
+          "Connection"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 192,
+      "toLine": 192,
+      "fromColumn": 29,
+      "toColumn": 69,
+      "content": {
+        "type": "method",
+        "name": "delete",
+        "methodType": "write",
+        "object": "createQueryBuilder()",
+        "objectTypes": [
+          "SelectQueryBuilder<any>",
+          "QueryBuilder<Entity>"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 192,
+      "toLine": 192,
+      "fromColumn": 29,
+      "toColumn": 60,
+      "content": {
+        "type": "method",
+        "name": "createQueryBuilder",
+        "methodType": "other",
+        "object": "connection",
+        "objectTypes": [
+          "Connection"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 208,
+      "toLine": 210,
+      "fromColumn": 29,
+      "toColumn": 43,
+      "content": {
+        "type": "method",
+        "name": "createQueryBuilder",
+        "methodType": "other",
+        "object": "getRepository(Recorded)",
+        "objectTypes": [
+          "Repository<Recorded>"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 239,
+      "toLine": 241,
+      "fromColumn": 27,
+      "toColumn": 43,
+      "content": {
+        "type": "method",
+        "name": "createQueryBuilder",
+        "methodType": "other",
+        "object": "getRepository(Recorded)",
+        "objectTypes": [
+          "Repository<Recorded>"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 286,
+      "toLine": 286,
+      "fromColumn": 27,
+      "toColumn": 92,
+      "content": {
+        "type": "method",
+        "name": "createQueryBuilder",
+        "methodType": "other",
+        "object": "getRepository(Recorded)",
+        "objectTypes": [
+          "Repository<Recorded>"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 450,
+      "toLine": 452,
+      "fromColumn": 35,
+      "toColumn": 43,
+      "content": {
+        "type": "method",
+        "name": "createQueryBuilder",
+        "methodType": "other",
+        "object": "getRepository(Recorded)",
+        "objectTypes": [
+          "Repository<Recorded>"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 468,
+      "toLine": 470,
+      "fromColumn": 35,
+      "toColumn": 43,
+      "content": {
+        "type": "method",
+        "name": "createQueryBuilder",
+        "methodType": "other",
+        "object": "getRepository(Recorded)",
+        "objectTypes": [
+          "Repository<Recorded>"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 487,
+      "toLine": 489,
+      "fromColumn": 29,
+      "toColumn": 43,
+      "content": {
+        "type": "method",
+        "name": "createQueryBuilder",
+        "methodType": "other",
+        "object": "getRepository(Recorded)",
+        "objectTypes": [
+          "Repository<Recorded>"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "model/db/RecordedDB.ts",
+      "fromLine": 514,
+      "toLine": 516,
+      "fromColumn": 29,
+      "toColumn": 43,
+      "content": {
+        "type": "method",
+        "name": "createQueryBuilder",
+        "methodType": "other",
+        "object": "getRepository(Recorded)",
+        "objectTypes": [
+          "Repository<Recorded>"
+        ],
+        "attributes": []
+      }
+    }
+  ]
+}
