@@ -9,12 +9,16 @@ which transactions can run in parallel, which need a typed reservation, and
 which need to stay fully ordered.
 
 kiln is in its research phase: no engine exists yet. The current work is the
-concept, its prior-art record, and the two experiments (E1, E2) that will
-decide whether the thesis survives contact with real transaction workloads.
+concept, its prior-art record, and the three experiments (E1, E2, E3) that
+will decide whether the thesis survives contact with real transaction
+workloads.
 
 - [docs/concept.md](docs/concept.md) — the thesis, the isolation-kernel
-  proposal, the kill criteria, and the open questions for the independent
-  critique.
+  proposal, the exit door, the kill criteria, the engine-phase obligations
+  not yet specified, and the open questions for the independent critique.
+- [docs/experiments.md](docs/experiments.md) — the complete protocols for
+  E1, E2, and E3: corpus, baselines, aggregation, and gating, written so a
+  fresh builder can start from this document alone.
 - [docs/research/](docs/research/) — the prior-art report, the detailed
   research notes it was built from, and the ideation that produced kiln's
   design options.
