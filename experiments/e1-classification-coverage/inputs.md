@@ -604,6 +604,37 @@ rather than a hypothetical:
   `.insert()` as its own one-shot S3 unit, as an earlier draft did, is
   exactly the double-count S5 exists to prevent.
 
+**Clarification 16.10.2026 (Django enumeration).** Three readings of the
+text above, ruled before any enumeration result exists, so the extractor
+applies them mechanically. They add no rule; none states or implies a count.
+
+- **S3 parameters.** Reads "the variables feeding that one call: its enclosing
+  function's own arguments, plus any local value already read earlier". The
+  call is the unit of S3, so only names the site's call expression references
+  (its receiver and arguments) count: those that are the enclosing function's
+  declared parameters, then those that are locals bound before the site. A
+  name bound only by the site's own statement or later, a global, and a name
+  the call does not reference are not parameters. Binding every earlier name
+  would make an unrelated assignment change a unit's parameters.
+- **Application boundary.** Reads "run unmodified against the application's
+  source" and "discarding any analyzer output message whose `filePath` falls
+  under an excluded path before enumeration". The `--exclude` globs only
+  keep the analyzer from starting at a file; it still follows imports into
+  files outside the application root and into files the selection excludes.
+  A report located outside the application root, or in a file the frozen
+  selection excludes, is not a site: applying the one selection rule to the
+  analyzer's output is not the "additional" filtering the paragraph after
+  the command forbids, since it picks no site by hand.
+- **Transaction markers.** Reads S1's "`method`-typed output messages" with
+  the three fixed lists (read, write, other) and S2's two Django forms. A
+  message of method type `transaction` is not in the three lists, so it is
+  not a site. It opens an S2 unit only when it is the decorator of a
+  function or an item of a `with` statement; a marker that is neither (for
+  example `ExitStack.enter_context(atomic())`) opens no S2 unit, and the
+  sites around it stay S3 by S3's default. Each such marker is recorded with
+  its location in a side output of the run and never aborts it, so the
+  uncounted transaction stays visible rather than silent.
+
 ### 3.1 Worked examples: full unit counts against the frozen rule
 
 Both examples below were recounted by actually running the two pinned
