@@ -12,7 +12,8 @@
 //! that meaning.
 //!
 //! The crate has no I/O: [`run`] is a pure function from a [`Program`], a
-//! [`Call`] and a [`Store`] to an [`Execution`].
+//! [`Call`] and a [`Store`] to an [`Execution`], or a typed [`SchemaError`]
+//! if the program's own schema is not internally satisfiable (D3).
 
 mod call;
 mod evaluator;
@@ -23,10 +24,11 @@ mod store;
 pub use call::Call;
 pub use evaluator::{
     run, AbortReason, AccessKind, AccessLogEntry, AccessedColumns, Execution, Outcome,
+    OverflowReason,
 };
 pub use identifiers::{AbortName, ColumnName, FunctionName, ParameterName, TableName};
 pub use ir::{
     ArithmeticOp, Block, ClampDomain, Column, Condition, Effect, Expr, Function, IntegerWidth,
-    Program, Row, Schema, Slot, Table, Terminal, Value,
+    Program, Row, Schema, SchemaError, Slot, Table, Terminal, Value,
 };
 pub use store::Store;

@@ -150,7 +150,13 @@ this meaning, one slice at a time.
   *Example.* `balance + amount` overflowing the column's declared width
   aborts if `balance` has no clamp; if `balance` instead declares a
   saturating-counter domain, the same overflow clamps to the domain's
-  bound and the transaction continues.
+  bound and the transaction continues. Intermediate arithmetic is checked
+  at `i64`, and only the expression's one final value — of a write, a
+  response, or any other expression — is then checked against the target
+  column's declared width (aborting on overflow) or clamped to its domain;
+  an `i64`-level overflow at any step always aborts, never clamps, since a
+  clamp judges only the final value a write produces. Text-typed column
+  declarations arrive with slice 4.
 - **D4 Invocation.** A `Call { function, args }` is run by `run(&Program,
   &Call, &Store)`, or replayed in sequence by `replay(&Program, &[Call],
   &Store)`. Every call keeps its position in the result; an aborted call

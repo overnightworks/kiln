@@ -110,6 +110,57 @@ impl Schema {
                     .find(|candidate| &candidate.name == column)
             })
     }
+
+    /// Rejects a schema whose own declarations cannot jointly hold: a
+    /// column's clamping domain, when it declares one, must have `min <=
+    /// max` and must lie inside that same column's declared width — a
+    /// domain reaching outside its column's width could clamp a write to a
+    /// value the width itself forbids, silently defeating D3's width check
+    /// (`docs/concept.md` §2.2, D3). `run` calls this before executing any
+    /// call, so a schema this rejects never reaches the evaluator at all.
+    pub fn validate(&self) -> Result<(), SchemaError> {
+        for table in &self.tables {
+            for column in &table.columns {
+                let Some(domain) = column.domain else {
+                    continue;
+                };
+                if domain.min > domain.max {
+                    return Err(SchemaError::ReversedDomain {
+                        table: table.name.clone(),
+                        column: column.name.clone(),
+                        min: domain.min,
+                        max: domain.max,
+                    });
+                }
+                let (width_min, width_max) = column.width.range();
+                if domain.min < width_min || domain.max > width_max {
+                    return Err(SchemaError::DomainExceedsWidth {
+                        table: table.name.clone(),
+                        column: column.name.clone(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Why a [`Schema`] fails [`Schema::validate`]: one column's own
+/// declarations cannot jointly hold (D3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemaError {
+    /// `column`'s clamping domain has `min` above `max`.
+    ReversedDomain {
+        table: TableName,
+        column: ColumnName,
+        min: i64,
+        max: i64,
+    },
+    /// `column`'s clamping domain reaches outside its own declared width.
+    DomainExceedsWidth {
+        table: TableName,
+        column: ColumnName,
+    },
 }
 
 /// A position in a function's body that a later [`Condition`] or [`Expr`]
