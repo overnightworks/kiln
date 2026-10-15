@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use crate::identifiers::ColumnName;
 use crate::ir::{ArithmeticOp, ClampDomain, Column, ColumnType, Expr, IntegerWidth, Slot, Value};
+use crate::store::KeyedRow;
 
 use super::{AbortReason, Binding, CallContext, OverflowReason};
 
@@ -43,7 +44,8 @@ impl From<ResolveError> for AbortReason {
 
 /// Resolves an expression to a concrete value: a constant, the argument
 /// bound to a declared parameter (its arity was checked before the call ran),
-/// a column or the primary key projected from an earlier read's row, or an arithmetic operation
+/// a column or the primary key projected from an earlier read's row, or an
+/// arithmetic operation
 /// over two such values.
 ///
 /// Arithmetic here is checked at `i64`'s own width and returns
@@ -74,10 +76,9 @@ pub(super) fn resolve(
             Ok(ctx.args[index].clone())
         }
         Expr::Projection { slot, column } => {
-            let Some(Binding::Row(Some(row))) = bindings.get(slot) else {
-                return Err(ResolveError::ProjectionSourceAbsent { slot: *slot });
-            };
-            row.row
+            let keyed = bound_row(*slot, bindings)?;
+            keyed
+                .row
                 .columns
                 .get(column)
                 .cloned()
@@ -86,12 +87,7 @@ pub(super) fn resolve(
                     column: column.clone(),
                 })
         }
-        Expr::PrimaryKey { slot } => {
-            let Some(Binding::Row(Some(row))) = bindings.get(slot) else {
-                return Err(ResolveError::ProjectionSourceAbsent { slot: *slot });
-            };
-            Ok(row.key.clone())
-        }
+        Expr::PrimaryKey { slot } => Ok(bound_row(*slot, bindings)?.key.clone()),
         Expr::Arithmetic(op, lhs, rhs) => {
             let lhs = as_integer(resolve(lhs, ctx, bindings)?)?;
             let rhs = as_integer(resolve(rhs, ctx, bindings)?)?;
@@ -99,6 +95,15 @@ pub(super) fn resolve(
                 .ok_or(ResolveError::Overflow(OverflowReason::Arithmetic))?;
             Ok(Value::Integer(result))
         }
+    }
+}
+
+/// The row `slot` currently holds; a slot with no present row is an absent
+/// projection source.
+fn bound_row(slot: Slot, bindings: &HashMap<Slot, Binding>) -> Result<&KeyedRow, ResolveError> {
+    match bindings.get(&slot) {
+        Some(Binding::Row(Some(keyed))) => Ok(keyed),
+        _ => Err(ResolveError::ProjectionSourceAbsent { slot }),
     }
 }
 
