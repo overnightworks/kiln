@@ -1,0 +1,11 @@
+--- Kernel.tla
++++ Kernel.tla
+@@ -317,7 +317,7 @@
+    its whole footprint and never waits again (rule 1). Empty exactly when
+    its next step may run. *)
+ WaitsOn(t) ==
+-  IF Queued(t) THEN Conflicting(t, Footprint(t)) \cup EscrowBlockers(t) \cup OlderQueued(t)
++  IF Queued(t) THEN Conflicting(t, Footprint(t)) \cup EscrowBlockers(t)
+   ELSE {}
+ 
+ Changed(t, v) == {k \in Keys : v[k] # View(t)[k]}
