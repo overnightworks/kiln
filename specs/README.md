@@ -69,8 +69,8 @@ on `p`, rejected with `exists` or `noparent`; `Delete(k)` under `DEL` on
 `k` plus `PIN` on the row's own parent while it unlinks, rejected with
 `referenced`; `Buy(k, a)` under `DRAW`, drawing `a` from `bal` and adding
 one to `val`, rejected with `insufficient`; `BuyUnder(k, a, cap)`, the
-same draw taken only while `val < cap` and answered `skipped` otherwise (a
-branch); `BuyVal(k, j)` under `DRAW` on `k` and `S` on `j`, drawing row
+same draw under `DRAW` and `S` on `k`, taken only while `val < cap` and
+answered `skipped` otherwise (a branch on the row); `BuyVal(k, j)` under `DRAW` on `k` and `S` on `j`, drawing row
 `j`'s `val` from `k` (an amount the program does not know statically).
 
 **Protocol.** A transaction starts `pending`, holding nothing. `Dispatch`
@@ -110,13 +110,19 @@ reservation on that key has resolved, and no reservation at all is taken
 until the whole footprint, every escrow key included, can be funded. A
 draw consumes the transaction's own reservation: the balance a draw sees
 (`DrawView`) is what remains of that reservation, never the committed
-balance other holders draw from, so an uncapped transaction never fails a
-draw and a capped one fails only on committed state, exactly as the serial
-order "earlier holders, then this transaction" does. A transaction holding
-a resource on the key incompatible with `DRAW` (an `X` lock, a claim, a
-delete, a read) is the key's only draw holder and draws on its own view;
-that is how an `Update` that raised the balance in the same transaction is
-drawn from — the one case a draw exceeds the reservation.
+balance other holders draw from, so a transaction that does not lower the
+balance itself never fails an uncapped draw (its own `Update` can lower it
+before a draw, a valid failure) and a capped one fails only on committed
+state, exactly as the serial order "earlier holders, then this
+transaction" does. One exception, one rule (`SoleDrawHolder`, shared by
+`DrawView` and `DrawsWithinReservation`): a transaction holding a covering
+resource on the key incompatible with `DRAW` (`X`, a claim, a delete, a
+read) is the key's only draw holder and draws on its own view; that is how
+an `Update` that raised the balance in the same transaction is drawn from,
+the one case a draw exceeds the reservation. Reservations cover blind
+draws only: `BuyUnder` branches on the row's `val`, so it needs `S` beside
+`DRAW` and is ordered against every other draw on the key
+(`ConcurrentBranch`).
 
 **Admission order (§4, rule 3).** Queued transactions are ordered by
 dispatch sequence: a queued transaction waits on every older queued
@@ -234,6 +240,7 @@ Depth is the length of the longest shortest path (breadth-first).
 | `DeleteReinsert` | rows 1 and 2 present, no parents; t1: `Delete(2)`, `Insert(2,1)`; t2: `Delete(1)`, `Update(2,0,0)` — the reinsert makes 1 a possible parent of 2, so t1's footprint pins 1; `DEL 1` against `PIN 1` and `DEL 2` against `X 2` conflict at dispatch | 26 | 10 | `DeleteReinsert.tlc.log` |
 | `AllowanceCycle` | t1, t2: `Buy(1,1)`, `Buy(1,1)` against quota 2 — slice 1's documented failure (each second draw waited on the other's tentative draw): now each reserves 2 at admission, the second is admitted once the first has resolved, capped at the remaining 0, and fails its first draw on committed state | 25 | 9 | `AllowanceCycle.tlc.log` |
 | `BranchBudget` | t1: `BuyUnder(1,1,1)` twice against quota 2 (the second branch is never taken, the budget is 2); t2: `Buy(1,1)` — the untaken branch keeps the balance reserved until t1 commits; t2 then takes the ticket it left | 26 | 10 | `BranchBudget.tlc.log` |
+| `ConcurrentBranch` | quota 2; t1, t2: `BuyUnder(1,1,1)` once each — both reservations are funded, but the branch reads the sold count, so the `S` lock orders them: one draws, the other skips | 23 | 9 | `ConcurrentBranch.tlc.log` |
 | `Unfundable` | t1: `Buy(1,2)`, `Buy(1,1)` (budget 3) against quota 2; t2: `Buy(1,1)` — t1's reservation is capped at the balance and admitted only with no other reservation live; it draws its reservation and fails the rest with `insufficient` on committed state | 22 | 9 | `Unfundable.tlc.log` |
 | `TwoEscrows` | keys 1 and 2 with quota 1 each; t1: `Buy(1,1)`, `Buy(2,1)`; t2: `Buy(2,1)`; t3: `Buy(1,1)` — admission is all-or-nothing across escrows: t1 waits on both holders reserving nothing, then is capped at 0 on both | 154 | 13 | `TwoEscrows.tlc.log` |
 | `HolderAbort` | key 2 present; t1: `Buy(1,1)`, `Insert(2,0)` (rejected with `exists`, releasing its reservation); t2: `Buy(1,1)` twice against quota 2 — t2 waits instead of reserving the remainder and failing on it; after t1's rejection it reserves 2 and commits both draws | 25 | 10 | `HolderAbort.tlc.log` |
@@ -263,6 +270,7 @@ assert membership.
 | `ClaimAbortUnreached` | t1 answered `ok, insufficient` (claim released by the rejection), t2 committed key 2, t3 was told `exists` | 12 |
 | `ParentDeleteUnreached` | t2 holds its pin on 1, t1's delete waits on it | 4 |
 | `AllowanceCycleQueuedUnreached` | the queued case: t1 holds a reservation of 2 with nothing drawn, t2 is queued behind it on the escrow alone | 4 |
+| `ConcurrentBranchSkippedUnreached` | both committed; one was told `ok`, the other `skipped`; quota 1 | 9 |
 | `BranchBudgetOverReservedUnreached` | t1 skipped its second branch and still holds a reservation of 2 against a draw of 1; t2 waits on it | 6 |
 | `BranchBudgetReleasedUnreached` | both committed; the skipped branch's ticket went to t2 | 10 |
 | `UnfundableCappedUnreached` | the capped case: t1 holds a reservation equal to the committed balance 2 and below its budget 3; t2 is queued behind it | 4 |
@@ -284,6 +292,7 @@ TLC refutes every one; the log is `<Mutant>.<Scenario>.<Property>.tlc.log`.
 | `NoAdmissionGuard` — `Conflicting` is empty, nothing ever waits | `Composed` | `Serializable` (t1 inserts the child of 3 and t2 deletes 3, both told `ok` and both committed: no serial order yields both) | 11 |
 | `NoAdmissionGuard` | `Composed` | `MutualExclusion` | 5 |
 | `InsufficientCommitted` — a constraint rejection is recorded as `committed` | `EventClose` | `Serializable` (t2 was told `insufficient` and ended `committed`; every serial order ends it `rejected`) | 8 |
+| `BranchReadUnprotected` — `BuyUnder` takes `DRAW` without `S`: the branch reads the row unprotected | `ConcurrentBranch` | `Serializable` (both told `ok`, quota 0 and 2 sold; every serial order answers `ok, skipped`) | 9 |
 | `RangeCompatibleWithClaim` — `RS`/`CLAIM` compatible | `Phantom` | `Serializable` (second scan sees the inserted key) | 10 |
 | `DrawCompatibleWithX` — `X`/`DRAW` compatible | `EventClose` | `Serializable` | 9 |
 | `ClaimCompatibleWithClaim` | `ClaimAbort` | `Uniqueness` (two committed inserts of key 2) | 9 |
@@ -298,7 +307,7 @@ TLC refutes every one; the log is `<Mutant>.<Scenario>.<Property>.tlc.log`.
 | `ActiveAllowanceWait` | `AllowanceCycle` | TLC deadlock check | 7 |
 | `CapIgnored` — the budget is reserved in full, never capped at the committed balance | `Unfundable` | `ReservationsFunded` (t1 reserves 3 on a balance of 2) | 3 |
 | `CapIgnored` | `Unfundable` | `BalanceNonNegative` (t1 draws 3 and commits: quota −1) | 6 |
-| `PrematureFailure` — a capped reservation takes what other holders leave instead of waiting for them to resolve | `HolderAbort` | `Serializable` (t2 holds a reservation of 2, t1 takes the remainder 0 and is told `insufficient` at once while t2 is still live; run alone, t1 commits) | 6 |
+| `PrematureFailure` — a capped reservation takes what other holders leave instead of waiting for them to resolve | `HolderAbort` | `Serializable` (t2 holds a reservation of 2, t1 takes the remainder 0 and its response is `insufficient` while t2 is still live; run alone, t1's serial response is `ok, exists` and it ends rejected) | 6 |
 | `DrawIgnoresReservation` — admission accounts what other holders have drawn, not what they reserved | `AllowanceCycle` | `ReservationsFunded` (both admitted with 2 on a balance of 2) | 5 |
 | `DrawIgnoresReservation` | `AllowanceCycle` | `BalanceNonNegative` (quota −2) | 11 |
 | `BudgetUndercounts` — the budget is the largest single draw, not the total | `AllowanceCycle` | `Serializable` (t1 reserves 1 and is told `insufficient` on its second draw; no serial order rejects t1) | 5 |

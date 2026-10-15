@@ -403,8 +403,15 @@ admitted only when every other live reservation on each of its escrow
 keys leaves room for its own, and it reserves nothing at all until the
 whole footprint can be acquired. An admitted transaction never waits
 again: its draws consume its own reservation, never the balance other
-holders draw from, and whatever it has not drawn at completion — commit
-or abort — is released then. *Example.* An event has a quota of 2 and two
+holders draw from, unless it holds a covering resource whose kind is
+incompatible with a draw (an `X` lock, a read): then no other draw can be
+outstanding on the key and it draws on its own view, which is how an
+update that raised the balance in the same transaction is drawn from.
+Whatever it has not drawn at completion — commit or abort — is released
+then. Reservations cover *blind* draws only: an operation whose result
+depends on the escrowed row beyond the sufficient-balance test — a branch
+on how many are sold — also reads that row, and the read is ordered
+against every other draw on it. *Example.* An event has a quota of 2 and two
 callers each buy two tickets one at a time. Admitted draw by draw, each
 caller's first draw fits and each second draw waits for the other's
 tentative draw to resolve: a wait cycle between two holders, which the
@@ -518,9 +525,10 @@ written. *Example.* The quota is 2, one in-flight purchase holds a
 reservation of 1, and a second caller wants 3 tickets, drawn one at a
 time. Its reservation is capped at 2 and it waits. If the first purchase
 aborts, the caller is admitted against a quota of 2, draws 2 and fails on
-the third with `insufficient` — a failure the committed state justifies. If instead the first purchase
-commits, the caller is admitted against a quota of 1, capped at 1, and
-fails at once, which is exactly what running after the committed purchase
+the third with `insufficient` — a failure the committed state justifies.
+If instead the first purchase commits, the caller is admitted against a
+quota of 1, capped at 1: its first draw succeeds and the second fails with
+`insufficient`, which is exactly what running after the committed purchase
 would do.
 
 **Consistency and serializable isolation (no write skew).** Class 1 is safe
