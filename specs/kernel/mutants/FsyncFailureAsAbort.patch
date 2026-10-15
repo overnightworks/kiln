@@ -1,0 +1,22 @@
+--- Durable.tla
++++ Durable.tla
+@@ -138,14 +138,17 @@
+   /\ Serving /\ FailureBudgetLeft /\ unflushed # <<>>
+   /\ \E persistedFromTail \in 0..Len(unflushed) :
+        log' = Persisted(persistedFromTail)
+-  /\ answer' = [t \in Txns |-> IF t \in TxnsOf(unflushed) THEN "unknown" ELSE answer[t]]
++  /\ answer' = [t \in Txns |-> IF t \in TxnsOf(unflushed) THEN "aborted" ELSE answer[t]]
++  /\ status' = [t \in Txns |-> IF t \in TxnsOf(unflushed) THEN "aborted" ELSE status[t]]
++  /\ held' = [t \in Txns |-> IF t \in TxnsOf(unflushed) THEN {} ELSE held[t]]
++  /\ reserved' = [t \in Txns |-> IF t \in TxnsOf(unflushed) THEN NoReservation ELSE reserved[t]]
+   /\ fsyncFailed' = fsyncFailed \cup TxnsOf(unflushed)
+   /\ unresolved' = TxnsOf(unflushed)
+   /\ reservedAtUnknown' = reserved
+   /\ unflushed' = <<>>
+   /\ engine' = "fenced"
+   /\ failuresUsed' = failuresUsed + 1
+-  /\ UNCHANGED <<Vars, history>>
++  /\ UNCHANGED <<seq, pc, wr, draws, resp, widened, db, history>>
+ 
+ (* What recovery rebuilds: the committed history is the durable log. *)
+ RecoveredHistory == log

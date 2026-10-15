@@ -1,0 +1,17 @@
+--- Durable.tla
++++ Durable.tla
+@@ -142,10 +142,13 @@
+   /\ fsyncFailed' = fsyncFailed \cup TxnsOf(unflushed)
+   /\ unresolved' = TxnsOf(unflushed)
+   /\ reservedAtUnknown' = reserved
++  /\ reserved' = [t \in Txns |-> IF t \in TxnsOf(unflushed)
++                  THEN [k \in Keys |-> IF reserved[t][k] > 1 THEN reserved[t][k] - 1 ELSE reserved[t][k]]
++                  ELSE reserved[t]]
+   /\ unflushed' = <<>>
+   /\ engine' = "fenced"
+   /\ failuresUsed' = failuresUsed + 1
+-  /\ UNCHANGED <<Vars, history>>
++  /\ UNCHANGED <<status, seq, pc, held, wr, draws, resp, widened, db, history>>
+ 
+ (* What recovery rebuilds: the committed history is the durable log. *)
+ RecoveredHistory == log
