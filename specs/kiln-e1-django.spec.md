@@ -16,6 +16,7 @@ several tests may share it.
 - [KILN-E1DJ-01] A site is exactly one analyzer message of type `method` whose method type is read, write or other, located at the call it reports; a model message and a transaction marker are not sites, and no site is added, removed or moved.
 - [KILN-E1DJ-02] The analyzer is run with the one frozen command line of §3, unchanged for every application, on the application root checked out at its manifest `commit_sha_full`.
 - [KILN-E1DJ-03] A message from a path with a directory component named `tests`, `test`, `migrations`, `node_modules`, `venv`, `.venv`, `docs` or `site-packages`, or from a file named `test_*.py`, `*_test.py` or `conftest.py`, is discarded before enumeration; every other message is kept.
+- [KILN-E1DJ-20] A message from a followed module outside the application root (installed packages, stubs) is not the application's source and is discarded; the root is matched as a whole directory, so a sibling directory sharing its prefix is outside.
 
 ## Units
 
