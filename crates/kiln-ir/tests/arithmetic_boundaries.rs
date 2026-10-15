@@ -7,8 +7,8 @@
 mod support;
 
 use kiln_ir::{
-    run, AbortReason, ArithmeticOp, ClampDomain, Column, ColumnName, Expr, IntegerWidth, Outcome,
-    OverflowReason, SchemaError, Store, TableName, Terminal, Value,
+    run, AbortReason, ArithmeticOp, ClampDomain, Column, ColumnName, ColumnType, Expr,
+    IntegerWidth, Outcome, OverflowReason, SchemaError, Store, TableName, Terminal, Value,
 };
 use support::{call_under_test, column, run_write, table, WriteVia};
 
@@ -184,8 +184,10 @@ mod kiln_ir_23 {
             for via in [WriteVia::Insert, WriteVia::Update] {
                 let declared_column = Column {
                     name: column("c"),
-                    width: case.width,
-                    domain: None,
+                    kind: ColumnType::Integer {
+                        width: case.width,
+                        domain: None,
+                    },
                 };
                 let execution = run_write(
                     declared_column,
@@ -256,10 +258,13 @@ fn schema_with_domain(width: IntegerWidth, domain: ClampDomain) -> kiln_ir::Sche
             name: table_name(),
             columns: vec![Column {
                 name: column_name(),
-                width,
-                domain: Some(domain),
+                kind: ColumnType::Integer {
+                    width,
+                    domain: Some(domain),
+                },
             }],
         }],
+        ..Default::default()
     }
 }
 

@@ -91,6 +91,23 @@ pub fn call_under_test(args: Vec<Value>) -> Call {
     }
 }
 
+/// A program over `schema` with one function, `under_test`.
+pub fn program_with_schema(
+    schema: Schema,
+    parameters: Vec<Parameter>,
+    effects: Vec<Effect>,
+    terminal: Terminal,
+) -> Program {
+    Program {
+        schema,
+        functions: vec![Function {
+            name: FunctionName("under_test".to_owned()),
+            parameters,
+            body: kiln_ir::Block { effects, terminal },
+        }],
+    }
+}
+
 /// A program whose schema declares table "t" with exactly one column,
 /// `declared_column`, plus the given function body — the shape every D3
 /// test writes into.
@@ -100,19 +117,14 @@ pub fn program_with_column(
     effects: Vec<Effect>,
     terminal: Terminal,
 ) -> Program {
-    Program {
-        schema: Schema {
-            tables: vec![Table {
-                name: table("t"),
-                columns: vec![declared_column],
-            }],
-        },
-        functions: vec![Function {
-            name: FunctionName("under_test".to_owned()),
-            parameters,
-            body: kiln_ir::Block { effects, terminal },
+    let schema = Schema {
+        tables: vec![Table {
+            name: table("t"),
+            columns: vec![declared_column],
         }],
-    }
+        ..Default::default()
+    };
+    program_with_schema(schema, parameters, effects, terminal)
 }
 
 pub fn arbitrary_value() -> impl Strategy<Value = Value> {
@@ -189,4 +201,85 @@ pub fn run_write(declared_column: Column, write_expr: Expr, via: WriteVia) -> Ex
     );
 
     run_ok(&program, &call_under_test(vec![]), &store)
+}
+
+pub fn integer(value: i64) -> Value {
+    Value::Integer(value)
+}
+
+pub fn text(value: &str) -> Value {
+    Value::Text(value.to_owned())
+}
+
+pub fn insert_row(
+    table_name: &str,
+    key: i64,
+    values: impl IntoIterator<Item = (&'static str, Value)>,
+) -> Effect {
+    Effect::Insert {
+        table: table(table_name),
+        key: Expr::Literal(integer(key)),
+        columns: literal_columns(values),
+    }
+}
+
+pub fn update_row(
+    table_name: &str,
+    key: i64,
+    values: impl IntoIterator<Item = (&'static str, Value)>,
+) -> Effect {
+    Effect::Update {
+        table: table(table_name),
+        key: Expr::Literal(integer(key)),
+        columns: literal_columns(values),
+    }
+}
+
+pub fn delete_row(table_name: &str, key: i64) -> Effect {
+    Effect::Delete {
+        table: table(table_name),
+        key: Expr::Literal(integer(key)),
+    }
+}
+
+fn literal_columns(
+    values: impl IntoIterator<Item = (&'static str, Value)>,
+) -> BTreeMap<ColumnName, Expr> {
+    values
+        .into_iter()
+        .map(|(name, value)| (column(name), Expr::Literal(value)))
+        .collect()
+}
+
+/// One row to put in a test store: its table, key and column values.
+pub type RowSpec = (&'static str, i64, Vec<(&'static str, Value)>);
+
+pub fn store_of_rows(rows: &[RowSpec]) -> Store {
+    Store::containing(rows.iter().map(|(table_name, key, values)| {
+        (
+            table(table_name),
+            integer(*key),
+            Row {
+                columns: columns_of_values(values.clone()),
+            },
+        )
+    }))
+}
+
+pub fn aborted_reason(execution: &Execution) -> &kiln_ir::AbortReason {
+    match &execution.outcome {
+        kiln_ir::Outcome::Aborted { reason } => reason,
+        kiln_ir::Outcome::Committed { response } => {
+            panic!("expected an abort, got a commit with {response:?}")
+        }
+    }
+}
+
+pub fn constraint_entries(execution: &Execution) -> Vec<kiln_ir::AccessLogEntry> {
+    execution
+        .access_log
+        .iter()
+        .filter(|entry| entry.origin == kiln_ir::AccessOrigin::ConstraintCheck)
+        .cloned()
+        .collect()
 }

@@ -9,8 +9,8 @@
 mod support;
 
 use kiln_ir::{
-    AbortReason, AccessKind, AccessLogEntry, AccessTarget, AccessedColumns, Condition, Effect,
-    Expr, Outcome, Row, Slot, Store, Terminal, Value,
+    AbortReason, AccessKind, AccessLogEntry, AccessOrigin, AccessTarget, AccessedColumns,
+    Condition, Effect, Expr, Outcome, Row, Slot, Store, Terminal, Value,
 };
 use proptest::prelude::*;
 use support::{
@@ -416,6 +416,7 @@ mod kiln_ir_35 {
             kind,
             target,
             columns,
+            origin: AccessOrigin::TransactionLogic,
         };
         let point = |key| AccessTarget::Point(Value::Integer(key));
         let cases = [

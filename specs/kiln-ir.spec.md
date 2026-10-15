@@ -60,5 +60,39 @@ module; several tests may share it.
 ## Access log
 
 - [KILN-IR-34] The access log records every attempted access, including the one that aborts the call.
-- [KILN-IR-35] Each access log entry carries its table, key or range bounds, and touched columns, for every access kind: point read, range read, insert, update and delete. Origin is deferred to the next `kiln-ir` slice (constraints, text columns, access origin).
+- [KILN-IR-35] Each access log entry carries its table, key or range bounds, and touched columns, and origin (transaction logic or constraint check), for every access kind: point read, range read, insert, update and delete.
 - [KILN-IR-36] A range read logs its bounds, including when the range turns out empty.
+- [KILN-IR-43] Every access the transaction's own effects make is logged with logic origin.
+- [KILN-IR-44] A constraint check logs its accesses with constraint origin; they stay in the log when the check aborts the call.
+
+## Text columns
+
+- [KILN-IR-37] A schema can declare a column as text; a text value written to it commits.
+- [KILN-IR-38] An integer value written to a column declared as text aborts with a typed reason and changes no state.
+
+## Unique constraints
+
+- [KILN-IR-39] A unique constraint is declared in the schema on one column of one table. A schema that declares one on an undeclared table or column is rejected with a typed schema error.
+- [KILN-IR-40] A duplicate value that exists only in the middle of a transaction and is gone from its final state commits.
+- [KILN-IR-41] A duplicate value in a transaction's final state aborts the call with a typed reason naming the constraint and the value; the call changes no state and publishes no response.
+- [KILN-IR-42] The unique check runs once at the end of the transaction and logs exactly one point read on the unique value per row the transaction wrote that column on, however often it wrote the row; a row the transaction deleted, or wrote without that column, is not checked. The check's logged footprint is those point reads, never a range read or table scan.
+
+## Foreign keys
+
+- [KILN-IR-45] A foreign key is declared in the schema on one column of one table and references another declared table's key. A schema that declares one on an undeclared table or column, or that references an undeclared table, is rejected with a typed schema error.
+- [KILN-IR-46] A row the transaction wrote the foreign-key column on, whose final state names a key that no row of the referenced table holds aborts the call with a typed reason naming the foreign key and the dangling value; the call changes no state.
+- [KILN-IR-47] A reference that is dangling only in the middle of a transaction, because the parent is inserted or the child is repointed or removed before the end, commits.
+- [KILN-IR-48] A parent row the transaction deleted, while a row of the final state still references its key, aborts the call with a typed reason naming the foreign key and the key; the call changes no state.
+- [KILN-IR-49] A parent row the transaction deleted commits when no row of the final state references its key any more, including when the transaction removed or repointed the children first, and when the transaction inserted the parent again.
+- [KILN-IR-50] A child check logs one constraint-origin point read, touching no column, on the referenced table at the referenced key per child row the transaction wrote the foreign-key column on, however often it wrote the row; a child row written without that column is not checked. A parent-deletion check logs one constraint-origin lookup on the child table by the deleted key (the representation the unique check uses) per deleted parent key absent from the final state. Neither logs a range read or table scan.
+
+## Check constraints
+
+- [KILN-IR-51] A check constraint is declared in the schema on one column of one table as a comparison (at least, at most) against a literal. A schema that declares one on an undeclared table or column is rejected with a typed schema error. The operand's type is not validated against the column's type: text compares lexicographically and a mismatched type compares by variant order.
+- [KILN-IR-52] A row the transaction wrote the constrained column on, whose final state violates a check constraint aborts the call with a typed reason naming the constraint and the row's key; the call changes no state. A violation that exists only in the middle of the transaction commits.
+- [KILN-IR-53] The same out-of-range write has three distinct outcomes: a check constraint aborts with a check violation, a clamping domain writes the clamped value and commits, and a value outside the column's width without a domain aborts with an overflow.
+- [KILN-IR-54] A check constraint reads only the row it judges: it logs no access of constraint origin, and the log holds only the row's own write.
+
+## Constraint order
+
+- [KILN-IR-55] Constraints are checked serially in one order: unique constraints, then foreign keys, then check constraints, each in declaration order. The first violation aborts the call, and constraints after it log no checks.
