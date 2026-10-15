@@ -595,8 +595,9 @@ failure answers `unknown`, the transaction keeps its footprint and
 reservations (each exactly as held when the flush failed) until recovery,
 recovery resolves it to whatever the log shows, and mutants that answer an
 abort and release the reservations, or release part of one, are refuted.
-Bounds: 3 transactions, one log, at most two failures; the publication
-pointer (§9.1) and torn writes are not modelled. Not proved: that a caller
+Bounds: 3 transactions, one log, at most two failures; `Durable.tla` does
+not model the publication pointer, which `Publication.tla` checks (§9.1),
+and torn writes are not modelled. Not proved: that a caller
 is eventually acknowledged or that recovery eventually runs (fairness
 covers neither, and recovery discards queued requests; only undispatched
 ones stay runnable).
@@ -689,17 +690,25 @@ every derived-structure install and recovery advances the pointer past that
 commit anyway — recovery must finish installing first, or not advance the
 pointer past it at all. **Status: checked within bounds** — the pointer rule is checked on the
 kernel model (`Publication.tla`, `specs/README.md`): installation of a
-commit's two derived structures follows its durable record step by step,
-the pointer passes a commit only when both are installed, recovery
-installs every durable commit before the pointer passes it, and
-`AtomicVisibility`, `PointerBelowInstalled`, `PointerMonotone` and every
-durability property hold; mutants that advance the pointer before
-installation (also across a crash) or advance it first in recovery are
-refuted. Bounds: one log, 2 transactions with 2 structures each, at most
-two failures, none during recovery. Not checked: installation running
-ahead across several commits, several logs, a failure during recovery,
-byte layout and the pointer's on-disk representation; no liveness
-(nothing proves installation or recovery eventually runs).
+commit's two derived structures follows its durable record step by step
+and may run ahead of the pointer; the pointer passes a commit only when
+both are installed; and only then does the commit take effect and release
+its locks and reservations, so every read, protocol or snapshot, sees
+published state plus the reader's own writes. Recovery recomputes the
+pointer from the log and the installation state, never from the retained
+value, and installs every durable commit before the pointer passes it.
+`AtomicVisibility`, `ReaderConsistent` (a snapshot reader's observations
+across several steps), `PointerBelowInstalled`, `PointerMonotone` and every
+durability property hold, and `Serializable` with exact responses holds
+over a delete's reference check and a read racing a commit still being
+installed. Mutants that advance the pointer before installation (also
+across a crash), advance it first in recovery, or release a commit's locks
+when its record is durable are refuted. Bounds: one log, 2 or 3
+transactions with 2 structures each, at most two failures, which strike
+while the engine operates and never during recovery. Not checked: several
+logs, a failure during recovery, byte layout and the pointer's on-disk
+representation; no liveness (nothing proves installation or recovery
+eventually runs).
 
 ### 9.2 Storage failure model
 
