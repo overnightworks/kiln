@@ -1,8 +1,0 @@
-claim_id = "5a7b86e60e734667a2d57b60134dc0b3"
-agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
-role = "builder"
-base = "95a950fb399ab6ea7f94e587ee3b8bb933a7ee77"
-branch = "claude/issue-38-kernel-liveness"
-scope = ["docs/concept.md", "specs/README.md", "specs/kernel"]
-opened_commit = "0eb167ff4f5b898c2bf7078bc4cca528d9b779f7"
-whole_reason = "one temporal property of the kernel model, its mutant and its one assumption sentence in the concept"
