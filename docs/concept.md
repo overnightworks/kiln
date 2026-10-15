@@ -687,10 +687,19 @@ commits recorded in one log, never implied across two independent logs. It
 fails if a crash lands between a commit's log record and the completion of
 every derived-structure install and recovery advances the pointer past that
 commit anyway — recovery must finish installing first, or not advance the
-pointer past it at all. **Status: not yet specified** — the exact pointer
-representation, how far ahead installation may run, and the recovery
-procedure that re-derives or replays incomplete installation are
-engine-phase work.
+pointer past it at all. **Status: checked within bounds** — the pointer rule is checked on the
+kernel model (`Publication.tla`, `specs/README.md`): installation of a
+commit's two derived structures follows its durable record step by step,
+the pointer passes a commit only when both are installed, recovery
+installs every durable commit before the pointer passes it, and
+`AtomicVisibility`, `PointerBelowInstalled`, `PointerMonotone` and every
+durability property hold; mutants that advance the pointer before
+installation (also across a crash) or advance it first in recovery are
+refuted. Bounds: one log, 2 transactions with 2 structures each, at most
+two failures, none during recovery. Not checked: installation running
+ahead across several commits, several logs, a failure during recovery,
+byte layout and the pointer's on-disk representation; no liveness
+(nothing proves installation or recovery eventually runs).
 
 ### 9.2 Storage failure model
 

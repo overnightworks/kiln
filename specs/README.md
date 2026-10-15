@@ -6,7 +6,7 @@ typed reservations in one composed state space; #24 added escrow
 admission by aggregate budget after slice 1 found a wait cycle among
 escrow draws. Liveness under stated weak fairness is #38. Crash, recovery and
 unknown commit outcomes are #51 (`Durable.tla`); the publication pointer of
-concept §9.1 is a later slice of #6.
+concept §9.1 is #59 (`Publication.tla`).
 
 ## Tool
 
@@ -334,8 +334,8 @@ depends on a predecessor whose commit survived or was lost.
 **Bounds.** One log, one writer, three transactions, at most two
 failures; a failure discards every volatile transaction. Recovery
 discards every queued or active request; only a request not yet
-dispatched stays runnable. Not covered: the
-publication pointer (§9.1), torn writes that reach acknowledged bytes and
+dispatched stays runnable. Not covered here (the
+publication pointer is `Publication.tla`): torn writes that reach acknowledged bytes and
 a device that lies about a flush (outside §9.2's model), retried commits
 after an unknown outcome, storage layout. Records are abstract effect
 deltas, not bytes: framing and checksums are not modelled.
@@ -347,6 +347,50 @@ leave a caller unanswered forever, and a fenced engine may stay fenced.
 terminal transaction status, not of the caller's answer. Eventual
 acknowledgement and eventual recovery are unproved, and no temporal
 claim is made for them.
+
+## specs/kernel/Publication.tla — the visible-version pointer
+
+`Publication.tla` extends `Durable.tla` and leaves `Kernel.tla` and
+`Durable.tla` untouched (#59). A record that is durable is recoverable,
+not visible. Its derived structures (`Structures`: the base row and the
+reverse-reference set of §5) are installed one at a time, and a single
+`pointer` into the log says how much of the log readers see. Installed
+structures and the pointer are durable; a crash keeps both.
+
+- `Install(t, s)`: structure `s` of durable commit `t` is installed, in
+  any order across structures and commits.
+- `Advance`: the pointer passes the next log record, only when every
+  structure of it is installed.
+- `RecoverPublication`: Durable's `Recover`, after which the engine is
+  `recovering`: it serves readers at the durable pointer while installation
+  of every durable commit finishes (`Install`, `Advance`).
+- `Open`: recovery ends only once the pointer has passed the whole log, so
+  the pointer is rebuilt from the log.
+
+A reader sees, in each structure, the installed copy of the commits at or
+below the pointer (`VisibleIn`). Protocol transactions keep reading the
+committed state under their locks; every #51 property and
+`Serializable` are checked on the same runs over that state. The pointer
+governs the snapshot readers of §9.1.
+
+| Property | Statement |
+|---|---|
+| `AtomicVisibility` | whenever the engine serves, each durable commit shows in every structure or in none |
+| `PointerBelowInstalled` | the pointer never passes a commit with a structure missing |
+| `PointerMonotone` | the pointer never falls back (an action property; includes recovery) |
+| `RestartIsAtomic` | the step that restarts the engine after a failure leaves nothing partially visible |
+
+`PublicationCrash`: key 1 present; t1 inserts key 2 and t2 key 3 as
+children of key 1, so each commit changes a base row and key 1's
+reverse-reference set; up to two failures. `PublicationFree` is the same
+without failures. Both check every Kernel invariant and every #51
+property with `PTypeOK`, plus the four above.
+
+**Bounds.** One log, two transactions, two structures per commit, at most
+two failures, none during recovery. Not covered: installation running ahead
+of the pointer across several commits beyond what it needs, several logs,
+byte layout. No
+liveness is claimed: nothing obliges `Install`, `Advance` or `Open` to run.
 
 ## Scenarios and results
 
@@ -396,6 +440,8 @@ Depth is the length of the longest shortest path (breadth-first).
 | `Recovery` | t1: `Buy(1,1)`; t2: `Buy(1,1)`, `Insert(2,0)`; t3: `Update(3,7,0)` (quota 2) with up to two crashes or fsync failures at any step; checks the Kernel invariants and the five durability properties | 10891 | 24 | `Recovery.tlc.log` |
 | `RecoveryEscrow` | balances 2 (key 1) and 0 (key 2); t1: `BuyUnder(1,1,1)` twice (reservation 2, draw 1); t2: `BuyUnder(2,1,0)` (skipped on an empty balance, reservation 0), one failure — the reservations an unknown outcome keeps are compared exactly | 337 | 16 | `RecoveryEscrow.tlc.log` |
 | `RecoveryDependent` | key 1 present; t1: `Update(1,5,0)`; t2: `Update(1,6,0)`; t3: `Read(1)`, with up to two failures — t2's and t3's responses depend on t1, whose commit may be durable but unacknowledged, or lost; `Serializable` compares them exactly | 6864 | 23 | `RecoveryDependent.tlc.log` |
+| `PublicationFree` | key 1 present; t1: `Insert(2,1)`; t2: `Insert(3,1)` with no failure — each commit has a base row and a reverse-reference set to install; readers observe the pointer, which passes a commit only when whole | 295 | 19 | `PublicationFree.tlc.log` |
+| `PublicationCrash` | the same with up to two crashes or fsync failures at any step, including between a durable record and its installation | 3738 | 25 | `PublicationCrash.tlc.log` |
 
 **Reachability witnesses.** Each scenario names negated state predicates
 (`*Unreached`); TLC's counterexample is the proof that the scenario's
@@ -448,10 +494,13 @@ assert membership.
 | `RecoveryEscrowFencedUnreached` | the engine is fenced with both outcomes unknown; t1 holds a reservation of 2 against a draw of 1, t2 a reservation of 0 after a skipped branch | 11 |
 | `RecoveryDependentSeesUnackedUnreached` | t1's flush completed and its caller was not told when the engine crashed; t2 read t1's committed row and its record reached storage in the crash; recovery serves both as committed and answers both `unknown`; t2 was told the row t1 wrote | 12 |
 | `RecoveryDependentIgnoresLostUnreached` | t1 ran its update and was told the initial row, then the crash discarded it before any flush (`aborted`, answered `unknown`); t2, not yet requested, ran on the recovered state, was told the initial row and committed | 11 |
+| `ReaderSeesPreCommitUnreached` (`PublicationCrash`) | a reader serves while t1's record is durable with one structure installed and the pointer below it: t1 shows in no structure | 7 |
+| `CrashMidInstallUnreached` (`PublicationCrash`) | the engine is down with t1's record durable (persisted from the tail by the crash) and none of it installed | 6 |
+| `RecoveryPublishesInterruptedUnreached` (`PublicationCrash`) | a crash left t1's record durable and uninstalled; recovery installed both structures and the pointer passed it | 11 |
 
 ## Mutants (specs/kernel/mutants/)
 
-Each mutant is a patch against `Kernel.tla` and `Durable.tla` that removes one named guard or adds one named fault;
+Each mutant is a patch against `Kernel.tla`, `Durable.tla` or `Publication.tla` that removes one named guard or adds one named fault;
 `run.sh` applies it to a temporary copy and checks exactly one property
 under the scenario's own constants.
 TLC refutes every one; the log is `<Mutant>.<Scenario>.<Property>.tlc.log`.
@@ -497,6 +546,12 @@ lengths below are the states of the committed logs.
 | `RecoverSkipsTail` — recovery drops the last durable record | `Recovery` | `AcknowledgedSurvive` (an acknowledged commit missing after recovery) | 9 |
 | `RecoverSkipsTail` | `Recovery` | `RecoveredPrefix` (the served history is shorter than the log) | 7 |
 | `RecoverSkipsTail` | `Recovery` | `Serializable` (a committed transaction's effects are missing from the recovered state) | 8 |
+| `AdvanceBeforeInstall` — the pointer passes a commit without waiting for its installation | `PublicationCrash` | `PointerBelowInstalled` (the pointer passes a commit with nothing installed) | 7 |
+| `AdvanceBeforeInstall` | `PublicationCrash` | `AtomicVisibility` (one structure installed, the pointer passed: a reader sees the commit in one structure only) | 8 |
+| `AdvanceBeforeInstall` | `PublicationCrash` | `RestartIsAtomic` (the pointer passed a half-installed commit, the engine crashed, and the restart serves it partially) | 10 |
+| `RecoveryAdvancesFirst` — recovery moves the pointer to the end of the log before it installs | `PublicationCrash` | `PointerBelowInstalled` (the pointer is past commits recovery has not installed) | 7 |
+| `RecoveryAdvancesFirst` | `PublicationCrash` | `AtomicVisibility` (a reader served during recovery sees a half-installed commit) | 8 |
+| `RecoveryAdvancesFirst` | `PublicationCrash` | `RestartIsAtomic` (the restart step exposes the half-installed commit) | 9 |
 
 `ExposeBeforeDurable` fails here only through a failure: checked once on
 `RecoveryDependent` with `Failures = 0` (no log committed; not a general
