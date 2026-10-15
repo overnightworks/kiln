@@ -708,8 +708,11 @@ it is applied to TypeScript.
   `npm install --ignore-scripts` every tracked lockfile must be byte-identical
   to the commit, otherwise the run fails and names it; `npm ci` is not used.
   An application that tracks no lockfile gets the lock the installation
-  generated recorded with its SHA-256 and install date in
-  `<application>.generated-locks.jsonl`, as evidence of what resolved.
+  generated recorded by the installation step, once the checkout is verified,
+  with its SHA-256 and the clock at that verification (never a file's
+  modification time) in `<application>.generated-locks.jsonl`, as evidence of
+  what resolved. The analysis step validates the lockfile it finds against that
+  record and fails on a missing record or any mismatch.
 
 ### 3.1 Worked examples: full unit counts against the frozen rule
 

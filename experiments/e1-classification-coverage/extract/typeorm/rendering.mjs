@@ -23,7 +23,3 @@ export function renderUnmatchedMarkers(markers) {
 }
 
 export const renderInstallScripts = lines;
-
-export function renderGeneratedLocks(locks) {
-  return lines(locks.map(({ file, sha256, installedAt }) => ({ file, sha256, installed_at: installedAt })));
-}
