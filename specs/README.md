@@ -313,6 +313,7 @@ Depth is the length of the longest shortest path (breadth-first).
 | `Widen` | key 1 points at 2; t1: `Follow(1)`; t2: `Update(1,3,0)`; t3: `Update(3,9,0)` — t1's guessed footprint is `S 1, S 2`; if t2 commits first t1 needs `S 3`, restarts, and waits for t3 if t3 holds key 3 | 135 | 15 | `Widen.tlc.log` |
 | `WidenQueue` | the same pointer; t1: `Follow(1)`; t2: `Update(1,3,0)`; t3: `Update(2,5,0)` — t3 queues behind t1; when t1 restarts it re-enters behind t3 and t3 is admitted first | 129 | 15 | `WidenQueue.tlc.log` |
 | `WidenCycle` | no pointers; t1: `Update(2,1,0)`, `Follow(2)`; t2: `Update(1,2,0)`, `Follow(1)` — each discovers the key the other holds from a pointer it just wrote; restarting discards the pointer and the two serialize | 65 | 17 | `WidenCycle.tlc.log` |
+| `WidenEscrow` | quota 1; key 3 has no pointer; t1: `Buy(1,1)`, `Follow(3)`; t2: `Update(3,2,0)`; t3: `Buy(1,1)` — if t2 commits first, t1 has reserved and drawn the ticket when its follow needs `S 2`; the restart discards both, t3 (waiting on the reservation) takes the ticket and t1's buy then fails on committed state | 130 | 16 | `WidenEscrow.tlc.log` |
 
 **Reachability witnesses.** Each scenario names negated state predicates
 (`*Unreached`); TLC's counterexample is the proof that the scenario's
@@ -351,9 +352,11 @@ assert membership.
 | `UnknownBudgetUnboundedUnreached` | t1 holds the whole balance under an unknown budget; t2 waits on it | 4 |
 | `StarvationQueuedBehindUnreached` | t1 holds the key; t2 and t3 are queued behind it, t2 first | 5 |
 | `WidenRestartedUnreached` | t2 committed the repointing; t1 restarted with a widened footprint and holds `S 3` | 9 |
-| `WidenConflictUnreached` | t1 restarted and is queued waiting on t3, which holds key 3 | 9 |
+| `WidenConflictUnreached` | t1 restarted and is queued waiting on t3, which is active and holds `X 3` | 10 |
 | `WidenQueueBehindUnreached` | t1 restarted and is queued behind t3, which was waiting on it | 9 |
 | `WidenCycleBothUnreached` | both calls widened and both ended | 17 |
+| `WidenEscrowDrawnUnreached` | t1 is about to restart with its whole balance reserved and drawn (reservation 1, draw 1) while t3 waits on that reservation | 9 |
+| `WidenEscrowDiscardedUnreached` | t1 restarted: it is queued and widened with reservation 0 and draw 0 | 9 |
 | `UnknownBudgetInsufficientUnreached` | after t3 raised the amount to 3, t1's draw failed on the committed balance 2 | 8 |
 
 ## Mutants (specs/kernel/mutants/)
@@ -392,6 +395,7 @@ lengths below are the states of the committed logs.
 | `WidenInPlace` — a call acquires the widened resource on top of its held footprint and waits for it instead of restarting | `WidenCycle` | `NoWaitCycle` (each holds `X` on the key the other's pointer names and waits for `S` on it) | 7 |
 | `WidenInPlace` | `WidenCycle` | TLC deadlock check | 7 |
 | `KeepTentativeOnRestart` — a restart keeps the tentative writes and draws | `WidenCycle` | `Serializable` (the re-run `Update` returns the call's own earlier write; no serial order yields it) | 9 |
+| `KeepTentativeOnRestart` | `WidenEscrow` | `Serializable` (the kept draw leaves the re-run `Buy` no balance in its new reservation: t1 is told `insufficient` while t3, which could have taken the ticket, has not run; no serial order of the ended calls yields it) | 11 |
 
 `TypeOK` has no mutant: it is a typing check with no protocol content.
 
