@@ -1,72 +1,22 @@
 //! Property tests driving `kiln_ir::run` — the crate's one public entry
 //! point — against the reference meaning `docs/concept.md` §2.2 records.
 //! Each test pins exactly one bullet of that meaning.
+//!
+//! D3's checked arithmetic, width, and clamping-domain behaviour lives in
+//! `tests/arithmetic.rs` instead: this file covers everything else `run`
+//! does — key reads, writes, branching, aborts, and the access log.
 
-use std::collections::BTreeMap;
+mod support;
 
 use kiln_ir::{
-    run, AbortReason, AccessKind, AccessedColumns, Call, ColumnName, Condition, Effect, Expr,
-    Function, FunctionName, Outcome, ParameterName, Program, Row, Slot, Store, TableName, Terminal,
-    Value,
+    AbortReason, AccessKind, AccessedColumns, Condition, Effect, Expr, Outcome, Row, Slot, Store,
+    Terminal, Value,
 };
 use proptest::prelude::*;
-
-// --- small builders, so every test states its behaviour and not its AST plumbing ---
-
-fn table(name: &str) -> TableName {
-    TableName(name.to_owned())
-}
-
-fn column(name: &str) -> ColumnName {
-    ColumnName(name.to_owned())
-}
-
-fn parameter(name: &str) -> ParameterName {
-    ParameterName(name.to_owned())
-}
-
-fn columns_of(pairs: impl IntoIterator<Item = (&'static str, Expr)>) -> BTreeMap<ColumnName, Expr> {
-    pairs
-        .into_iter()
-        .map(|(name, expr)| (column(name), expr))
-        .collect()
-}
-
-fn single_function_program(
-    parameters: Vec<ParameterName>,
-    effects: Vec<Effect>,
-    terminal: Terminal,
-) -> Program {
-    Program {
-        schema: Default::default(),
-        functions: vec![Function {
-            name: FunctionName("under_test".to_owned()),
-            parameters,
-            body: kiln_ir::Block { effects, terminal },
-        }],
-    }
-}
-
-fn call_under_test(args: Vec<Value>) -> Call {
-    Call {
-        function: FunctionName("under_test".to_owned()),
-        args,
-    }
-}
-
-fn arbitrary_value() -> impl Strategy<Value = Value> {
-    prop_oneof![
-        any::<i64>().prop_map(Value::Integer),
-        "[a-z]{1,6}".prop_map(Value::Text),
-    ]
-}
-
-fn committed_response(execution: &kiln_ir::Execution) -> &Value {
-    match &execution.outcome {
-        Outcome::Committed { response } => response,
-        Outcome::Aborted { reason } => panic!("expected a commit, got an abort: {reason:?}"),
-    }
-}
+use support::{
+    arbitrary_value, call_under_test, column, columns_of, columns_of_values, committed_response,
+    parameter, run_ok, single_function_program, table,
+};
 
 // --- an absent key is a branchable value (docs/concept.md §2.2) ---
 
@@ -98,7 +48,7 @@ proptest! {
             },
         );
 
-        let execution = run(&program, &call_under_test(vec![]), &store);
+        let execution = run_ok(&program, &call_under_test(vec![]), &store);
 
         let expected = Value::Integer(if row_present { 1 } else { 0 });
         prop_assert_eq!(committed_response(&execution), &expected);
@@ -134,7 +84,7 @@ proptest! {
             Terminal::Return(Expr::Literal(Value::Integer(0))),
         );
 
-        let execution = run(&program, &call_under_test(vec![]), &store);
+        let execution = run_ok(&program, &call_under_test(vec![]), &store);
 
         match execution.outcome {
             Outcome::Aborted { reason: AbortReason::MissingRow { table: t, key: k } } => {
@@ -172,7 +122,7 @@ proptest! {
             Terminal::Return(Expr::Literal(Value::Integer(0))),
         );
 
-        let execution = run(&program, &call_under_test(vec![new_value]), &store);
+        let execution = run_ok(&program, &call_under_test(vec![new_value]), &store);
 
         match execution.outcome {
             Outcome::Aborted { reason: AbortReason::DuplicateKey { table: t, key: k } } => {
@@ -183,15 +133,6 @@ proptest! {
         }
         prop_assert_eq!(&execution.store, &store);
     }
-}
-
-fn columns_of_values(
-    pairs: impl IntoIterator<Item = (&'static str, Value)>,
-) -> BTreeMap<ColumnName, Value> {
-    pairs
-        .into_iter()
-        .map(|(name, value)| (column(name), value))
-        .collect()
 }
 
 // --- effects apply in program order and later reads see earlier writes ---
@@ -234,7 +175,7 @@ proptest! {
             },
         );
 
-        let execution = run(&program, &call_under_test(vec![]), &store);
+        let execution = run_ok(&program, &call_under_test(vec![]), &store);
 
         // The read right after the insert saw it, before the call ever committed.
         prop_assert_eq!(committed_response(&execution), &Value::Integer(1));
@@ -264,7 +205,7 @@ proptest! {
             Terminal::Abort(kiln_ir::AbortName("rejected".to_owned())),
         );
 
-        let execution = run(&program, &call_under_test(vec![]), &store);
+        let execution = run_ok(&program, &call_under_test(vec![]), &store);
 
         let aborted_by_declared_reason = matches!(
             execution.outcome,
@@ -306,7 +247,7 @@ proptest! {
             Terminal::Return(Expr::Literal(Value::Integer(0))),
         );
 
-        let execution = run(&program, &call_under_test(vec![]), &store);
+        let execution = run_ok(&program, &call_under_test(vec![]), &store);
 
         let aborted_on_the_missing_row = matches!(
             execution.outcome,
@@ -397,7 +338,7 @@ fn access_log_entry_is_complete_for_every_access_kind() {
             vec![effect],
             Terminal::Return(Expr::Literal(Value::Integer(0))),
         );
-        let execution = run(&program, &call_under_test(vec![]), &store);
+        let execution = run_ok(&program, &call_under_test(vec![]), &store);
 
         assert_eq!(
             execution.access_log.len(),
@@ -434,7 +375,7 @@ fn successful_delete_removes_the_row() {
         Terminal::Return(Expr::Literal(Value::Integer(0))),
     );
 
-    let execution = run(&program, &call_under_test(vec![]), &store);
+    let execution = run_ok(&program, &call_under_test(vec![]), &store);
 
     assert!(matches!(execution.outcome, Outcome::Committed { .. }));
     assert_eq!(execution.store.row(&table("t"), &key), None);
@@ -463,7 +404,7 @@ fn update_preserves_untouched_columns() {
         Terminal::Return(Expr::Literal(Value::Integer(0))),
     );
 
-    let execution = run(&program, &call_under_test(vec![]), &store);
+    let execution = run_ok(&program, &call_under_test(vec![]), &store);
 
     let row = execution
         .store
