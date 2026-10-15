@@ -3,12 +3,9 @@
 import ts from "typescript";
 
 import { ExtractorError } from "./extractor_error.mjs";
-import { inExclusiveBranches } from "./exclusive_branches.mjs";
-import { isFunctionLike } from "./function_scopes.mjs";
 import { calledMethodName } from "./source_text.mjs";
+import { START_TRANSACTION, endsOfStartedTransactions } from "./transaction_flow.mjs";
 
-const START = "startTransaction";
-const TERMINATORS = new Set(["commitTransaction", "rollbackTransaction"]);
 const CALLBACK_TRANSACTION = "transaction";
 const TRANSACTION_DECORATORS = new Set(["Transaction", "LazyTransaction"]);
 const CALLBACK_RECEIVER_NAMES = new Set(["dataSource", "manager", "connection"]);
@@ -29,17 +26,18 @@ const CALLBACK_RECEIVER_NAMES = new Set(["dataSource", "manager", "connection"])
 export function readTransactionBlocks(sourceText, markers) {
   const blocks = [];
   const unmatched = [];
+  const endsOfStarts = endsOfStartedTransactions(sourceText.sourceFile);
   for (const marker of markers) {
-    const block = blockOfReport(marker, sourceText);
+    const block = blockOfReport(marker, sourceText, endsOfStarts);
     if (block) blocks.push(block);
     else unmatched.push(marker);
   }
   return { blocks, unmatched };
 }
 
-function blockOfReport(marker, sourceText) {
+function blockOfReport(marker, sourceText, endsOfStarts) {
   const calls = sourceText.callsReportedAt(marker, marker.name);
-  if (calls.length === 1) return blockOf(calls[0], sourceText);
+  if (calls.length === 1) return blockOf(calls[0], sourceText, endsOfStarts);
   if (calls.length === 0 && isDecoratedMethodReport(marker, sourceText)) return undefined;
   const where = `${marker.start.line}:${marker.start.column}`;
   throw new ExtractorError(`${marker.file}: ${calls.length} calls of \`${marker.name}\` and no transaction-decorated method match the report at ${where}`);
@@ -72,9 +70,9 @@ function decoratorNames(method) {
   });
 }
 
-function blockOf(call, sourceText) {
+function blockOf(call, sourceText, endsOfStarts) {
   const name = calledMethodName(call);
-  if (name === START) return startedBlock(call, sourceText);
+  if (name === START_TRANSACTION) return startedBlock(call, sourceText, endsOfStarts);
   if (name === CALLBACK_TRANSACTION) return callbackBlock(call, sourceText);
   return undefined;
 }
@@ -92,47 +90,8 @@ function finalName(expression) {
   return ts.isPropertyAccessExpression(expression) ? expression.name.text : undefined;
 }
 
-/**
- * The start up to the last commit or rollback on the same receiver within the same function, before
- * the next start that is not nested in this one. Following the control flow: starts in exclusive
- * branches of one conditional are one alternative opening, a start written while a transaction is
- * open on its path nests, and a commit or rollback closes the innermost open one.
- */
-function startedBlock(start, sourceText) {
-  const receiverOf = (call) => withoutWhitespace(call.expression.expression?.getText(sourceText.sourceFile) ?? "");
-  const startOf = (call) => sourceText.startOf(call);
-  const after = sourceText.calls
-    .filter((call) => sameFunction(call, start) && receiverOf(call) === receiverOf(start) && startOf(call) >= start.getEnd())
-    .sort((first, second) => startOf(first) - startOf(second));
-  const openings = [[start]];
-  let end;
-  for (const call of after) {
-    const name = calledMethodName(call);
-    if (name === START) {
-      if (openings.length === 0) break;
-      const alternative = openings.at(-1).every((opened) => inExclusiveBranches(opened, call));
-      if (alternative) openings.at(-1).push(call);
-      else openings.push([call]);
-    } else if (TERMINATORS.has(name)) {
-      openings.pop();
-      end = call.getEnd();
-    }
-  }
-  return end === undefined ? undefined : { position: startOf(start), start: startOf(start), end };
-}
-
-function withoutWhitespace(text) {
-  return text.replace(/\s+/g, "");
-}
-
-/** Both calls are written in the same innermost function (or both at top level). */
-function sameFunction(first, second) {
-  return enclosingFunction(first) === enclosingFunction(second);
-}
-
-function enclosingFunction(node) {
-  for (let current = node.parent; current !== undefined; current = current.parent) {
-    if (isFunctionLike(current)) return current;
-  }
-  return undefined;
+/** The start up to where its transaction ends; a start no commit or rollback closes opens no unit. */
+function startedBlock(start, sourceText, endsOfStarts) {
+  const end = endsOfStarts.get(start);
+  return end === undefined ? undefined : { position: sourceText.startOf(start), start: sourceText.startOf(start), end };
 }

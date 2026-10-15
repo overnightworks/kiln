@@ -664,13 +664,25 @@ it is applied to TypeScript.
   `X.commitTransaction()` or `X.rollbackTransaction()` with the same receiver
   text written directly in the same function before the next
   `X.startTransaction()` that does not nest in it; a start without one opens
-  no unit. Boundaries follow the syntax tree's control flow: starts written in
-  mutually exclusive branches of one conditional (the two arms of an
-  `if`/`else`, of a ternary, or different `switch` clauses) are one alternative
-  opening, not a nesting; a start written while a transaction is already open
-  on the same path nests in it, and the outermost owns the nested one's sites;
-  a commit or rollback closes the innermost open transaction of its receiver.
-  Branches that each commit inside themselves are transactions of their own.
+  no unit. Boundaries follow the syntax tree's control flow, per function,
+  statements in order. The arms of an `if` (an absent `else` is the arm that
+  skips it), of a ternary and of a `switch` (the skipping arm too when it has
+  no `default`) each run from a copy of the transactions open before the
+  conditional; `switch` clauses are separate arms only when they end in
+  `break`, `continue`, `return` or `throw`, clauses that fall through run in
+  sequence, and `try`, `catch` and `finally` run in sequence. At the join,
+  a transaction open before the conditional stays open while any arm leaves it
+  open; a start made inside the arms that every arm leaves open at the same
+  depth is one alternative opening, not a nesting, and continues; a start left
+  open in only some arms is an unmatched marker and its sites stay S3, and a
+  transaction closed in every arm stays closed. A start written while a
+  transaction is open on the same path nests in it, and the outermost owns the
+  nested one's sites; a commit or rollback closes the innermost open
+  transaction of its receiver, and one that follows the last close extends the
+  closed transaction up to the next start. A loop body is walked once and a
+  commit or rollback in it closes only a transaction started in that loop; a
+  start whose commit or rollback lies across the loop boundary, in either
+  direction, is unmatched.
   `X.transaction(...)` opens a unit when `X` is, or ends in a property named,
   `dataSource`, `manager` or `connection`, and its body is the last function
   or arrow function argument. A method decorated `@Transaction` or
