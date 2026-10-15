@@ -1,0 +1,8 @@
+claim_id = "bc9a607a7f2e4297b374e2f56a6805f7"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "81db8f1ee1753a8d7373032a1b9f8fdf825fc854"
+branch = "claude/issue-26-kiln-ir-ranges"
+scope = ["crates/kiln-ir", "docs/concept.md"]
+opened_commit = "2186f195df0dfcfaef056ba0fb38ae59c06a894c"
+whole_reason = "one crate slice and, only if needed, its reference-meaning paragraph"
