@@ -218,6 +218,55 @@ fn response_arithmetic_overflow_aborts_with_a_typed_reason() {
     assert_eq!(&execution.store, &store);
 }
 
+// --- D3: an arithmetic operand, or a write's own final value, that resolves to a non-integer
+// value aborts with a typed reason instead of panicking — checked arithmetic and a write's
+// width-or-clamp decision both run only over integers (docs/concept.md §2.2) ---
+
+#[test]
+fn arithmetic_operand_resolving_to_a_non_integer_value_aborts_with_a_typed_reason() {
+    let expr = Expr::Arithmetic(
+        ArithmeticOp::Add,
+        Box::new(Expr::Literal(Value::Text("not a number".to_owned()))),
+        Box::new(Expr::Literal(Value::Integer(1))),
+    );
+    let program = support::single_function_program(vec![], vec![], Terminal::Return(expr));
+    let store = Store::empty();
+
+    let execution = run_ok(&program, &call_under_test(vec![]), &store);
+
+    assert_eq!(
+        execution.outcome,
+        Outcome::Aborted {
+            reason: AbortReason::NonIntegerOperand,
+        }
+    );
+    assert!(execution.access_log.is_empty());
+    assert_eq!(&execution.store, &store);
+}
+
+#[test]
+fn text_literal_written_into_a_declared_column_aborts_with_a_typed_reason() {
+    let declared_column = Column {
+        name: column("c"),
+        width: IntegerWidth::I8,
+        domain: None,
+    };
+
+    let execution = run_write(
+        declared_column,
+        Expr::Literal(Value::Text("not a number".to_owned())),
+        WriteVia::Insert,
+    );
+
+    assert_eq!(
+        execution.outcome,
+        Outcome::Aborted {
+            reason: AbortReason::NonIntegerOperand,
+        }
+    );
+    assert_eq!(&execution.store, &Store::empty());
+}
+
 // --- D3: a clamping domain saturates computed and literal writes alike, across the whole
 // domain, instead of aborting (docs/concept.md §2.2) ---
 
