@@ -1,16 +1,7 @@
-use std::fmt;
+use std::num::NonZeroU128;
 
 use crate::classified::{Classification, ClassifiedUnit, ProvenCategory};
-
-/// A share in percent, 0 to 100.
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
-pub struct Percent(pub f64);
-
-impl fmt::Display for Percent {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{:.4} %", self.0)
-    }
-}
+use crate::ratio::{Overflow, Ratio};
 
 /// One group of units counted by category; S4 exclusions are counted apart
 /// because they leave the denominator (`inputs.md` §3, S4).
@@ -33,7 +24,7 @@ impl Tally {
                 category: ProvenCategory::DomainBounded,
                 ..
             } => self.domain_bounded += 1,
-            Classification::Unknown(_) => self.unknown += 1,
+            Classification::Unknown { .. } => self.unknown += 1,
             Classification::ExcludedNonDatabase(_) => self.excluded += 1,
         }
     }
@@ -47,33 +38,34 @@ impl Tally {
     }
 
     /// Static or one-hop units over the denominator; `None` when it is empty.
-    pub fn gating_share(&self) -> Option<Percent> {
+    pub fn gating_share(&self) -> Option<Ratio> {
         self.share_of(self.gating)
     }
 
     /// Reported next to the gating share and never gating
     /// (`docs/experiments.md`, "Gating numerator and verdict").
-    pub fn domain_bounded_share(&self) -> Option<Percent> {
+    pub fn domain_bounded_share(&self) -> Option<Ratio> {
         self.share_of(self.domain_bounded)
     }
 
-    fn share_of(&self, units: u32) -> Option<Percent> {
-        match self.denominator() {
-            0 => None,
-            denominator => Some(Percent(100.0 * f64::from(units) / f64::from(denominator))),
-        }
+    fn share_of(&self, units: u32) -> Option<Ratio> {
+        NonZeroU128::new(self.denominator().into())
+            .map(|denominator| Ratio::new(units.into(), denominator))
     }
 }
 
 /// The middle share, or the mean of the two middle shares for an even count;
 /// `None` for no shares.
-pub fn median(shares: &[Percent]) -> Option<Percent> {
-    let mut sorted: Vec<f64> = shares.iter().map(|share| share.0).collect();
-    sorted.sort_by(f64::total_cmp);
+pub fn median(shares: &[Ratio]) -> Result<Option<Ratio>, Overflow> {
+    let mut sorted = shares.to_vec();
+    sorted.sort();
     let middle = sorted.len() / 2;
     match sorted.len() {
-        0 => None,
-        length if length % 2 == 1 => Some(Percent(sorted[middle])),
-        _ => Some(Percent((sorted[middle - 1] + sorted[middle]) / 2.0)),
+        0 => Ok(None),
+        length if length % 2 == 1 => Ok(Some(sorted[middle])),
+        _ => sorted[middle - 1]
+            .checked_add(sorted[middle])?
+            .checked_half()
+            .map(Some),
     }
 }

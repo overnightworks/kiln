@@ -1,12 +1,23 @@
-mod support;
+use std::num::NonZeroU128;
 
-use kiln_e1::{median, Manifest, Percent, ProvenCategory, Tally, TpccTransaction};
-use support::*;
+use kiln_e1::{
+    evaluate, median, ClassifiedUnit, Manifest, Overflow, ProvenCategory, Ratio, Tally,
+    TpccTransaction,
+};
 
-fn tally(units: &[kiln_e1::ClassifiedUnit]) -> Tally {
+#[path = "support/units.rs"]
+mod units;
+use units::*;
+
+fn tally(units: &[ClassifiedUnit]) -> Tally {
     let mut tally = Tally::default();
     units.iter().for_each(|unit| tally.count(unit));
     tally
+}
+
+/// The exact fraction `numerator / denominator`.
+fn ratio(numerator: u128, denominator: u128) -> Ratio {
+    Ratio::new(numerator, NonZeroU128::new(denominator).unwrap())
 }
 
 mod kiln_e1_06 {
@@ -62,8 +73,8 @@ mod kiln_e1_07 {
             unknown("a"),
         ];
         let tally = tally(&units);
-        assert_eq!(tally.gating_share(), Some(Percent(50.0)));
-        assert_eq!(tally.domain_bounded_share(), Some(Percent(25.0)));
+        assert_eq!(tally.gating_share(), Some(ratio(1, 2)));
+        assert_eq!(tally.domain_bounded_share(), Some(ratio(1, 4)));
         assert_eq!(tally.denominator(), 4);
     }
 
@@ -80,7 +91,7 @@ mod kiln_e1_08 {
     #[test]
     fn a_refused_unit_stays_in_the_denominator() {
         let units = [gating("a"), gating("a"), gating("a"), unknown("a")];
-        assert_eq!(tally(&units).gating_share(), Some(Percent(75.0)));
+        assert_eq!(tally(&units).gating_share(), Some(ratio(3, 4)));
     }
 }
 
@@ -91,7 +102,7 @@ mod kiln_e1_09 {
     fn an_s4_exclusion_leaves_the_denominator_and_is_counted() {
         let units = [gating("a"), unknown("a"), excluded("a"), excluded("a")];
         let tally = tally(&units);
-        assert_eq!(tally.gating_share(), Some(Percent(50.0)));
+        assert_eq!(tally.gating_share(), Some(ratio(1, 2)));
         assert_eq!(tally.denominator(), 2);
         assert_eq!(tally.excluded(), 2);
     }
@@ -100,50 +111,69 @@ mod kiln_e1_09 {
 mod kiln_e1_10 {
     use super::*;
 
-    fn percents(values: &[f64]) -> Vec<Percent> {
-        values.iter().map(|value| Percent(*value)).collect()
+    #[test]
+    fn the_median_is_the_middle_or_the_mean_of_the_two_middle_shares() {
+        let cases: [(Vec<Ratio>, Option<Ratio>); 5] = [
+            (vec![], None),
+            (vec![ratio(2, 5)], Some(ratio(2, 5))),
+            (
+                vec![ratio(9, 10), ratio(1, 10), ratio(3, 5)],
+                Some(ratio(3, 5)),
+            ),
+            (
+                vec![ratio(1, 1), ratio(0, 1), ratio(4, 5), ratio(3, 5)],
+                Some(ratio(7, 10)),
+            ),
+            (vec![ratio(1, 2), ratio(1, 2)], Some(ratio(1, 2))),
+        ];
+        for (shares, expected) in cases {
+            assert_eq!(median(&shares), Ok(expected), "{shares:?}");
+        }
     }
 
     #[test]
-    fn the_median_is_the_middle_or_the_mean_of_the_two_middle_shares() {
-        let cases: [(&[f64], Option<f64>); 5] = [
-            (&[], None),
-            (&[40.0], Some(40.0)),
-            (&[90.0, 10.0, 60.0], Some(60.0)),
-            (&[100.0, 0.0, 80.0, 60.0], Some(70.0)),
-            (&[50.0, 50.0], Some(50.0)),
+    fn an_even_count_landing_exactly_on_a_threshold_keeps_it() {
+        let cases = [
+            (ratio(2, 3), ratio(11, 15), ratio(7, 10)),
+            (ratio(1, 3), ratio(2, 3), ratio(1, 2)),
         ];
-        for (shares, expected) in cases {
-            assert_eq!(
-                median(&percents(shares)),
-                expected.map(Percent),
-                "{shares:?}"
-            );
+        for (low, high, expected) in cases {
+            assert_eq!(median(&[high, low]), Ok(Some(expected)));
         }
+    }
+
+    #[test]
+    fn the_evaluation_takes_the_median_over_the_manifest_applications() {
+        let manifest = manifest(&["a/b", "c/d"]);
+        let mut applications = units_with_share("a/b", 2, 3);
+        applications.extend(units_with_share("c/d", 11, 15));
+        let evaluation = evaluate(&manifest, &tpcc_units(&[]), &applications).unwrap();
+        assert_eq!(evaluation.application_median, ratio(7, 10));
     }
 }
 
 mod kiln_e1_11 {
     use super::*;
-    use kiln_e1::{evaluate, Evaluation};
 
-    fn weighted(unknown: &[TpccTransaction]) -> Evaluation {
+    fn weighted_share(tpcc: &[ClassifiedUnit]) -> Ratio {
         let manifest = manifest(&["a/b"]);
-        evaluate(&manifest, &tpcc_units(unknown), &[gating("a/b")]).unwrap()
+        evaluate(&manifest, tpcc, &[gating("a/b")])
+            .unwrap()
+            .tpcc_weighted_share
     }
 
     #[test]
     fn each_transaction_type_weighs_its_frozen_mix_share() {
         let cases = [
-            (TpccTransaction::NewOrder, 55.0),
-            (TpccTransaction::Payment, 57.0),
-            (TpccTransaction::OrderStatus, 96.0),
-            (TpccTransaction::Delivery, 96.0),
-            (TpccTransaction::StockLevel, 96.0),
+            (TpccTransaction::NewOrder, ratio(55, 100)),
+            (TpccTransaction::Payment, ratio(57, 100)),
+            (TpccTransaction::OrderStatus, ratio(96, 100)),
+            (TpccTransaction::Delivery, ratio(96, 100)),
+            (TpccTransaction::StockLevel, ratio(96, 100)),
         ];
         for (unknown_type, expected) in cases {
-            let share = weighted(&[unknown_type]).tpcc_weighted_share;
-            assert!((share.0 - expected).abs() < 1e-9, "{unknown_type}: {share}");
+            let share = weighted_share(&tpcc_units(&[unknown_type]));
+            assert_eq!(share, expected, "{unknown_type}");
         }
     }
 
@@ -155,16 +185,47 @@ mod kiln_e1_11 {
             TpccTransaction::Delivery,
             TpccTransaction::StockLevel,
         ];
-        let share = weighted(&others).tpcc_weighted_share;
-        assert!((share.0 - 43.0).abs() < 1e-9, "{share}");
+        assert_eq!(weighted_share(&tpcc_units(&others)), ratio(43, 100));
     }
 
     #[test]
     fn a_transaction_type_weighs_its_own_unit_share() {
-        let manifest = manifest(&["a/b"]);
         let mut units = tpcc_units(&[]);
-        units.push(unknown("new-order"));
-        let evaluation = evaluate(&manifest, &units, &[gating("a/b")]).unwrap();
-        assert!((evaluation.tpcc_weighted_share.0 - 77.5).abs() < 1e-9);
+        units.push(unknown(TpccTransaction::NewOrder));
+        assert_eq!(weighted_share(&units), ratio(775, 1000));
+    }
+
+    #[test]
+    fn unequal_unit_counts_per_transaction_weigh_exactly() {
+        // 45 * 1 + 43 * 7/15 + 4 * 14/15 + 4 * 0 + 4 * 3/10 = 70, to the last digit.
+        let units = tpcc_units_with_shares([(1, 1), (7, 15), (14, 15), (0, 1), (3, 10)]);
+        assert_eq!(weighted_share(&units), ratio(70, 100));
+    }
+}
+
+mod kiln_e1_17 {
+    use super::*;
+
+    #[test]
+    fn a_share_that_does_not_fit_exactly_is_refused_not_rounded() {
+        let large = ratio(1, u128::MAX - 1);
+        let other = ratio(1, u128::MAX - 2);
+        assert_eq!(large.checked_add(other), Err(Overflow));
+        assert_eq!(large.checked_mul(other), Err(Overflow));
+        assert_eq!(median(&[large, other]), Err(Overflow));
+    }
+
+    #[test]
+    fn shares_compare_exactly_even_where_cross_multiplying_would_overflow() {
+        let smaller = ratio(u128::MAX - 2, u128::MAX - 1);
+        let larger = ratio(u128::MAX - 1, u128::MAX);
+        assert!(smaller < larger);
+        assert!(larger < ratio(1, 1));
+    }
+
+    #[test]
+    fn a_share_displays_as_percent() {
+        assert_eq!(ratio(3, 4).to_string(), "75.0000 %");
+        assert_eq!(ratio(1, 3).to_string(), "33.3333 %");
     }
 }

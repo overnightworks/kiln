@@ -1,11 +1,11 @@
 use std::fmt;
 
-use crate::coverage::Percent;
+use crate::ratio::Ratio;
 
 /// `docs/experiments.md`, "Gating numerator and verdict": pass at least 70 %.
-const PASS_AT_LEAST: f64 = 70.0;
+const PASS_AT_LEAST_PERCENT: u8 = 70;
 /// Same section: fail below 50 %.
-const FAIL_BELOW: f64 = 50.0;
+const FAIL_BELOW_PERCENT: u8 = 50;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verdict {
@@ -16,11 +16,17 @@ pub enum Verdict {
 
 impl Verdict {
     /// A share below the fail threshold fails whatever the other share is.
-    pub fn from_shares(tpcc_weighted: Percent, application_median: Percent) -> Self {
-        let shares = [tpcc_weighted.0, application_median.0];
-        if shares.iter().any(|share| *share < FAIL_BELOW) {
+    pub fn from_shares(tpcc_weighted: Ratio, application_median: Ratio) -> Self {
+        let shares = [tpcc_weighted, application_median];
+        if shares
+            .iter()
+            .any(|share| *share < Ratio::from_percent(FAIL_BELOW_PERCENT))
+        {
             Self::Fail
-        } else if shares.iter().all(|share| *share >= PASS_AT_LEAST) {
+        } else if shares
+            .iter()
+            .all(|share| *share >= Ratio::from_percent(PASS_AT_LEAST_PERCENT))
+        {
             Self::Pass
         } else {
             Self::Inconclusive

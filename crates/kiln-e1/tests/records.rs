@@ -1,31 +1,23 @@
-mod support;
-
-use kiln_e1::{parse_units, render_units, Classification, ProvenCategory};
+use kiln_e1::{parse_units, ApplicationId, Classification, Subject, TpccTransaction, UnitRule};
 use serde_json::json;
-use support::*;
+
+#[path = "support/json_lines.rs"]
+mod json_lines;
+use json_lines::*;
 
 mod kiln_e1_01 {
     use super::*;
 
     #[test]
-    fn classified_units_survive_a_write_and_read() {
-        let units = vec![
-            proven("a/b", ProvenCategory::OneHop),
-            unknown("a/b"),
-            excluded("c/d"),
-            gating("e/f"),
-        ];
-
-        assert_eq!(
-            parse_units("fixture", &render_units(&units)).unwrap(),
-            units
-        );
-    }
-
-    #[test]
     fn a_unit_line_reads_with_all_its_fields() {
         let unit = parse_one(json!({"category": "static", "evidence": ["read#0/key"]})).unwrap();
-        assert_eq!(unit.unit().rule, kiln_e1::UnitRule::S2);
+        assert_eq!(
+            unit.unit().subject,
+            Subject::Application(ApplicationId::new("a/b"))
+        );
+        assert_eq!(unit.unit().file, "app/views.py");
+        assert_eq!((unit.unit().line, unit.unit().column), (10, 4));
+        assert_eq!(unit.unit().rule, UnitRule::S2);
         assert_eq!(unit.unit().parameters, ["order_id"]);
         assert_eq!(unit.unit().absorbed_sites.len(), 1);
         assert!(matches!(
@@ -44,16 +36,44 @@ mod kiln_e1_01 {
             ("S4", false),
             ("s2", false),
         ] {
-            let mut line = serde_json::from_str::<serde_json::Value>(&line_with(
+            let line = line_with_unit_fields(
+                json!({"rule": rule}),
                 json!({"category": "static", "evidence": ["x"]}),
-            ))
-            .unwrap();
-            line["unit"]["rule"] = json!(rule);
-            assert_eq!(
-                parse_units("fixture", &line.to_string()).is_ok(),
-                accepted,
-                "{rule}"
             );
+            assert_eq!(parse_units("fixture", &line).is_ok(), accepted, "{rule}");
+        }
+    }
+
+    #[test]
+    fn a_subject_is_a_manifest_application_or_a_tpcc_transaction_type() {
+        let cases = [
+            (
+                json!({"application": "a/b"}),
+                Some(Subject::Application(ApplicationId::new("a/b"))),
+            ),
+            (
+                json!({"tpcc": "new-order"}),
+                Some(Subject::Tpcc(TpccTransaction::NewOrder)),
+            ),
+            (
+                json!({"tpcc": "stock-level"}),
+                Some(Subject::Tpcc(TpccTransaction::StockLevel)),
+            ),
+            (json!({"tpcc": "refund"}), None),
+            (json!({"tpcc": "New-Order"}), None),
+            (json!("payment"), None),
+            (json!({}), None),
+            (json!({"application": "a/b", "tpcc": "payment"}), None),
+        ];
+        for (subject, expected) in cases {
+            let line = line_with_unit_fields(
+                json!({"subject": subject}),
+                json!({"category": "static", "evidence": ["x"]}),
+            );
+            let subject_read = parse_units("fixture", &line)
+                .ok()
+                .map(|units| units[0].unit().subject.clone());
+            assert_eq!(subject_read, expected, "{subject}");
         }
     }
 }
@@ -102,7 +122,7 @@ mod kiln_e1_03 {
         let unit = parse_one(json!({"category": "unknown", "refusal_reason": "external I/O"}));
         assert!(matches!(
             unit.unwrap().classification(),
-            Classification::Unknown(_)
+            Classification::Unknown { evidence: None, .. }
         ));
     }
 
@@ -115,9 +135,23 @@ mod kiln_e1_03 {
     }
 
     #[test]
-    fn evidence_contradicts_an_unknown_label() {
+    fn an_unknown_label_may_carry_evidence_beside_its_reason() {
+        let unit =
+            parse_one(json!({"category": "unknown", "refusal_reason": "r", "evidence": ["x"]}))
+                .unwrap();
+        assert!(matches!(
+            unit.classification(),
+            Classification::Unknown {
+                evidence: Some(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn evidence_on_an_unknown_label_must_not_be_blank() {
         let result =
-            parse_one(json!({"category": "unknown", "refusal_reason": "r", "evidence": ["x"]}));
+            parse_one(json!({"category": "unknown", "refusal_reason": "r", "evidence": [" "]}));
         assert!(result.is_err());
     }
 }

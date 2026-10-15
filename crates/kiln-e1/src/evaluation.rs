@@ -2,10 +2,11 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::classified::ClassifiedUnit;
-use crate::coverage::{median, Percent, Tally};
+use crate::coverage::{median, Tally};
 use crate::manifest::Manifest;
+use crate::ratio::{Overflow, Ratio};
 use crate::tpcc::TpccTransaction;
-use crate::unit::ApplicationId;
+use crate::unit::{ApplicationId, Subject};
 use crate::verdict::Verdict;
 
 /// Why no verdict can be computed. The freeze runs the median over the frozen
@@ -15,8 +16,10 @@ pub enum Refusal {
     EmptyManifest,
     ApplicationOutsideManifest(ApplicationId),
     ApplicationWithoutUnits(ApplicationId),
-    UnknownTpccTransaction(ApplicationId),
+    TpccUnitNamesApplication(ApplicationId),
+    ApplicationUnitNamesTpccTransaction(TpccTransaction),
     TpccTransactionWithoutUnits(TpccTransaction),
+    Inexact(Overflow),
 }
 
 impl fmt::Display for Refusal {
@@ -35,10 +38,16 @@ impl fmt::Display for Refusal {
                     "manifest application `{id}` has no unit in its denominator"
                 )
             }
-            Self::UnknownTpccTransaction(id) => {
+            Self::TpccUnitNamesApplication(id) => {
                 write!(
                     formatter,
-                    "TPC-C units name `{id}`, which is no TPC-C transaction type"
+                    "a TPC-C unit names application `{id}` instead of a TPC-C transaction type"
+                )
+            }
+            Self::ApplicationUnitNamesTpccTransaction(transaction) => {
+                write!(
+                    formatter,
+                    "an application unit names TPC-C transaction type `{transaction}` instead of a manifest application"
                 )
             }
             Self::TpccTransactionWithoutUnits(transaction) => {
@@ -47,6 +56,7 @@ impl fmt::Display for Refusal {
                     "TPC-C transaction `{transaction}` has no unit in its denominator"
                 )
             }
+            Self::Inexact(overflow) => overflow.fmt(formatter),
         }
     }
 }
@@ -57,8 +67,8 @@ impl std::error::Error for Refusal {}
 pub struct Evaluation {
     pub applications: Vec<(ApplicationId, Tally)>,
     pub tpcc_transactions: Vec<(TpccTransaction, Tally)>,
-    pub tpcc_weighted_share: Percent,
-    pub application_median: Percent,
+    pub tpcc_weighted_share: Ratio,
+    pub application_median: Ratio,
     pub verdict: Verdict,
 }
 
@@ -80,34 +90,45 @@ pub fn evaluate(
 
 fn tpcc_weighted(
     units: &[ClassifiedUnit],
-) -> Result<(Vec<(TpccTransaction, Tally)>, Percent), Refusal> {
+) -> Result<(Vec<(TpccTransaction, Tally)>, Ratio), Refusal> {
     let mut tallies: BTreeMap<TpccTransaction, Tally> = BTreeMap::new();
     for unit in units {
-        let name = &unit.unit().application;
-        let transaction = TpccTransaction::from_name(name.as_str())
-            .ok_or_else(|| Refusal::UnknownTpccTransaction(name.clone()))?;
+        let transaction = match &unit.unit().subject {
+            Subject::Tpcc(transaction) => *transaction,
+            Subject::Application(id) => return Err(Refusal::TpccUnitNamesApplication(id.clone())),
+        };
         tallies.entry(transaction).or_default().count(unit);
     }
-    let mut weighted_sum = 0.0;
+    let mut weighted_share = Ratio::from_percent(0);
     let mut per_transaction = Vec::new();
     for transaction in TpccTransaction::ALL {
         let tally = tallies.remove(&transaction).unwrap_or_default();
         let share = tally
             .gating_share()
             .ok_or(Refusal::TpccTransactionWithoutUnits(transaction))?;
-        weighted_sum += transaction.weight_percent() * share.0;
+        let weighted = share
+            .checked_mul(Ratio::from_percent(transaction.weight_percent()))
+            .map_err(Refusal::Inexact)?;
+        weighted_share = weighted_share
+            .checked_add(weighted)
+            .map_err(Refusal::Inexact)?;
         per_transaction.push((transaction, tally));
     }
-    Ok((per_transaction, Percent(weighted_sum / 100.0)))
+    Ok((per_transaction, weighted_share))
 }
 
 fn application_median(
     manifest: &Manifest,
     units: &[ClassifiedUnit],
-) -> Result<(Vec<(ApplicationId, Tally)>, Percent), Refusal> {
+) -> Result<(Vec<(ApplicationId, Tally)>, Ratio), Refusal> {
     let mut tallies: BTreeMap<ApplicationId, Tally> = BTreeMap::new();
     for unit in units {
-        let id = &unit.unit().application;
+        let id = match &unit.unit().subject {
+            Subject::Application(id) => id,
+            Subject::Tpcc(transaction) => {
+                return Err(Refusal::ApplicationUnitNamesTpccTransaction(*transaction))
+            }
+        };
         if !manifest.applications().contains(id) {
             return Err(Refusal::ApplicationOutsideManifest(id.clone()));
         }
@@ -123,6 +144,8 @@ fn application_median(
         shares.push(share);
         per_application.push((id.clone(), tally));
     }
-    let middle = median(&shares).ok_or(Refusal::EmptyManifest)?;
+    let middle = median(&shares)
+        .map_err(Refusal::Inexact)?
+        .ok_or(Refusal::EmptyManifest)?;
     Ok((per_application, middle))
 }

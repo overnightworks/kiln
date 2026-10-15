@@ -1,8 +1,11 @@
 use std::fmt;
 
+use serde::Deserialize;
+
 /// TPC-C's transaction types with E1's frozen mix, which the freeze fixes in
 /// `inputs.md` §1; it is deliberately not configurable.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum TpccTransaction {
     NewOrder,
     Payment,
@@ -30,18 +33,12 @@ impl TpccTransaction {
         }
     }
 
-    pub fn from_name(name: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|transaction| transaction.name() == name)
-    }
-
     /// Percent of the frozen mix: `inputs.md` §1, "Frozen TPC-C weights".
-    pub fn weight_percent(self) -> f64 {
+    pub fn weight_percent(self) -> u8 {
         match self {
-            Self::NewOrder => 45.0,
-            Self::Payment => 43.0,
-            Self::OrderStatus | Self::Delivery | Self::StockLevel => 4.0,
+            Self::NewOrder => 45,
+            Self::Payment => 43,
+            Self::OrderStatus | Self::Delivery | Self::StockLevel => 4,
         }
     }
 }

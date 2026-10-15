@@ -122,7 +122,7 @@ fn render(evaluation: &Evaluation) -> String {
 }
 
 fn describe(tally: &crate::coverage::Tally) -> String {
-    let share = |percent: Option<crate::coverage::Percent>| {
+    let share = |percent: Option<crate::ratio::Ratio>| {
         percent.map_or_else(|| "n/a".to_owned(), |percent| percent.to_string())
     };
     format!(

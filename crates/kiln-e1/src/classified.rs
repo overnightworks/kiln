@@ -1,6 +1,6 @@
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::unit::UnitRecord;
 
@@ -13,7 +13,6 @@ pub enum ContractViolation {
     BlankEvidencePath,
     MissingReason,
     ReasonOnProvenUnit,
-    EvidenceOnUnknownUnit,
     ExclusionWithCategory,
     ExclusionWithOtherFields,
     IncompleteExclusion(&'static str),
@@ -33,9 +32,6 @@ impl fmt::Display for ContractViolation {
             Self::MissingReason => formatter.write_str("an unknown label needs its reason"),
             Self::ReasonOnProvenUnit => {
                 formatter.write_str("a refusal reason contradicts a static, one-hop or domain-bounded label")
-            }
-            Self::EvidenceOnUnknownUnit => {
-                formatter.write_str("evidence contradicts an unknown label")
             }
             Self::ExclusionWithCategory => {
                 formatter.write_str("an S4 exclusion contradicts a category")
@@ -64,8 +60,7 @@ fn require_text(value: String, field: &'static str) -> Result<String, ContractVi
 }
 
 /// IR node paths that justify a category; at least one, none blank.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Evidence(Vec<String>);
 
 impl Evidence {
@@ -81,8 +76,7 @@ impl Evidence {
 }
 
 /// Why a unit is unknown, for example the front end's declared refusal reason.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reason(String);
 
 impl Reason {
@@ -105,7 +99,7 @@ struct RawS4Exclusion {
 
 /// The affirmative evidence `inputs.md` §3 (S4) demands before a candidate
 /// leaves the denominator.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "RawS4Exclusion")]
 pub struct S4Exclusion {
     receiver_type: String,
@@ -141,8 +135,7 @@ impl TryFrom<RawS4Exclusion> for S4Exclusion {
 
 /// A footprint category with checkable evidence (`docs/experiments.md`,
 /// "Footprint categories").
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProvenCategory {
     Static,
     OneHop,
@@ -155,11 +148,16 @@ pub enum Classification {
         category: ProvenCategory,
         evidence: Evidence,
     },
-    Unknown(Reason),
+    /// Why the unit is unknown; the nodes that explain a failed analysis may
+    /// accompany it.
+    Unknown {
+        reason: Reason,
+        evidence: Option<Evidence>,
+    },
     ExcludedNonDatabase(S4Exclusion),
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum WireCategory {
     Static,
@@ -169,22 +167,22 @@ enum WireCategory {
 }
 
 /// The JSONL line shape; [`ClassifiedUnit`] is what survives validating it.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WireClassifiedUnit {
     unit: UnitRecord,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     category: Option<WireCategory>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     evidence: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     refusal_reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     s4_exclusion: Option<S4Exclusion>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "WireClassifiedUnit", into = "WireClassifiedUnit")]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "WireClassifiedUnit")]
 pub struct ClassifiedUnit {
     unit: UnitRecord,
     classification: Classification,
@@ -231,13 +229,16 @@ impl TryFrom<WireClassifiedUnit> for ClassifiedUnit {
                     }
                 }
                 None => {
-                    if !wire.evidence.is_empty() {
-                        return Err(ContractViolation::EvidenceOnUnknownUnit);
-                    }
                     let reason = wire
                         .refusal_reason
                         .ok_or(ContractViolation::MissingReason)?;
-                    Classification::Unknown(Reason::new(reason)?)
+                    let evidence = (!wire.evidence.is_empty())
+                        .then(|| Evidence::new(wire.evidence))
+                        .transpose()?;
+                    Classification::Unknown {
+                        reason: Reason::new(reason)?,
+                        evidence,
+                    }
                 }
             },
         };
@@ -253,33 +254,5 @@ impl WireCategory {
             Self::DomainBounded => Some(ProvenCategory::DomainBounded),
             Self::Unknown => None,
         }
-    }
-}
-
-impl From<ClassifiedUnit> for WireClassifiedUnit {
-    fn from(classified: ClassifiedUnit) -> Self {
-        let mut wire = Self {
-            unit: classified.unit,
-            category: None,
-            evidence: Vec::new(),
-            refusal_reason: None,
-            s4_exclusion: None,
-        };
-        match classified.classification {
-            Classification::Proven { category, evidence } => {
-                wire.category = Some(match category {
-                    ProvenCategory::Static => WireCategory::Static,
-                    ProvenCategory::OneHop => WireCategory::OneHop,
-                    ProvenCategory::DomainBounded => WireCategory::DomainBounded,
-                });
-                wire.evidence = evidence.0;
-            }
-            Classification::Unknown(reason) => {
-                wire.category = Some(WireCategory::Unknown);
-                wire.refusal_reason = Some(reason.0);
-            }
-            Classification::ExcludedNonDatabase(exclusion) => wire.s4_exclusion = Some(exclusion),
-        }
-        wire
     }
 }
