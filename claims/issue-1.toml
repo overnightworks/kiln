@@ -1,0 +1,7 @@
+claim_id = "1311faee01564355957a269c18334cde"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "4c0edb03bf81d8d4d581373862735e61bc134d27"
+branch = "claude/issue-1-concept-kiln-architecture-thesis-and-its"
+scope = ["README.md", "docs/concept.md", "docs/research"]
+opened_commit = "5003736e4a171233b4549cfb006b1979bb881a11"
