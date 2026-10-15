@@ -17,12 +17,19 @@ use std::collections::HashMap;
 
 use crate::call::Call;
 use crate::identifiers::{AbortName, ColumnName, ParameterName, TableName};
-use crate::ir::{Parameter, Program, Row, SchemaError, Slot, UniqueConstraint, Value};
+use crate::ir::{
+    CheckConstraint, ForeignKey, Parameter, Program, Row, SchemaError, Slot, UniqueConstraint,
+    Value,
+};
 use crate::store::Store;
 
+mod check;
+mod constraints;
 mod effects;
+mod foreign_key;
 mod resolve;
 mod unique;
+mod written;
 
 /// What a committed or aborted call produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,6 +122,24 @@ pub enum AbortReason {
     UniqueViolation {
         constraint: UniqueConstraint,
         value: Value,
+    },
+    /// The transaction's final state holds a row whose `foreign_key` column
+    /// names `value`, a key no row of the referenced table holds (D2).
+    DanglingReference {
+        foreign_key: ForeignKey,
+        value: Value,
+    },
+    /// The transaction deleted the row at `key` of the table `foreign_key`
+    /// references, while its final state still holds a row naming `key` (D2).
+    ReferencedParentDeleted {
+        foreign_key: ForeignKey,
+        key: Value,
+    },
+    /// The transaction's final state holds the row at `key` violating
+    /// `constraint` (D2).
+    CheckViolation {
+        constraint: CheckConstraint,
+        key: Value,
     },
 }
 
@@ -275,7 +300,7 @@ pub fn run(program: &Program, call: &Call, store: &Store) -> Result<Execution, S
 
     let outcome = match outcome {
         Outcome::Committed { .. } => {
-            unique::first_violation(&program.schema, &working_store, &mut access_log)
+            constraints::first_violation(&program.schema, &working_store, &mut access_log)
                 .map_or(outcome, |reason| Outcome::Aborted { reason })
         }
         aborted @ Outcome::Aborted { .. } => aborted,

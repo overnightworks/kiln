@@ -70,10 +70,32 @@ impl Store {
         value: &Value,
         except_key: &Value,
     ) -> bool {
-        self.tables.get(table).is_some_and(|rows| {
-            rows.iter()
-                .any(|(key, row)| key != except_key && row.columns.get(column) == Some(value))
-        })
+        self.keys_holding(table, column, value)
+            .any(|key| key != except_key)
+    }
+
+    /// Whether any row of `table` holds `value` in `column`.
+    pub(crate) fn any_row_holds(
+        &self,
+        table: &TableName,
+        column: &ColumnName,
+        value: &Value,
+    ) -> bool {
+        self.keys_holding(table, column, value).next().is_some()
+    }
+
+    fn keys_holding<'a>(
+        &'a self,
+        table: &TableName,
+        column: &'a ColumnName,
+        value: &'a Value,
+    ) -> impl Iterator<Item = &'a Value> {
+        self.tables
+            .get(table)
+            .into_iter()
+            .flatten()
+            .filter(move |(_, row)| row.columns.get(column) == Some(value))
+            .map(|(key, _)| key)
     }
 
     /// Writes `row` at `key` in `table`, overwriting whatever was there.

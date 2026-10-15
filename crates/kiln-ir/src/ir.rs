@@ -14,8 +14,8 @@
 //! binds the key-ordered rows a range matched, and [`Effect::Iterate`] runs a
 //! body once per row of a slot a range read bound, with the current row
 //! itself bound to a slot the body's own reads, writes, and projections can
-//! use (§2.1, "bounded iteration"). Constraint nodes (`docs/concept.md`
-//! §2.1) belong to a later slice and have no types here yet.
+//! use (§2.1, "bounded iteration"). Constraints are schema declarations
+//! only: no function body can state one (D1).
 
 use std::collections::BTreeMap;
 
@@ -99,10 +99,56 @@ pub struct UniqueConstraint {
     pub column: ColumnName,
 }
 
-/// A table declaration: its name and the columns rows in it may carry.
+/// A foreign key (D1): every row of `table` that holds a value in `column`
+/// must, in a transaction's final state, name the key of a row of
+/// `references`, and a row of `references` may not be deleted while such a
+/// row still names its key (D2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignKey {
+    pub table: TableName,
+    pub column: ColumnName,
+    pub references: TableName,
+}
+
+/// How a check constraint compares a row's column with its operand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Comparison {
+    AtLeast,
+    AtMost,
+}
+
+impl Comparison {
+    fn holds(self, value: &Value, operand: &Value) -> bool {
+        match self {
+            Comparison::AtLeast => value >= operand,
+            Comparison::AtMost => value <= operand,
+        }
+    }
+}
+
+/// A check constraint (D1): in a transaction's final state, every row of
+/// `table` that holds a value in `column` must satisfy `comparison` against
+/// `operand`. It judges one row at a time, so it reads nothing but the row.
 ///
-/// Foreign keys and check constraints (D1's full schema shape) are a later
-/// slice's work.
+/// Distinct from a [`ClampDomain`]: a violated check aborts the call, where
+/// a clamp bounds every write's own value and never aborts (D3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckConstraint {
+    pub table: TableName,
+    pub column: ColumnName,
+    pub comparison: Comparison,
+    pub operand: Value,
+}
+
+impl CheckConstraint {
+    /// Whether a row holding `value` in the constrained column satisfies the
+    /// check.
+    pub fn accepts(&self, value: &Value) -> bool {
+        self.comparison.holds(value, &self.operand)
+    }
+}
+
+/// A table declaration: its name and the columns rows in it may carry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Table {
     pub name: TableName,
@@ -114,6 +160,8 @@ pub struct Table {
 pub struct Schema {
     pub tables: Vec<Table>,
     pub unique_constraints: Vec<UniqueConstraint>,
+    pub foreign_keys: Vec<ForeignKey>,
+    pub check_constraints: Vec<CheckConstraint>,
 }
 
 impl Schema {
@@ -136,6 +184,10 @@ impl Schema {
             })
     }
 
+    fn has_table(&self, table: &TableName) -> bool {
+        self.tables.iter().any(|candidate| &candidate.name == table)
+    }
+
     /// Rejects a schema whose own declarations cannot jointly hold: a
     /// column's clamping domain, when it declares one, must have `min <=
     /// max` and must lie inside that same column's declared width — a
@@ -143,7 +195,8 @@ impl Schema {
     /// value the width itself forbids, silently defeating D3's width check
     /// (`docs/concept.md` §2.2, D3). `run` calls this before executing any
     /// call, so a schema this rejects never reaches the evaluator at all.
-    /// A unique constraint must likewise name a declared table and column.
+    /// A unique constraint, foreign key or check constraint must likewise
+    /// name declared tables and columns.
     pub fn validate(&self) -> Result<(), SchemaError> {
         for table in &self.tables {
             for column in &table.columns {
@@ -159,6 +212,21 @@ impl Schema {
         for constraint in &self.unique_constraints {
             if self.column(&constraint.table, &constraint.column).is_none() {
                 return Err(SchemaError::UnknownUniqueTarget(constraint.clone()));
+            }
+        }
+        for foreign_key in &self.foreign_keys {
+            let parent_declared = self.has_table(&foreign_key.references);
+            if !parent_declared
+                || self
+                    .column(&foreign_key.table, &foreign_key.column)
+                    .is_none()
+            {
+                return Err(SchemaError::UnknownForeignKeyTarget(foreign_key.clone()));
+            }
+        }
+        for constraint in &self.check_constraints {
+            if self.column(&constraint.table, &constraint.column).is_none() {
+                return Err(SchemaError::UnknownCheckTarget(constraint.clone()));
             }
         }
         Ok(())
@@ -207,6 +275,11 @@ pub enum SchemaError {
     },
     /// A unique constraint names a table or column the schema does not declare.
     UnknownUniqueTarget(UniqueConstraint),
+    /// A foreign key names a table or column, or references a table, the
+    /// schema does not declare.
+    UnknownForeignKeyTarget(ForeignKey),
+    /// A check constraint names a table or column the schema does not declare.
+    UnknownCheckTarget(CheckConstraint),
 }
 
 /// A position in a function's body that a later [`Condition`] or [`Expr`]
