@@ -1,8 +1,0 @@
-claim_id = "dac05a383cba4451a73024aebf2de5e4"
-agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
-role = "builder"
-base = "2f86e6a9928a987ce132167cd3349ad665cc5563"
-branch = "claude/issue-52-e1-classifier"
-scope = ["crates/kiln-e1", "specs/kiln-e1.spec.md"]
-opened_commit = "6c5e67720ed58c801f42848cc07bc9d164acf2bf"
-whole_reason = "one crate's classifier module and its criteria"
