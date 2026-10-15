@@ -79,9 +79,15 @@ pub enum AbortReason {
     ArgumentTypeMismatch {
         parameter: ParameterName,
     },
-    /// The call supplied no argument at the position `parameter` declares.
+    /// The call supplied no argument for `parameter`, whether or not the
+    /// body references it.
     MissingArgument {
         parameter: ParameterName,
+    },
+    /// The call supplied more arguments than the function declares
+    /// parameters; `position` is the first surplus argument.
+    UnexpectedArgument {
+        position: usize,
     },
     /// A projection has no single current row to read from: the slot it
     /// names was bound by a point read that found no row, or by a range
@@ -207,10 +213,13 @@ impl Binding {
 /// anything if that schema is not internally satisfiable (D3,
 /// [`Schema::validate`](crate::ir::Schema::validate)).
 ///
-/// Panics if `call` names a function `program` does not declare, or if that
-/// function's body refers to a parameter it did not declare or a
-/// [`Slot`] no read in scope has bound — `Program` and `Call` are the
-/// compiler's trusted output, not raw input this boundary validates.
+/// Panics, as out of scope for this boundary, on a static program fault:
+/// a `call` naming a function `program` does not declare, a body referring to
+/// a parameter its function did not declare, or an `Iterate` whose source
+/// slot is unbound or was bound by a point read — `Program` and `Call` are
+/// the compiler's trusted output, not raw input this boundary validates.
+/// Whether a slot holds a row is data, never a fault: an unbound slot reads
+/// as absent.
 pub fn run(program: &Program, call: &Call, store: &Store) -> Result<Execution, SchemaError> {
     program.schema.validate()?;
 
@@ -221,7 +230,7 @@ pub fn run(program: &Program, call: &Call, store: &Store) -> Result<Execution, S
         args: &call.args,
     };
 
-    if let Some(reason) = check_argument_types(function, &call.args) {
+    if let Some(reason) = check_arguments(function, &call.args) {
         return Ok(Execution {
             store: store.clone(),
             outcome: Outcome::Aborted { reason },
@@ -253,7 +262,7 @@ pub fn run(program: &Program, call: &Call, store: &Store) -> Result<Execution, S
     })
 }
 
-/// Checks every argument in `args` against the declared type of the
+/// Checks the arguments in `args` against the declared type of the
 /// parameter at the same position, exactly as a write checks its value
 /// against its target column's declared width (D3, `docs/concept.md` §2.2:
 /// "the column's or argument's declared width"). Returns the typed abort
@@ -264,12 +273,22 @@ pub fn run(program: &Program, call: &Call, store: &Store) -> Result<Execution, S
 /// wrong-kind argument always aborts — unlike a column, which may clamp an
 /// out-of-width write instead.
 ///
-/// An `args` shorter than `function.parameters` is not checked here: `zip`
-/// simply stops at the shorter side, and a later position's own
-/// [`Expr::Parameter`](crate::ir::Expr::Parameter) reference reports the typed
-/// [`AbortReason::MissingArgument`] once the body actually resolves it.
-fn check_argument_types(function: &crate::ir::Function, args: &[Value]) -> Option<AbortReason> {
+/// The argument count must equal the parameter count, referenced or not:
+/// a missing argument aborts with [`AbortReason::MissingArgument`], an extra
+/// one with [`AbortReason::UnexpectedArgument`].
+fn check_arguments(function: &crate::ir::Function, args: &[Value]) -> Option<AbortReason> {
     use crate::ir::ParameterType;
+
+    if let Some(missing) = function.parameters.get(args.len()) {
+        return Some(AbortReason::MissingArgument {
+            parameter: missing.name.clone(),
+        });
+    }
+    if args.len() > function.parameters.len() {
+        return Some(AbortReason::UnexpectedArgument {
+            position: function.parameters.len(),
+        });
+    }
 
     for (parameter, arg) in function.parameters.iter().zip(args) {
         match (parameter.kind, arg) {

@@ -177,7 +177,7 @@ fn apply_read_range(
         columns: AccessedColumns::EntireRow,
     });
     let rows = store.rows_in_range(range.table, &start, &end);
-    if rows.len() as i64 > bound {
+    if usize::try_from(bound).map_or(true, |bound| rows.len() > bound) {
         return Some(Outcome::Aborted {
             reason: AbortReason::BoundExceeded {
                 table: range.table.clone(),
@@ -197,7 +197,8 @@ fn apply_read_range(
 ///
 /// `source` must already be bound by an [`Effect::ReadRange`] in the same
 /// body: that read already resolved and bound-checked its range, so
-/// `Iterate` re-reads nothing and checks no bound of its own. Panics if
+/// `Iterate` re-reads nothing and checks no bound of its own. When the loop
+/// ends, the row slot and every slot the body bound read as absent. Panics if
 /// `source` is unbound or was bound by a point read instead — a contract
 /// violation by whatever built the effect, not a semantic outcome `run`
 /// reports.
@@ -225,7 +226,24 @@ fn apply_iterate(
             }
         }
     }
+    release_iteration_slots(row, body, bindings);
     None
+}
+
+/// Rebinds `row` and every slot `body` bound to an absent row, so nothing an
+/// iteration read outlives it: after the loop a projection or branch on
+/// those slots sees an absence, whether the range held rows or not.
+fn release_iteration_slots(row: Slot, body: &[Effect], bindings: &mut HashMap<Slot, Binding>) {
+    bindings.insert(row, Binding::Row(None));
+    for effect in body {
+        match effect {
+            Effect::Read { into, .. } | Effect::ReadRange { into, .. } => {
+                bindings.insert(*into, Binding::Row(None));
+            }
+            Effect::Iterate { row, body, .. } => release_iteration_slots(*row, body, bindings),
+            Effect::Insert { .. } | Effect::Update { .. } | Effect::Delete { .. } => {}
+        }
+    }
 }
 
 /// Inserts a new row, aborting with `DuplicateKey` if one already exists at
@@ -403,12 +421,9 @@ fn execute_terminal(
             when_absent,
         } => {
             let present = match condition {
-                crate::ir::Condition::RowPresent(slot) => bindings
-                    .get(slot)
-                    .unwrap_or_else(|| {
-                        panic!("branch condition reads slot {slot:?} before any read bound it")
-                    })
-                    .is_present(),
+                crate::ir::Condition::RowPresent(slot) => {
+                    bindings.get(slot).is_some_and(Binding::is_present)
+                }
             };
             let block = if present { when_present } else { when_absent };
             execute_block(block, ctx, store, bindings, access_log)

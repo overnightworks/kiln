@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::identifiers::{ColumnName, ParameterName};
+use crate::identifiers::ColumnName;
 use crate::ir::{ArithmeticOp, ClampDomain, Column, Expr, IntegerWidth, Slot, Value};
 
 use super::{AbortReason, Binding, CallContext, OverflowReason};
@@ -13,7 +13,7 @@ use super::{AbortReason, Binding, CallContext, OverflowReason};
 /// Why [`resolve`] could not produce a value for an expression: `i64`
 /// arithmetic overflowed before any column or argument was reached (D3), an
 /// operand resolved to a value of the wrong kind for the context that
-/// needed it, or a parameter or projection expression could not find the
+/// needed it, or a projection expression could not find the
 /// value it names in the data this call actually ran against. Every variant
 /// maps to a typed [`AbortReason`] through
 /// [`resolve_or_abort`](super::effects::resolve_or_abort) or
@@ -22,7 +22,6 @@ use super::{AbortReason, Binding, CallContext, OverflowReason};
 pub(super) enum ResolveError {
     Overflow(OverflowReason),
     NonIntegerOperand,
-    MissingArgument { parameter: ParameterName },
     ProjectionSourceAbsent { slot: Slot },
     MissingColumn { slot: Slot, column: ColumnName },
 }
@@ -32,9 +31,6 @@ impl From<ResolveError> for AbortReason {
         match error {
             ResolveError::Overflow(reason) => AbortReason::Overflow(reason),
             ResolveError::NonIntegerOperand => AbortReason::NonIntegerOperand,
-            ResolveError::MissingArgument { parameter } => {
-                AbortReason::MissingArgument { parameter }
-            }
             ResolveError::ProjectionSourceAbsent { slot } => {
                 AbortReason::ProjectionSourceAbsent { slot }
             }
@@ -46,7 +42,7 @@ impl From<ResolveError> for AbortReason {
 }
 
 /// Resolves an expression to a concrete value: a constant, the argument
-/// bound to a declared parameter, a column projected from an earlier read's
+/// bound to a declared parameter (its arity was checked before the call ran), a column projected from an earlier read's
 /// row, or an arithmetic operation over two such values.
 ///
 /// Arithmetic here is checked at `i64`'s own width and returns
@@ -56,10 +52,11 @@ impl From<ResolveError> for AbortReason {
 /// the same way before [`resolve_for_write`] ever judges the expression's
 /// one final value against its target column (D3).
 ///
-/// Panics if `expr` refers to a parameter `ctx.parameters` does not
-/// declare, or a [`Slot`] no read in scope has bound — a contract violation
-/// by whatever built the expression, not a semantic outcome this evaluator
-/// reports.
+/// A [`Slot`] no read has bound (or that an iteration released) resolves as
+/// an absent projection source, since whether a read ran is a fact about the
+/// data. Panics if `expr` refers to a parameter `ctx.parameters` does not
+/// declare — a contract violation by whatever built the expression, not a
+/// semantic outcome this evaluator reports.
 pub(super) fn resolve(
     expr: &Expr,
     ctx: &CallContext,
@@ -73,22 +70,11 @@ pub(super) fn resolve(
                 .iter()
                 .position(|parameter| &parameter.name == name)
                 .unwrap_or_else(|| panic!("function has no declared parameter named {name:?}"));
-            ctx.args
-                .get(index)
-                .cloned()
-                .ok_or_else(|| ResolveError::MissingArgument {
-                    parameter: name.clone(),
-                })
+            Ok(ctx.args[index].clone())
         }
         Expr::Projection { slot, column } => {
-            let binding = bindings.get(slot).unwrap_or_else(|| {
-                panic!("projection reads slot {slot:?} before any read bound it")
-            });
-            let row = match binding {
-                Binding::Row(Some(row)) => row,
-                Binding::Row(None) | Binding::Range(_) => {
-                    return Err(ResolveError::ProjectionSourceAbsent { slot: *slot });
-                }
+            let Some(Binding::Row(Some(row))) = bindings.get(slot) else {
+                return Err(ResolveError::ProjectionSourceAbsent { slot: *slot });
             };
             row.columns
                 .get(column)
