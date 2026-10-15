@@ -4,8 +4,8 @@ Verification layer 1 of `docs/verification.md` (design proofs, checked with
 TLC). Slice 1 (issue #16, cut from #6) built resources, admission and
 typed reservations in one composed state space; #24 added escrow
 admission by aggregate budget after slice 1 found a wait cycle among
-escrow draws. Crash, recovery and publication, and liveness under stated
-fairness, are later slices of #6.
+escrow draws. Liveness under stated weak fairness is #38. Crash, recovery and
+publication are later slices of #6.
 
 ## Tool
 
@@ -201,56 +201,97 @@ present), `BalanceNonNegative`, `TypeOK`, and TLC's deadlock check (a state
 with a live transaction and no enabled step; `Terminating` self-loops once
 every transaction has ended).
 
-**Liveness, deferred.** The model has no fairness condition: `Spec` is
-`Init /\ [][Next]_Vars`, so TLC checks safety and deadlock freedom only.
-The assumption §9.5 needs is weak fairness of dispatch, admission,
-execution and completion for every transaction — no enabled step of a
-live transaction stays enabled forever without being taken — with
-finite programs. Under it every holder resolves, so every queued
-transaction's blockers (holders, and older queued transactions, finitely
-many and never bypassed) resolve in turn; stating this as
-`Requested(t) ~> Terminal(t)` and checking it, with a `NoBypass` mutant
-whose refutation is a liveness violation, is #6's liveness slice.
+**Liveness under weak fairness (#38).** `Spec` is `Init /\ [][Next]_Vars /\
+Fairness` with
+
+```
+Fairness == \A t \in Txns : WF_Vars(Acquire(t)) /\ WF_Vars(DoOp(t)) /\ WF_Vars(Commit(t))
+```
+
+A step of a transaction that stays enabled is eventually taken: admission,
+execution, completion. Dispatch is the caller's request, not a step the
+protocol owes, so it is not fair. Every scenario with a program of finite
+length is checked against
+
+```
+RequestedLeadsToTerminal == \A t \in Txns : Queued(t) ~> ~Live(t)
+```
+
+a request, once dispatched, ends committed or rejected (a justified
+rejection is an end: fairness cannot manufacture missing funds). It holds
+on every scenario below. On finite programs that run once, though, it holds
+for any deadlock-free protocol, bypass included: every transaction ends once
+nothing blocks the last one. So the `Starvation` scenario closes the cycle:
+`RepeatSpec` adds `Rearrive`, by which a finished transaction requests its
+program again, so a transaction that is overtaken forever is a lasso. Its
+history is unbounded, and `Rearrive` resets the transaction histories
+that `Serializable` and `Uniqueness` read (`Serializable` compares a
+history with `InitDb`, `Uniqueness` counts the retained committed
+insert and delete responses), so these history-based checks do not suit
+repeated executions and `Starvation` checks neither. Rearrival leaves a
+transaction pending and undispatched; only the next `Dispatch` queues it
+and starts the `RequestedLeadsToTerminal` obligation. The `NoBypass` mutant drops `OlderQueued` from
+`WaitsOn` (rule 3) and TLC returns the lasso: t3 is admitted, commits and
+requests again, over and over, while t1, queued before each of t3's
+requests, is admitted in no state of the loop.
+
+Queued sequence numbers are dense (1..n): `Acquire` closes the gap it
+leaves, so the numbers stay bounded when requests repeat. This changed the
+encoding, not the behaviour, of every earlier scenario; their state counts
+below are from the rerun.
 
 **Bounds.** 2-3 transactions with programs of 1-2 operations, 1-3 keys,
-fixed programs per scenario. The footprint is acquired as one step; the
+fixed programs per scenario; `Starvation` repeats its three single-operation programs without bound. The footprint is acquired as one step; the
 canonical order in which an implementation acquires it piecewise, and §4's
 restart of a class-4 call whose covering resource must widen
 mid-execution, are not modelled. Not covered: longer programs, more than
-one table, crash and recovery, any liveness.
+one table, crash and recovery. Liveness is checked only for the
+fair steps above, on scenarios of 2-3 transactions; it makes no claim
+beyond those bounds.
 
 ## Scenarios and results
 
 For every scenario TLC explores the whole state space against every
-property above and the deadlock check; every scenario passes with no
-violation and no deadlock, each run in under one second with 4 workers.
+invariant its configuration lists and the deadlock check; every scenario
+passes with no violation and no deadlock, with 4 workers. Each scenario
+also passes `RequestedLeadsToTerminal` under `Fairness`. `Starvation`
+(under `RepeatSpec`) checks `TypeOK`, `MutualExclusion`,
+`FootprintCovers`, `ReservationsFunded`, `DrawsWithinReservation`,
+`NoWaitCycle`, `ReferentialIntegrity`, `BalanceNonNegative` and
+`RequestedLeadsToTerminal`; it is exempt from `Serializable` and
+`Uniqueness` because `Rearrive` resets the histories they read. Every
+other scenario checks `Serializable` and `Uniqueness` too.
 Depth is the length of the longest shortest path (breadth-first).
 
 | Scenario | What runs | Distinct states | Depth | Log |
 |---|---|---|---|---|
-| `Composed` | t1: `Buy(1,1)`, `Insert(2,3)`; t2: `Buy(1,1)`, `Delete(3)`; t3: `Scan(1,3)` (table) — claim, pin, delete, two draws on key 1 (quota 2) and a table scan in one key space; the pin on 3 conflicts with its delete and the scan with everything, so the three serialize: insert first rejects the delete with `referenced`, delete first the insert with `noparent`, and a draw from a later-rejected transaction leaves no effect | 129 | 14 | `Composed.tlc.log` |
-| `Pins` | t1: `Delete(1)`, `Scan(1,3)` (table); t2: `Insert(2,1)`; t3: `Insert(3,1)` — two pins on parent 1 coexist against its delete, two claims meet the table scan | 136 | 12 | `Pins.tlc.log` |
-| `RangePoint` | t1: `Scan(1,2)`; t2: `Read(2)`, `Buy(3,1)`; t3: `Update(2,1,0)` — a range scan and a point read coexist against an update; the draw on 3 lies outside the range | 177 | 14 | `RangePoint.tlc.log` |
+| `Composed` | t1: `Buy(1,1)`, `Insert(2,3)`; t2: `Buy(1,1)`, `Delete(3)`; t3: `Scan(1,3)` (table) — claim, pin, delete, two draws on key 1 (quota 2) and a table scan in one key space; the pin on 3 conflicts with its delete and the scan with everything, so the three serialize: insert first rejects the delete with `referenced`, delete first the insert with `noparent`, and a draw from a later-rejected transaction leaves no effect | 127 | 14 | `Composed.tlc.log` |
+| `Pins` | t1: `Delete(1)`, `Scan(1,3)` (table); t2: `Insert(2,1)`; t3: `Insert(3,1)` — two pins on parent 1 coexist against its delete, two claims meet the table scan | 110 | 12 | `Pins.tlc.log` |
+| `RangePoint` | t1: `Scan(1,2)`; t2: `Read(2)`, `Buy(3,1)`; t3: `Update(2,1,0)` — a range scan and a point read coexist against an update; the draw on 3 lies outside the range | 138 | 14 | `RangePoint.tlc.log` |
 | `Phantom` | t1: `Scan(2,3)` twice; t2: `Insert(2,0)` — round-1 phantom | 26 | 10 | `Phantom.tlc.log` |
-| `EventClose` | t1: `Update(1,10,0)` on the event row (sold 10, quota 1); t2, t3: `Buy(1,1)` — the second draw's reservation waits on the first's, the update waits on both | 107 | 12 | `EventClose.tlc.log` |
-| `ClaimAbort` | t1: `Insert(2,0)`, `Buy(3,1)` against an empty escrow; t2, t3: `Insert(2,0)` — tentative claim whose holder is rejected while claimants wait | 101 | 12 | `ClaimAbort.tlc.log` |
+| `EventClose` | t1: `Update(1,10,0)` on the event row (sold 10, quota 1); t2, t3: `Buy(1,1)` — the second draw's reservation waits on the first's, the update waits on both | 101 | 12 | `EventClose.tlc.log` |
+| `ClaimAbort` | t1: `Insert(2,0)`, `Buy(3,1)` against an empty escrow; t2, t3: `Insert(2,0)` — tentative claim whose holder is rejected while claimants wait | 99 | 12 | `ClaimAbort.tlc.log` |
 | `ParentDelete` | t1: `Delete(1)`; t2: `Insert(2,1)` — parent delete concurrent with child insert | 21 | 8 | `ParentDelete.tlc.log` |
 | `OutOfOrder` | t1: `Buy(1,1)`, `Insert(2,0)`; t2: `Insert(2,0)`, `Buy(1,1)` — the programs touch keys 1 and 2 in opposite orders (quota 1); the claims conflict at dispatch and the second draw is rejected with `insufficient` | 25 | 9 | `OutOfOrder.tlc.log` |
 | `FootprintGap` | t1: `Insert(3,1)`, `Update(2,0,0)`; t2: `Update(2,1,0)`, `Delete(3)` — in order by lowest key per operation (1, 2; 2, 3), out of order over the footprint; the `X` locks on 2 conflict at dispatch | 29 | 11 | `FootprintGap.tlc.log` |
-| `ScanUpgrade` | t1: `Scan(1,2)`, `Update(1,0,0)`; t2: `Scan(1,2)`, `Update(2,0,0)` — each needs `X` on a key its own scan covers; range and `X` lock are taken together, and each `X` lock conflicts with the other's range | 29 | 11 | `ScanUpgrade.tlc.log` |
+| `ScanUpgrade` | t1: `Scan(1,2)`, `Update(1,0,0)`; t2: `Scan(1,2)`, `Update(2,0,0)` — each needs `X` on a key its own scan covers; range and `X` lock are taken together, and each `X` lock conflicts with the other's range | 28 | 11 | `ScanUpgrade.tlc.log` |
 | `DeleteReinsert` | rows 1 and 2 present, no parents; t1: `Delete(2)`, `Insert(2,1)`; t2: `Delete(1)`, `Update(2,0,0)` — the reinsert makes 1 a possible parent of 2, so t1's footprint pins 1; `DEL 1` against `PIN 1` and `DEL 2` against `X 2` conflict at dispatch | 26 | 10 | `DeleteReinsert.tlc.log` |
 | `AllowanceCycle` | t1, t2: `Buy(1,1)`, `Buy(1,1)` against quota 2 — slice 1's documented failure (each second draw waited on the other's tentative draw): now each reserves 2 at admission, the second is admitted once the first has resolved, capped at the remaining 0, and fails its first draw on committed state | 25 | 9 | `AllowanceCycle.tlc.log` |
 | `BranchBudget` | t1: `BuyUnder(1,1,1)` twice against quota 2 (the second branch is never taken, the budget is 2); t2: `Buy(1,1)` — the untaken branch keeps the balance reserved until t1 commits; t2 then takes the ticket it left | 26 | 10 | `BranchBudget.tlc.log` |
 | `ConcurrentBranch` | quota 2; t1, t2: `BuyUnder(1,1,1)` once each — both reservations are funded, but the branch reads the sold count, so the `S` lock orders them: one draws, the other skips | 23 | 9 | `ConcurrentBranch.tlc.log` |
 | `Unfundable` | t1: `Buy(1,2)`, `Buy(1,1)` (budget 3) against quota 2; t2: `Buy(1,1)` — t1's reservation is capped at the balance and admitted only with no other reservation live; it draws its reservation and fails the rest with `insufficient` on committed state | 22 | 9 | `Unfundable.tlc.log` |
-| `TwoEscrows` | keys 1 and 2 with quota 1 each; t1: `Buy(1,1)`, `Buy(2,1)`; t2: `Buy(2,1)`; t3: `Buy(1,1)` — admission is all-or-nothing across escrows: t1 waits on both holders reserving nothing, then is capped at 0 on both | 154 | 13 | `TwoEscrows.tlc.log` |
+| `TwoEscrows` | keys 1 and 2 with quota 1 each; t1: `Buy(1,1)`, `Buy(2,1)`; t2: `Buy(2,1)`; t3: `Buy(1,1)` — admission is all-or-nothing across escrows: t1 waits on both holders reserving nothing, then is capped at 0 on both | 113 | 13 | `TwoEscrows.tlc.log` |
 | `HolderAbort` | key 2 present; t1: `Buy(1,1)`, `Insert(2,0)` (rejected with `exists`, releasing its reservation); t2: `Buy(1,1)` twice against quota 2 — t2 waits instead of reserving the remainder and failing on it; after t1's rejection it reserves 2 and commits both draws | 25 | 10 | `HolderAbort.tlc.log` |
 | `MixedModes` | quota 1; t1: `Update(1,0,2)`, `Buy(1,1)`; t2: `Buy(1,1)`, `Update(1,5,0)` — `X` and `DRAW` on one key in each footprint; the `X` locks serialize them; after t2 commits, t1 is capped at 0 and draws from the balance its own update raised | 29 | 11 | `MixedModes.tlc.log` |
-| `UnknownBudget` | quota 2, row 2 with `val` 1; t1: `BuyVal(1,2)`; t2: `Buy(1,1)`; t3: `Update(2,3,0)` — an unknown budget reserves the whole balance; the draw amount t3 raises fails on committed state | 165 | 13 | `UnknownBudget.tlc.log` |
+| `UnknownBudget` | quota 2, row 2 with `val` 1; t1: `BuyVal(1,2)`; t2: `Buy(1,1)`; t3: `Update(2,3,0)` — an unknown budget reserves the whole balance; the draw amount t3 raises fails on committed state | 112 | 13 | `UnknownBudget.tlc.log` |
+| `Starvation` | t1, t2, t3: `Update(1,0,0)` each, requested again after finishing (`RepeatSpec`, no `Serializable`) — three transactions contend for one `X` lock forever; dispatch order keeps every request from being overtaken | 98 | 13 | `Starvation.tlc.log` |
 
 **Reachability witnesses.** Each scenario names negated state predicates
 (`*Unreached`); TLC's counterexample is the proof that the scenario's
 decisive state is reachable. Logs: `<Scenario>.witness.<Predicate>.tlc.log`.
+Witnesses and mutants run with one worker and a fixed fingerprint
+function, so their traces reproduce; trace lengths are the number of
+states in the committed log.
 Two witnesses (`ComposedPinDeleteUnreached`, `PinsTableUnreached`) once
 asserted that two queued transactions each wait *only* on the holder;
 under rule 3 the later-dispatched one also waits on the earlier, so they
@@ -280,6 +321,7 @@ assert membership.
 | `HolderAbortReleasedUnreached` | t1 was rejected with `ok, exists`; t2, which waited on it, holds the whole balance | 7 |
 | `MixedModesRaisedUnreached` | t1 drew one against a reservation of 0 under its X lock | 10 |
 | `UnknownBudgetUnboundedUnreached` | t1 holds the whole balance under an unknown budget; t2 waits on it | 4 |
+| `StarvationQueuedBehindUnreached` | t1 holds the key; t2 and t3 are queued behind it, t2 first | 5 |
 | `UnknownBudgetInsufficientUnreached` | after t3 raised the amount to 3, t1's draw failed on the committed balance 2 | 8 |
 
 ## Mutants (specs/kernel/mutants/)
@@ -287,6 +329,8 @@ assert membership.
 Each mutant is a patch against `Kernel.tla` that removes one named guard;
 `run.sh` applies it to a temporary copy and checks exactly one property.
 TLC refutes every one; the log is `<Mutant>.<Scenario>.<Property>.tlc.log`.
+`run.sh` uses one worker and a fixed fingerprint function; the trace
+lengths below are the states of the committed logs.
 
 | Mutant (guard removed) | Scenario | Property refuted | Trace length |
 |---|---|---|---|
@@ -312,6 +356,7 @@ TLC refutes every one; the log is `<Mutant>.<Scenario>.<Property>.tlc.log`.
 | `DrawIgnoresReservation` — admission accounts what other holders have drawn, not what they reserved | `AllowanceCycle` | `ReservationsFunded` (both admitted with 2 on a balance of 2) | 5 |
 | `DrawIgnoresReservation` | `AllowanceCycle` | `BalanceNonNegative` (quota −2) | 11 |
 | `BudgetUndercounts` — the budget is the largest single draw, not the total | `AllowanceCycle` | `Serializable` (t1 reserves 1 and is told `insufficient` on its second draw; no serial order rejects t1) | 5 |
+| `NoBypass` — a later request may overtake an older queued request on a shared resource (`OlderQueued` dropped from `WaitsOn`) | `Starvation` | `RequestedLeadsToTerminal` (liveness: a lasso in which t3 is admitted, commits and requests again forever while t1, queued first, is never admitted) | 8, loop back to 4 |
 
 `TypeOK` has no mutant: it is a typing check with no protocol content.
 

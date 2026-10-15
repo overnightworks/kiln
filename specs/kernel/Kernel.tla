@@ -323,10 +323,12 @@ WaitsOn(t) ==
 Changed(t, v) == {k \in Keys : v[k] # View(t)[k]}
 
 (* Dispatch: the request enters the admission queue with the next
-   sequence number. *)
+   sequence number. Queued sequence numbers are dense (1..n): admission
+   closes the gap it leaves, so the numbers stay bounded when requests
+   repeat. *)
 Dispatch(t) ==
   /\ Pending(t) /\ seq[t] = 0
-  /\ seq' = [seq EXCEPT ![t] = 1 + Cardinality({u \in Txns : seq[u] > 0})]
+  /\ seq' = [seq EXCEPT ![t] = 1 + Cardinality({u \in Txns : Queued(u)})]
   /\ UNCHANGED <<status, pc, held, reserved, wr, draws, resp, db>>
 
 (* Acquire the complete footprint in one step, atomically with the
@@ -343,7 +345,9 @@ Acquire(t) ==
   /\ held' = [held EXCEPT ![t] = Footprint(t)]
   /\ reserved' = [reserved EXCEPT ![t] =
                    [k \in Keys |-> IF k \in EscrowKeys(t) THEN Reservation(t, k) ELSE 0]]
-  /\ UNCHANGED <<seq, pc, wr, draws, resp, db>>
+  /\ seq' = [u \in Txns |->
+             IF u = t THEN 0 ELSE IF Queued(u) /\ seq[u] > seq[t] THEN seq[u] - 1 ELSE seq[u]]
+  /\ UNCHANGED <<pc, wr, draws, resp, db>>
 
 (* Execute the next operation on the view under the footprint already
    held; it acquires nothing and waits for nothing. A constraint rejection
@@ -400,7 +404,30 @@ Next ==
   \/ \E t \in Txns : Dispatch(t) \/ Acquire(t) \/ DoOp(t) \/ Commit(t)
   \/ Terminating
 
-Spec == Init /\ [][Next]_Vars
+(* Rearrival: a finished transaction requests its program again, from
+   a clean slate; the committed rows stay. Only the repeated-arrival
+   scenarios (`RepeatSpec`) take this step: the cycle it closes is what
+   lets a lasso starve a request. The step only makes the transaction
+   pending again; the request starts with the next `Dispatch`.
+   Rearrival resets the transaction histories, which `Serializable` and
+   `Uniqueness` read, so those history-based checks do not apply to
+   repeated executions and those scenarios do not check them. *)
+Rearrive(t) ==
+  /\ ~Live(t)
+  /\ status' = [status EXCEPT ![t] = "pending"]
+  /\ pc' = [pc EXCEPT ![t] = 0]
+  /\ resp' = [resp EXCEPT ![t] = <<>>]
+  /\ UNCHANGED <<seq, held, reserved, wr, draws, db>>
+
+(* Weak fairness (concept §9.5): a step of a transaction that stays
+   enabled is taken - admission, execution, completion. Dispatch is the
+   caller's request, not a step the protocol owes. *)
+Fairness ==
+  \A t \in Txns : WF_Vars(Acquire(t)) /\ WF_Vars(DoOp(t)) /\ WF_Vars(Commit(t))
+
+Spec == Init /\ [][Next]_Vars /\ Fairness
+
+RepeatSpec == Init /\ [][Next \/ \E t \in Txns : Rearrive(t)]_Vars /\ Fairness
 
 ----------------------------------------------------------------------------
 TypeOK ==
@@ -473,5 +500,11 @@ ReferentialIntegrity ==
   \A k \in Keys : db[k].present /\ db[k].parent # 0 => db[db[k].parent].present
 
 BalanceNonNegative == \A k \in Keys : db[k].bal >= 0
+
+(* Liveness (concept §9.5): every request ends, committed or rejected,
+   under the fairness of `Spec`. After a `Rearrive` the transaction is
+   pending and undispatched; the obligation starts with the later
+   `Dispatch`, so a repeated request is a new request. *)
+RequestedLeadsToTerminal == \A t \in Txns : Queued(t) ~> ~Live(t)
 
 ============================================================================
