@@ -23,6 +23,7 @@ def enumeration_of(
 
 
 def site(source: str, needle: str, occurrence: int = 1, **fields) -> dict:
+    fields.setdefault("method", needle.rsplit(".", 1)[-1])
     return site_message(f"{ROOT}/{FILE}", source, needle, occurrence=occurrence, **fields)
 
 

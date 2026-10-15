@@ -14,6 +14,7 @@ from unit_records import OrmSite, SiteLocation, SourcePosition, Unit, UnitRule
 class Enumeration:
     units: list[Unit]
     receiver_evidence: list[OrmSite]
+    unmatched_markers: list[SiteLocation]
 
 
 def enumerate_units(
@@ -27,11 +28,13 @@ def enumerate_units(
         markers_by_file[marker.file].add(marker.position)
 
     units: list[Unit] = []
+    unmatched: list[SiteLocation] = []
     for file in sorted(sites_by_file.keys() | markers_by_file.keys()):
         scopes = _scopes_of(file, sources, frozenset(markers_by_file[file]))
         units.extend(_units_of_file(application, file, sites_by_file[file], scopes))
+        unmatched.extend(SiteLocation(file, position) for position in scopes.unmatched_markers)
     ordered_sites = sorted(report.sites, key=lambda site: site.location)
-    return Enumeration(sorted(units, key=lambda unit: unit.order_key), ordered_sites)
+    return Enumeration(sorted(units, key=lambda unit: unit.order_key), ordered_sites, unmatched)
 
 
 def _scopes_of(
@@ -46,8 +49,8 @@ def _units_of_file(
     application: str, file: str, sites: list[OrmSite], scopes: SourceScopes
 ) -> list[Unit]:
     for site in sites:
-        if site.location.position.line > scopes.line_count:
-            raise AnalyzerReportError(f"{file}: site at {site.location.position} is beyond the source text")
+        if not scopes.contains(site.location.position):
+            raise AnalyzerReportError(f"{file}: site at {site.location.position} is outside the source text")
     outermost = _outermost(scopes.transactions)
     absorbed: dict[TransactionBlock, list[SiteLocation]] = {block: [] for block in outermost}
     units: list[Unit] = []
@@ -77,6 +80,9 @@ def _transaction_unit(
 
 
 def _autocommit_unit(application: str, site: OrmSite, scopes: SourceScopes) -> Unit:
-    enclosing = scopes.function_at(site.location.position)
-    parameters = enclosing.parameters_at(site.location.position) if enclosing else ()
+    position = site.location.position
+    enclosing = scopes.function_at(position)
+    parameters = ()
+    if enclosing:
+        parameters = enclosing.feeding(position, scopes.names_in_call(position, site.method))
     return Unit(application, site.location, UnitRule.S3, parameters, (site.location,))

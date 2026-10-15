@@ -6,6 +6,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from file_selection import is_excluded_path
+
 MANIFEST_PATH = Path(__file__).resolve().parents[2] / "corpus-manifest.csv"
 DJANGO = "Django"
 SPLINTER_REPOSITORY = "https://github.com/umd-dslam/splinter-mypy"
@@ -89,6 +91,28 @@ def analyzer_install_commands(corpus: Path) -> tuple[Command, ...]:
         Command((str(pip), "install", "--quiet", "-r", str(checkout / "requirements.txt")), tools),
         Command((str(pip), "install", "--quiet", "--no-deps", "-e", str(checkout)), tools),
     )
+
+
+def verify_snapshot(row: ManifestRow, application_root: Path) -> None:
+    """The analyzer reads the filesystem, so the checkout must be exactly the manifest commit."""
+    head = _git_output(application_root, "rev-parse", "HEAD").strip()
+    if head != row.commit_sha_full:
+        raise CorpusError(f"{application_root} is at {head}, not the manifest commit {row.commit_sha_full}")
+    changed = _git_output(
+        application_root, "status", "--porcelain", "-z", "--no-renames", "--ignored", "--untracked-files=all"
+    )
+    strays = [
+        entry[3:] for entry in changed.split("\0")
+        if entry[3:].endswith(".py") and not is_excluded_path(entry[3:])
+    ]  # fmt: skip
+    if strays:
+        raise CorpusError(f"{application_root} differs from its commit in the selection: {sorted(strays)}")
+
+
+def _git_output(directory: Path, *arguments: str) -> str:
+    return subprocess.run(
+        ["git", *arguments], cwd=directory, check=True, capture_output=True, text=True
+    ).stdout
 
 
 def run_commands(commands: tuple[Command, ...]) -> None:

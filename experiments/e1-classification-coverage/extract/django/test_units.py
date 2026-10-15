@@ -1,6 +1,7 @@
 import unittest
 
-from unit_fixtures import FILE, marker, shape, site, units_of
+from unit_fixtures import FILE, enumeration_of, marker, shape, site, units_of
+from unit_records import SiteLocation, SourcePosition
 
 DECORATED = """\
 from django.db import transaction
@@ -83,24 +84,62 @@ class Views:
     def post(self, request, *args, flag=None, **kwargs):
         Order.objects.create()
         first = request.GET
+        unused = 5
         for item in first:
             pass
-        Order.objects.get(pk=first)
+        Order.objects.get(pk=first, who=request.user, flag=flag, other=GLOBAL)
         first = 2
-        return Order.objects.count()
+        later = Order.objects.filter(owner=self, item=item, again=later)
+        return later
 
     def get(self):
         def inner(z):
-            return Order.objects.first()
+            return Order.objects.first(z)
         return inner
 
 
-Order.objects.all()
+Order.objects.all(GLOBAL)
+"""
+
+FSTRING = """\
+def show(user, other):
+    print(f"{user.profile.count()} of {other}")
 """
 
 UNREPORTED = """\
 def get(self, request):
     return super(View, self).get(request)
+"""
+
+
+ALIASED = """\
+from django.db.transaction import atomic as tx
+
+
+@other
+@tx
+def aliased(a):
+    Order.objects.get(pk=a)
+
+
+@tx
+@other
+def stacked(b):
+    Order.objects.last(b)
+"""
+
+DECORATED_FIRST_STATEMENT = """\
+def run(a):
+    with transaction.atomic():
+        @decorate(Order.objects.get(pk=a))
+        def inner():
+            pass
+"""
+
+EXIT_STACK = """\
+def run(stack):
+    stack.enter_context(transaction.atomic())
+    Order.objects.get()
 """
 
 
@@ -126,6 +165,30 @@ class TransactionUnitTests(unittest.TestCase):
             ],
         )
 
+    def test_kiln_e1dj_04_aliased_and_stacked_decorators_are_matched_by_the_analyzers_report(self):
+        sites = [site(ALIASED, "Order.objects.get"), site(ALIASED, "Order.objects.last")]
+        markers = [
+            marker(ALIASED, "tx\ndef aliased", name="app.aliased"),
+            marker(ALIASED, "tx\n@other", name="app.stacked"),
+        ]
+        units = units_of(ALIASED, sites, markers)
+        self.assertEqual(
+            [shape(unit) for unit in units],
+            [("S2", 6, ("a",), (7,)), ("S2", 12, ("b",), (13,))],
+        )
+
+    def test_kiln_e1dj_05_decorator_of_the_first_statement_is_part_of_the_body(self):
+        sites = [site(DECORATED_FIRST_STATEMENT, "Order.objects.get")]
+        markers = [marker(DECORATED_FIRST_STATEMENT, "transaction.atomic")]
+        units = units_of(DECORATED_FIRST_STATEMENT, sites, markers)
+        self.assertEqual([shape(unit) for unit in units], [("S2", 2, ("a",), (3,))])
+
+    def test_kiln_e1dj_22_marker_that_is_no_decorator_or_with_opens_no_unit_and_is_recorded(self):
+        sites = [site(EXIT_STACK, "Order.objects.get")]
+        enumeration = enumeration_of(EXIT_STACK, sites, [marker(EXIT_STACK, "transaction.atomic")])
+        self.assertEqual([shape(unit) for unit in enumeration.units], [("S3", 3, (), (3,))])
+        self.assertEqual(enumeration.unmatched_markers, [SiteLocation(FILE, SourcePosition(2, 24))])
+
     def test_kiln_e1dj_05_with_block_is_one_s2_unit_of_the_enclosing_function(self):
         sites = [
             site(WITH_BLOCK, "Order.objects.get"),
@@ -138,10 +201,10 @@ class TransactionUnitTests(unittest.TestCase):
         self.assertEqual(
             [shape(unit) for unit in units],
             [
-                ("S3", 2, ("order_id", "amount"), (2,)),
+                ("S3", 2, ("order_id",), (2,)),
                 ("S2", 3, ("order_id", "amount"), (4, 5)),
-                ("S3", 3, ("order_id", "amount", "first"), (3,)),
-                ("S3", 6, ("order_id", "amount", "first"), (6,)),
+                ("S3", 3, (), (3,)),
+                ("S3", 6, ("first",), (6,)),
             ],
         )
 
@@ -212,26 +275,24 @@ class AutocommitUnitTests(unittest.TestCase):
             [unit.location.position.line for unit in units], [3, 4, 6, 8, 9]
         )
 
-    def test_kiln_e1dj_11_parameters_are_declared_ones_then_earlier_bound_names(self):
+    def test_kiln_e1dj_11_parameters_are_the_declared_and_earlier_bound_names_the_call_reads(self):
         needles = [
             "Order.objects.create",
             "Order.objects.get",
-            "Order.objects.count",
+            "Order.objects.filter",
             "Order.objects.first",
             "Order.objects.all",
         ]
         units = units_of(PARAMETERS, [site(PARAMETERS, needle) for needle in needles])
-        declared = ("self", "request", "args", "flag", "kwargs")
         self.assertEqual(
             [unit.parameters for unit in units],
-            [
-                declared,
-                declared + ("first", "item"),
-                declared + ("first", "item"),
-                ("z",),
-                (),
-            ],
+            [(), ("request", "flag", "first"), ("self", "item"), ("z",), ()],
         )
+
+    def test_kiln_e1dj_11_call_inside_an_fstring_is_read_where_the_analyzer_reports_it(self):
+        reported_at_the_fstring = site(FSTRING, 'f"{user', method="count")
+        (unit,) = units_of(FSTRING, [reported_at_the_fstring])
+        self.assertEqual(unit.parameters, ("user",))
 
     def test_kiln_e1dj_12_call_the_analyzer_does_not_report_yields_no_unit(self):
         self.assertEqual(units_of(UNREPORTED, []), [])

@@ -1,3 +1,4 @@
+import itertools
 import unittest
 
 from analyzer_command import frozen_analyzer_arguments
@@ -29,6 +30,8 @@ FROZEN_ARGUMENTS = (
     "--exclude", "**/conftest.py",
     "--output", "messages.json",
 )  # fmt: skip
+
+INVALID_POSITIONS = [(0, 0), (-1, 0), (2, -1), (2, 999), (2, 27), (99, 0)]  # line 2 is 27 bytes wide
 
 SELECTION_CASES = [
     ("app/views.py", False),
@@ -98,17 +101,17 @@ class SiteTests(unittest.TestCase):
         report = parse_analyzer_json(analyzer_json(inside, outside, sibling), ROOT)
         self.assertEqual([s.location.file for s in report.sites], ["app/views.py"])
 
-    def test_kiln_e1dj_13_marker_that_is_no_decorator_or_with_fails_loudly(self):
-        sites = [site(SOURCE, "Order.objects.get")]
-        markers = [marker(SOURCE, "Order.objects.create")]
-        with self.assertRaisesRegex(AnalyzerReportError, FILE):
-            units_of(SOURCE, sites, markers)
-
-    def test_kiln_e1dj_13_site_beyond_the_source_text_fails_loudly(self):
-        beyond = site(SOURCE, "Order.objects.get")
-        beyond["fromLine"] = 99
-        with self.assertRaisesRegex(AnalyzerReportError, FILE):
-            units_of(SOURCE, [beyond])
+    def test_kiln_e1dj_13_position_outside_the_source_text_fails_loudly(self):
+        reported = {
+            "site": lambda moved: units_of(SOURCE, [moved]),
+            "marker": lambda moved: units_of(SOURCE, [], [moved]),
+        }
+        originals = {"site": site(SOURCE, "Order.objects.get"), "marker": marker(SOURCE, "def view")}
+        for (line, column), kind in itertools.product(INVALID_POSITIONS, reported):
+            with self.subTest(kind=kind, line=line, column=column):
+                moved = {**originals[kind], "fromLine": line, "fromColumn": column}
+                with self.assertRaisesRegex(AnalyzerReportError, rf"{FILE}.*line={line}, column={column}"):
+                    reported[kind](moved)
 
     def test_kiln_e1dj_13_site_in_a_file_without_source_fails_loudly(self):
         report = parse_analyzer_json(

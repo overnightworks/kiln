@@ -14,6 +14,10 @@ def render_receiver_evidence(sites: Iterable[OrmSite]) -> str:
     return _lines(_evidence_json(site) for site in sites)
 
 
+def render_unmatched_markers(markers: Iterable[SiteLocation]) -> str:
+    return _lines(_location_json(marker) for marker in markers)
+
+
 def _lines(records: Iterable[dict[str, Any]]) -> str:
     return "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records)
 
