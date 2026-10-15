@@ -397,6 +397,27 @@ mod tests {
     }
 
     #[test]
+    fn the_pinned_toolchain_channel_is_read_from_rust_toolchain_toml() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"1.99.1\"\ncomponents = [\"rustfmt\"]\n",
+        )
+        .unwrap();
+
+        assert_eq!(pinned_toolchain_channel(dir.path()).unwrap(), "1.99.1");
+    }
+
+    #[test]
+    fn a_missing_toolchain_file_or_channel_line_is_an_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(pinned_toolchain_channel(dir.path()).is_err());
+
+        fs::write(dir.path().join("rust-toolchain.toml"), "[toolchain]\n").unwrap();
+        assert!(pinned_toolchain_channel(dir.path()).is_err());
+    }
+
+    #[test]
     fn report_fails_closed_if_any_check_fails() {
         let report = PreflightReport {
             rustc_version: CheckResult::Pass,

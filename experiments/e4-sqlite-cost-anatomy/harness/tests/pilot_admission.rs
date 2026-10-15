@@ -178,6 +178,25 @@ mod kiln_e4_09 {
     }
 
     #[test]
+    fn a_failing_preflight_check_fails_closed_and_writes_no_manifest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let passthrough = stand_in_passthrough(dir.path(), SOURCE_COMMIT, "a");
+        let manifest = dir.path().join("manifest.txt");
+
+        let output = Command::new(harness_binary())
+            .args(["preflight"])
+            .args([&manifest, &passthrough])
+            // A watched build variable makes the build-environment check fail.
+            .env("LIBSQLITE3_FLAGS", "-DSQLITE_DEBUG")
+            .output()
+            .expect("spawning the harness binary must succeed");
+
+        assert_eq!(output.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("failed closed"));
+        assert!(!manifest.exists(), "a failed preflight must record nothing");
+    }
+
+    #[test]
     fn preflight_needs_both_a_manifest_path_and_a_passthrough_binary_or_neither() {
         let output = run_harness(&[Path::new("preflight"), Path::new("manifest-only")]);
 

@@ -5,7 +5,9 @@
 //! preflight checks, the run driver (cells, repetitions, warm-up,
 //! interleaved order, retry budget, rejected-attempt log), the admission
 //! checks the pilot passes before it measures, and the feasibility pilot
-//! (§13, mechanics only) that drives it.
+//! (§13, mechanics only) that drives it: its twelve gated cells' pairs,
+//! each half a pinned measurement child watched by a pinned monitor
+//! process.
 //!
 //! The result-bearing run and its verdict (protocol §10's thresholds,
 //! shares, and §11's output tables) do not live here yet.

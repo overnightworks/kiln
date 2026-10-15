@@ -496,6 +496,40 @@ mod tests {
         }
 
         #[test]
+        fn inserts_commit_exactly_the_frozen_trace_when_no_email_collides() {
+            let _guard = crate::test_support::lock_vfs_counters();
+            let snapshot = snapshot();
+            let request = snapshot.request(Workload::Insert);
+            let working_dir = tempfile::tempdir_in(&snapshot.scratch_dir).unwrap();
+            let db_path = working_dir.path().join("accounts.db");
+            restore::restore_pristine(
+                &snapshot.pristine_dir,
+                &db_path,
+                &working_dir.path().join("accounts.db-wal"),
+            )
+            .unwrap();
+            let conn = Connection::open(&db_path).unwrap();
+            workloads::configure_connection(&conn, Synchronous::Full).unwrap();
+            let mut txn = TransactionStatements::prepare(&conn).unwrap();
+
+            run_inserts(&conn, &mut txn, &request, nothing_to_wait_for).unwrap();
+
+            let committed: Vec<String> = conn
+                .prepare("SELECT email FROM accounts WHERE id > ?1 ORDER BY id")
+                .unwrap()
+                .query_map([SNAPSHOT_ROWS as i64], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            let total = total_operation_count(TINY_PLAN.warmup, TINY_PLAN.timed);
+            let frozen: Vec<String> = generators::insert_trace(request.seed, SNAPSHOT_ROWS, total)
+                .into_iter()
+                .map(|params| params.email)
+                .collect();
+            assert_eq!(committed, frozen);
+        }
+
+        #[test]
         fn the_start_signal_comes_after_the_snapshot_is_restored_and_before_any_operation() {
             let _guard = crate::test_support::lock_vfs_counters();
             let snapshot = snapshot();

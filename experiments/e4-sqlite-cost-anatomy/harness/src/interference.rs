@@ -213,6 +213,11 @@ mod tests {
             assert!(judge_samples(&[]).is_some());
             assert!(judge_samples(&quiet_run(1)).is_some());
         }
+
+        #[test]
+        fn two_quiet_samples_are_a_complete_window() {
+            assert_eq!(judge_samples(&quiet_run(2)), None);
+        }
     }
 
     mod kiln_e4_08 {
@@ -328,10 +333,15 @@ mod tests {
         }
 
         #[test]
-        fn the_monotonic_clock_never_runs_backwards() {
+        fn the_monotonic_clock_counts_nanoseconds_and_never_runs_backwards() {
             let first = monotonic_ns();
-            assert!(monotonic_ns() >= first);
-            assert!(first > 0);
+            thread::sleep(Duration::from_millis(5));
+            let later = monotonic_ns();
+            assert!(
+                later - first >= 5_000_000,
+                "5 ms later the clock read only {} ns more",
+                later - first
+            );
         }
     }
 }

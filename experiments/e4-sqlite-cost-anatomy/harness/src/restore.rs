@@ -313,6 +313,28 @@ mod tests {
     }
 
     #[test]
+    fn wal_is_empty_or_absent_reports_an_error_that_is_not_a_missing_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let plain_file = dir.path().join("plain");
+        fs::write(&plain_file, b"not a directory").unwrap();
+
+        let beneath_a_file = plain_file.join("main.db-wal");
+
+        assert!(wal_is_empty_or_absent(&beneath_a_file).is_err());
+    }
+
+    #[test]
+    fn restore_failures_say_what_went_wrong() {
+        for (message, expected) in [
+            (CheckpointError::Blocked.to_string(), "blocked"),
+            (CheckpointError::WalNotEmpty.to_string(), "nonempty WAL"),
+            (PristineSaveError::NonemptyWal.to_string(), "not empty"),
+        ] {
+            assert!(message.contains(expected), "{message}");
+        }
+    }
+
+    #[test]
     fn wal_is_empty_or_absent_rejects_a_nonempty_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let nonempty = dir.path().join("nonempty.db-wal");

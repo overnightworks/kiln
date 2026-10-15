@@ -129,6 +129,35 @@ fn allowed_cpus_of(child: &Child) -> Vec<usize> {
     cpus_in(list)
 }
 
+/// An executable shell script standing in for a harness binary.
+fn stand_in(directory: &Path, name: &str, body: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = directory.join(name);
+    fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write stand-in");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod");
+    path
+}
+
+/// How many running processes were started with exactly these arguments
+/// (after the program name).
+fn processes_started_with(arguments: &[&str]) -> usize {
+    fs::read_dir("/proc")
+        .expect("/proc")
+        .filter_map(|entry| fs::read(entry.ok()?.path().join("cmdline")).ok())
+        .filter(|cmdline| {
+            let parts: Vec<&[u8]> = cmdline
+                .split(|byte| *byte == 0)
+                .filter(|part| !part.is_empty())
+                .collect();
+            parts.len() > arguments.len()
+                && parts[parts.len() - arguments.len()..]
+                    .iter()
+                    .zip(arguments)
+                    .all(|(part, argument)| *part == argument.as_bytes())
+        })
+        .count()
+}
+
 fn first_line_of(child: &mut Child) -> String {
     let mut line = String::new();
     BufReader::new(child.stdout.as_mut().expect("piped stdout"))
@@ -204,6 +233,72 @@ mod kiln_e4_07 {
             "{message}"
         );
         assert!(message.contains("measurement failed"), "{message}");
+    }
+
+    #[test]
+    fn a_child_that_never_says_ready_fails_the_half() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let child = stand_in(dir.path(), "silent", "echo hello");
+        let fixture = fixture_with(&child, small_snapshot());
+
+        let message = fixture
+            .host
+            .run_half(&half_request(
+                Workload::PointUpdate,
+                Build::Passthrough,
+                TINY_PLAN,
+            ))
+            .expect_err("a child that does not say ready cannot be measured")
+            .to_string();
+
+        assert!(message.contains("did not say ready"), "{message}");
+    }
+
+    #[test]
+    fn a_child_that_exits_unsuccessfully_after_ready_fails_the_half_and_leaves_no_monitor() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let child = stand_in(dir.path(), "crashing", "echo ready\nread go\nexit 3");
+        let mut fixture = fixture_with(&child, small_snapshot());
+        fixture.host.monitor_interval = Duration::from_millis(52);
+
+        let message = fixture
+            .host
+            .run_half(&half_request(
+                Workload::PointUpdate,
+                Build::Passthrough,
+                TINY_PLAN,
+            ))
+            .expect_err("a child that crashes fails the half")
+            .to_string();
+
+        assert!(message.contains("exited with"), "{message}");
+        assert_eq!(processes_started_with(&["monitor-stream", "52"]), 0);
+    }
+
+    #[test]
+    fn a_waiting_child_is_stopped_when_its_monitor_cannot_start() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let waiting_child = stand_in(dir.path(), "waiting", "echo ready\nexec sleep 31");
+        let dead_monitor = stand_in(dir.path(), "dead-monitor", "exit 0");
+        let mut fixture = fixture_with(&waiting_child, small_snapshot());
+        fixture.host.instrumented = dead_monitor;
+
+        let message = fixture
+            .host
+            .run_half(&half_request(
+                Workload::PointUpdate,
+                Build::Passthrough,
+                TINY_PLAN,
+            ))
+            .expect_err("a half without a monitor must not run")
+            .to_string();
+
+        assert!(message.contains("monitor"), "{message}");
+        assert_eq!(
+            processes_started_with(&["sleep", "31"]),
+            0,
+            "the child left waiting for go must not outlive the failed half"
+        );
     }
 
     #[test]
@@ -292,6 +387,27 @@ mod kiln_e4_24 {
         assert_eq!(samples.len(), 2);
         let gap = Duration::from_nanos(samples[1].at_ns - samples[0].at_ns);
         assert!(gap >= FAST_INTERVAL, "{gap:?}");
+    }
+
+    #[test]
+    fn no_monitor_process_outlives_the_half_or_the_idle_observation_it_sampled() {
+        let mut fixture = fixture();
+        fixture.host.monitor_interval = Duration::from_millis(51);
+
+        fixture
+            .host
+            .observe_idle_machine()
+            .expect("observe the idle machine");
+        fixture
+            .host
+            .run_half(&half_request(
+                Workload::PointUpdate,
+                Build::Instrumented,
+                TINY_PLAN,
+            ))
+            .expect("a half");
+
+        assert_eq!(processes_started_with(&["monitor-stream", "51"]), 0);
     }
 
     #[test]

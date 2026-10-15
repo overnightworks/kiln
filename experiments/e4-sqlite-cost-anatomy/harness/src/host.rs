@@ -162,6 +162,11 @@ impl MeasurementHost for ProcessHost {
 const MINIMUM_SAMPLE_PATIENCE: Duration = Duration::from_secs(2);
 const SAMPLE_PATIENCE_INTERVALS: u32 = 10;
 
+/// How long to wait for the next sample of a monitor sampling at `interval`.
+fn sample_patience(interval: Duration) -> Duration {
+    (interval * SAMPLE_PATIENCE_INTERVALS).max(MINIMUM_SAMPLE_PATIENCE)
+}
+
 /// The pinned `monitor-stream` child and the thread reading its lines.
 struct MonitorProcess {
     child: Child,
@@ -203,7 +208,7 @@ impl MonitorProcess {
             child,
             samples,
             reader: Some(reader),
-            patience: (interval * SAMPLE_PATIENCE_INTERVALS).max(MINIMUM_SAMPLE_PATIENCE),
+            patience: sample_patience(interval),
             received: Vec::new(),
         })
     }
@@ -377,6 +382,18 @@ mod tests {
                 samples: Vec::new(),
             };
             assert_eq!(run.window(), Duration::ZERO);
+        }
+
+        #[test]
+        fn the_monitor_gets_ten_intervals_to_write_a_sample_and_never_less_than_the_floor() {
+            assert_eq!(
+                sample_patience(Duration::from_secs(1)),
+                Duration::from_secs(10)
+            );
+            assert_eq!(
+                sample_patience(Duration::from_millis(50)),
+                MINIMUM_SAMPLE_PATIENCE
+            );
         }
     }
 
