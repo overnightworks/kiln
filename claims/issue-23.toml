@@ -1,8 +1,0 @@
-claim_id = "e2c6aac696b64621b05e402427f8d011"
-agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
-role = "builder"
-base = "f27081f3f27f2507ec59e1f3441245619784000a"
-branch = "claude/issue-23-kiln-ir-arithmetic"
-scope = ["crates/kiln-ir", "docs/concept.md"]
-opened_commit = "d437123d4d810d83da8c37ea2f262c2c786678c6"
-whole_reason = "one crate slice and, only if needed, its reference-meaning paragraph"
