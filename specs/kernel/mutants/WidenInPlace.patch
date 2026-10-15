@@ -1,0 +1,39 @@
+--- Kernel.tla
++++ Kernel.tla
+@@ -338,6 +338,7 @@
+    its next step may run. *)
+ WaitsOn(t) ==
+   IF Queued(t) THEN Conflicting(t, Requested(t)) \cup EscrowBlockers(t) \cup OlderQueued(t)
++  ELSE IF Running(t) THEN Conflicting(t, Need(NextOp(t), View(t)))
+   ELSE {}
+ 
+ Changed(t, v) == {k \in Keys : v[k] # View(t)[k]}
+@@ -380,7 +381,7 @@
+    survives. *)
+ DoOp(t) ==
+   /\ Running(t)
+-  /\ Covered(t)
++  /\ WaitsOn(t) = {}
+   /\ LET op == NextOp(t)
+          v == OpView(t, op)
+          r == ApplyOp(op, v) IN
+@@ -392,7 +393,8 @@
+              /\ reserved' = [reserved EXCEPT ![t] = NoReservation]
+              /\ wr' = [wr EXCEPT ![t] = NoWrites]
+              /\ draws' = [draws EXCEPT ![t] = NoDraws]
+-        ELSE /\ UNCHANGED <<status, held, reserved>>
++        ELSE /\ held' = [held EXCEPT ![t] = @ \cup Need(op, View(t))]
++             /\ UNCHANGED <<status, reserved>>
+              /\ IF Draws(op)
+                 THEN /\ draws' = [draws EXCEPT ![t][op.k] =
+                                    [bal |-> @.bal + (v[op.k].bal - r.db[op.k].bal),
+@@ -413,8 +415,7 @@
+    give is the one of its final attempt. Each restart adds a resource to
+    `widened`, a subset of the finite resource set, so restarts are finite. *)
+ WidenAndRestart(t) ==
+-  /\ Running(t)
+-  /\ ~Covered(t)
++  /\ FALSE
+   /\ widened' = [widened EXCEPT ![t] = @ \cup Need(NextOp(t), View(t))]
+   /\ status' = [status EXCEPT ![t] = "pending"]
+   /\ seq' = [seq EXCEPT ![t] = 1 + Cardinality({u \in Txns : Queued(u)})]

@@ -360,10 +360,11 @@ the point it inserts into (next-key locking), so a reader's range lock and
 a writer's claim on a value inside that range conflict correctly instead of
 racing past each other.
 
-A batch of class-3 calls acquires the resources its members need, in one
-fixed canonical order (to make deadlock structurally impossible rather than
-merely detected), proves the batch equivalent to some serial execution
-inside that protected interval, and only then applies the
+A batch of class-3 calls acquires the resources its members need as one
+footprint, atomically at dispatch like any other call (so no partial
+footprint is ever held and a wait cycle cannot form), proves the batch
+equivalent to some serial execution inside that protected interval, and
+only then applies the
 associative-summary/parallel-prefix-scan evaluation from §3.3 inside it.
 
 **Lock elision is a whole-program decision, not a pairwise one — and it
@@ -450,11 +451,21 @@ say — that is a translation failure under §2.1's unsupported-source rule,
 rejected at compile time, not a runtime surprise discovered after the fact.
 
 **Lock expansion restarts safely.** If a class-4 call's covering resource
-must widen mid-execution and acquiring the wider resource would violate the
-kernel's fixed canonical ordering, the call never acquires out of order —
-doing so would reintroduce the deadlock risk the ordering exists to avoid.
-Instead it discards its tentative effects and restarts from the beginning
-with the wider resource acquired first, in canonical order.
+must widen mid-execution, the call never acquires the wider resource on top
+of what it holds: an admitted transaction never waits, and a second
+acquisition by a holder is exactly the wait that closes cycles. Instead it
+discards its tentative writes, draws and reservations, releases everything,
+and re-requests the widened footprint as a new request that joins the
+admission queue at its tail, under the same atomic admission and
+reservations as any call. The response it gives is the one of its final
+attempt. Each restart adds a resource the call had not requested before;
+over a fixed, finite resource universe (the model's `Keys`) restarts are
+therefore finite. The kernel model checks this (`specs/README.md`) for
+data-dependent point reads (`Follow`) only, not for a widened range or
+table resource: serializability with exact responses, absence of wait
+cycles and §9.5's liveness hold with restarts, including a restart that
+discards a positive escrow reservation and draw, and acquiring in place or
+keeping tentative effects across a restart are each refuted.
 
 **Why this is the proposal.** The class-3 mechanism the thesis already
 commits to — associative summaries evaluated by a parallel prefix scan —
@@ -469,7 +480,7 @@ lock rather than a separate path carrying the staleness risk named above —
 which is what makes class 4 "always correct" rather than "usually
 correct." The cost accepted in return is two-phase locking's classic
 latency cost under heavy contention for classes 3 and 4, with
-deadlock-avoidance-by-ordering bookkeeping; unconditional class-1 elision
+admission-queue bookkeeping; unconditional class-1 elision
 takes no resource at all, and class-1's guarded case plus every class-2
 reservation contend only when two calls' keys collide or a keyed resource
 meets a covering range or table resource, under either proposal — so this
@@ -1008,8 +1019,9 @@ parallel prefix scan computes every caller's result inside *one* batch
 that already holds the kernel's locks (§4) — this is parallel work inside a
 protected interval, not concurrency between conflicting batches. Two
 batches whose members' footprints genuinely conflict are still fully
-serialized by the strict-2PL kernel, in canonical lock order, exactly like
-any class-4 pair. Avoiding Fable's domain-executor model removes a *static*
+serialized by the strict-2PL kernel's atomic admission (§4), exactly like
+any class-4 pair; any internal ordering of individual acquisitions is an
+implementation detail, not part of that contract. Avoiding Fable's domain-executor model removes a *static*
 partitioning bottleneck (a wrong ownership-key guess becoming a permanent
 hot spot); it does not remove the *dynamic* serialization strict 2PL
 imposes once two live batches actually conflict, and this document does
