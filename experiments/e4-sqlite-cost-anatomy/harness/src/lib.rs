@@ -13,6 +13,7 @@
 //! comparisons through the same driver.
 
 pub mod affinity;
+pub mod comparison;
 pub mod driver;
 pub mod generators;
 pub mod machine;

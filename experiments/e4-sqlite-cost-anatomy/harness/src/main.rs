@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use kiln_e4_harness::comparison;
 use kiln_e4_harness::pilot::{self, MonitorCoverageRow, PerfStatus, PilotReport};
 use kiln_e4_harness::preflight::{self, BinaryHashCheck, CheckResult};
 use kiln_e4_harness::{affinity, driver, machine, monitor, restore, run, vfs, workloads};
@@ -214,13 +215,13 @@ fn invalid_value(flag: &str) -> ! {
     std::process::exit(2);
 }
 
-/// Runs the feasibility pilot (protocol.md §13): [`pilot::PILOT_COMPARISON_REPETITIONS`]
-/// interleaved instrumented/passthrough comparison repetitions each for
-/// [`pilot::PilotWorkload::PointRead`] and
-/// [`pilot::PilotWorkload::PointUpdate`] at the small size, every attempt
-/// gated by the real interference monitor and run in isolated,
-/// CPU-pinned child processes (protocol §9) via
-/// [`pilot::run_pilot_comparisons`]. Writes the mechanics-only report to
+/// Runs the feasibility pilot (protocol.md §13): the nine counterbalanced
+/// instrumented/passthrough pairs protocol §5 requires for each gated
+/// workload ([`pilot::PilotWorkload::is_gated`]) at the small size,
+/// every attempt gated by the real interference monitor and run in
+/// isolated, CPU-pinned child processes (protocol §9) via
+/// [`comparison::run_pilot_comparisons`]; read-only workloads are
+/// reported as not gated. Writes the mechanics-only report to
 /// `<output-dir>/pilot-report.txt` and every rejection, immediately, to
 /// `<output-dir>/rejected.log`.
 fn run_pilot(args: &[String]) {
@@ -256,7 +257,7 @@ fn run_pilot(args: &[String]) {
     let run_start = std::time::Instant::now();
 
     let rejected_log_path = pilot_args.output_dir.join("rejected.log");
-    let (cells, rejected_attempts) = pilot::run_pilot_comparisons(
+    let (cells, rejected_attempts) = comparison::run_pilot_comparisons(
         &self_binary,
         &pilot_args.passthrough_binary,
         pilot_args.warmup,
@@ -301,10 +302,10 @@ fn run_pilot(args: &[String]) {
         std::process::exit(1);
     }
 
-    if !report.all_reported_pairs_pass() {
+    if !report.all_gated_cells_pass() {
         eprintln!(
-            "the 2% overhead bound (protocol §5) failed for at least one reported pair, \
-             or a workload's comparison repetitions were insufficient (#30 owns the bound itself)"
+            "a gated cell did not pass the 2% overhead bound (protocol §5): it failed, \
+             was inconclusive, or had insufficient repetitions"
         );
         std::process::exit(1);
     }
