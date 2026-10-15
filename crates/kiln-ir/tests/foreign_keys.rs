@@ -542,3 +542,31 @@ mod kiln_ir_55 {
         );
     }
 }
+
+mod kiln_ir_57 {
+    use super::*;
+
+    #[test]
+    fn foreign_key_column_must_hold_integer_keys() {
+        let text_reference = ForeignKey {
+            column: column("code"),
+            ..orders_customer()
+        };
+        let cases = [
+            (orders_customer(), Ok(())),
+            (
+                text_reference.clone(),
+                Err(SchemaError::ForeignKeyTypeMismatch(text_reference)),
+            ),
+        ];
+
+        for (foreign_key, expected) in cases {
+            let schema = Schema {
+                foreign_keys: vec![foreign_key],
+                ..shop_schema()
+            };
+
+            assert_eq!(schema.validate(), expected);
+        }
+    }
+}
