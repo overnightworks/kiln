@@ -1,8 +1,0 @@
-claim_id = "265829c89aed4909b6397ea47a2d09fd"
-agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
-role = "builder"
-base = "910d1c1b810e995e776b06d22fc1b6ed2682416a"
-branch = "claude/issue-40-kiln-ir-replay"
-scope = ["crates/kiln-ir", "docs/concept.md", "specs/kiln-ir.spec.md"]
-opened_commit = "f63251855218fcae2269f0ea3fadeac321bcff50"
-whole_reason = "one crate slice, its criteria file and, only if needed, its reference-meaning paragraph"
