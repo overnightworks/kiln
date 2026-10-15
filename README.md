@@ -16,9 +16,10 @@ workloads.
 - [docs/concept.md](docs/concept.md) — the thesis, the isolation-kernel
   proposal, the exit door, the kill criteria, the engine-phase obligations
   not yet specified, and the open questions for the independent critique.
-- [docs/experiments.md](docs/experiments.md) — the complete protocols for
-  E1, E2, and E3: corpus, baselines, aggregation, and gating, written so a
-  fresh builder can start from this document alone.
+- [docs/experiments.md](docs/experiments.md) — each experiment's gate
+  rules for E1, E2, and E3: hypothesis, gating predicate, baselines,
+  aggregation, and audits; the concrete inputs are each experiment's own
+  item's frozen deliverable.
 - [docs/research/](docs/research/) — the prior-art report, the detailed
   research notes it was built from, and the ideation that produced kiln's
   design options.

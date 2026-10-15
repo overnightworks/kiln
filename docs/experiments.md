@@ -66,9 +66,7 @@ questions and are reported as two separate numbers, never conflated:
   index or foreign key the compiler can identify ahead of time — not an
   arbitrary secondary-attribute scan. Example: look up an order by
   `order_id`, then touch the customer through `order.customer_id`, a foreign
-  key into `customers`. The dependent key is already protected by the pin
-  (`docs/concept.md` §3.2, §5) that foreign key holds against the customer
-  row, not by a fresh ad hoc check for this one-hop case.
+  key into `customers`.
 - **Domain-bounded.** Not static or one-hop, but provably confined to one
   named partition of the schema (a tenant id, a warehouse id) that is itself
   a static argument. This is a fact about a function's footprint, measured
@@ -113,19 +111,21 @@ as the same result.
   every transaction "static" with no analysis) and confirms the evaluation
   harness rejects that stub's output for lacking evidence.
 - **Lowering audit.** A classifier can raise its coverage number by
-  weakening what "static" or "one-hop" require. Any change that increases
-  measured coverage is paired with re-checking a sample of the newly
-  reclassified transactions: that the IR the front end produced for each one
-  is equivalent to the function's actual source behavior, judged against
-  the IR's reference meaning (`docs/concept.md` §2.1) through the reference
-  interpreter — not merely that the classifier's own logic about its own IR
-  is internally consistent.
-- **Containment audit.** Independently of the lowering audit, confirm that
-  the resources a classified transaction actually touched while running
-  stay within the footprint the classifier inferred for it.
-- A coverage increase without the lowering audit, or a classification
-  unconfirmed by the containment audit, does not count as evidence toward or
-  against the 70%/50% thresholds.
+  weakening what "static" or "one-hop" require. Before the first result
+  counts, and again on every change that reclassifies transactions, a
+  sample of the classified transactions is re-checked: that the IR the
+  front end produced for each one is equivalent to the function's actual
+  source behavior, judged against the IR's reference meaning
+  (`docs/concept.md` §2.1) through the reference interpreter — not merely
+  that the classifier's own logic about its own IR is internally
+  consistent.
+- **Containment audit.** Independently of the lowering audit, and on the
+  same before-first-result-and-every-reclassification schedule, confirm
+  that the resources a classified transaction actually touched while
+  running stay within the footprint the classifier inferred for it.
+- A result not preceded by both audits, or a reclassification not
+  re-checked by both, does not count as evidence toward or against the
+  70%/50% thresholds.
 
 ### What this adds beyond the 111-application study
 
@@ -209,13 +209,14 @@ alone:
   per summary. A family whose summary grows with batch size fails this bound
   and is reported as failing, never silently excluded.
 - **Combine/apply cost bound.** Combining two summaries, and applying a
-  summary to a concrete state, are each a fixed, stated cost (for example
-  O(1) or O(log batch size)), measured in actual operation counts or
-  wall-clock micro-benchmarks. Associativity alone does not imply O(n) total
-  work and O(log n) depth — a tree of closures that just replays the
-  original sequential computation is associative but not compact — so
-  measuring bytes and work, not inferring them from the algebra's shape, is
-  what catches that case.
+  summary to a concrete state, are each a fixed cost independent of batch
+  size (for example O(1)), measured in actual operation counts or
+  wall-clock micro-benchmarks; a family whose combine or apply cost grows
+  with batch size fails this bound, reported as failing rather than
+  excluded. Associativity alone does not imply O(n) total work and O(log n)
+  depth — a tree of closures that just replays the original sequential
+  computation is associative but not compact — so measuring bytes and work,
+  not inferring them from the algebra's shape, is what catches that case.
 
 Both measurements are reported alongside throughput for every family and
 batch size. Together they are the **admissible bound class** E3 also gates

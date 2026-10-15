@@ -46,8 +46,10 @@ proof about the design, not about the code that is supposed to implement it.
 (`docs/concept.md` §4: strict two-phase locking over one shared resource
 namespace, canonical lock ordering, lock-expansion restart), including
 §9.5's liveness-of-tentative-waits obligation (whether a wait behind a
-non-exclusive escrow holder is deadlock-free and bounded — this is where
-that question is settled, per §9.5's own status line); the commit and
+non-exclusive escrow holder is deadlock-free, and every waiter eventually
+proceeds under stated fairness assumptions — this is where that question
+and those assumptions are settled, per §9.5's own status line); the commit
+and
 recovery protocol (§5, §9.1, §9.2: atomicity across a commit group, the
 visible-version pointer, recovery after a crash mid-install); and the
 migration switch (§8, §9.3: backfill watermark, catch-up phase, barrier
@@ -151,13 +153,11 @@ order picked in advance that could reject a result no less legal than the
 one it expected. An outcome still unresolved at comparison time (an
 `fsync`-failure case, `docs/concept.md` §9.2) is compared only after
 recovery resolves it to a known commit or a known abort. A **property-based
-testing library** generates many random workloads automatically from a
-description of what a valid workload looks like, instead of a human writing
-each test case by hand; when a generated workload finds a disagreement, the
-library **shrinks** it — automatically strips away everything in the
-failing workload that is not needed to reproduce the failure — until it has
-the smallest workload that still fails, which is far easier for a person to
-read than the original random case.
+testing library** generates many random workloads automatically instead of
+a human writing each test case by hand. When a generated workload finds a
+disagreement, the library **shrinks** it to the smallest workload that
+still fails, far easier for a person to read than the original random
+case.
 
 **What it cannot prove.** Anything about crash behavior — this layer injects
 no faults, so it says nothing about what happens if the process dies
@@ -203,23 +203,28 @@ commit must survive, and the harness checks exactly that; "discarded"
 without a trace is correct only for an unacknowledged tail record (one
 never told to a caller as durable) torn by a crash before it was ever
 acknowledged. **Outside the contract** — a bit flip in already-acknowledged
-bytes, a torn write that reaches already-acknowledged bytes, or a lying
-flush (the device reports success for a write that did not actually reach
-storage) — §9.2 states plainly that the engine cannot repair this; the
-harness instead checks that recovery *detects* the damage and surfaces it
-as a recovery failure, never silently skips the damaged record or reports a
-clean recovery over lost data.
+bytes, or a torn write that reaches already-acknowledged bytes — §9.2
+states plainly that the engine cannot repair this; the harness checks that
+recovery *detects* the damage via the record's framing and surfaces it as a
+recovery failure, never silently skipping the damaged record or reporting a
+clean recovery over lost data. A lying flush (the device reports success
+for a write that did not actually reach storage) leaves no framing
+corruption for recovery to detect: the engine guarantees only that its
+recovered history is a prefix of its own acknowledged history, so the
+harness, which independently knows the full acknowledged set, checks
+prefix-ness itself and reports the loss.
 
 After every injected crash, the harness checks: every commit the engine had
 already acknowledged is present, for every inside-the-contract fault; an
 outside-the-contract fault is surfaced as a detected recovery failure, never
 silently absorbed; no transaction is left half-applied; every declared
 invariant (uniqueness, foreign key, numeric bound) still holds; and the full
-history matches a **commit-order replay** against the reference model
-(layer 3): the engine's own recorded commit order, replayed by the
-reference interpreter including every failed and aborted call, must
-reproduce every response, failure, and final state, with any outcome still
-unresolved at the crash compared only after recovery resolves it. An
+history matches layer 3's **commit-order replay** contract, with each call
+in the trace carrying its engine outcome class: a semantic rejection
+replays normally, an infrastructure-forced abort (disk full, or an `fsync`
+failure resolved to abort) replays as a discarded no-op and the check is
+that the engine's final state shows no effect of it, and any outcome still
+unresolved at the crash is compared only after recovery resolves it. An
 **Elle-style anomaly checker** — a tool that reconstructs the version
 history of each piece of data from what reads actually returned and reports
 a concrete cycle (a provable contradiction) when no valid serial order
@@ -329,7 +334,9 @@ The matrix is **workload family × fault profile × size**:
 - **Workload family** (5): transfers, sign-ups with a unique email, doctors
   on call, ticket-quota contention, navigational lookups.
 - **Fault profile** (5): none, power loss, torn write, fsync error, disk
-  full.
+  full — all inside the declared storage contract (§9.2); an
+  outside-contract fault (bit flip, lying flush) is not randomized here but
+  runs as a mandatory named preset in §4 with its own oracle.
 - **Size** (2): small, large.
 
 That is 5 × 5 × 2 = 50 cells. Each cell is a row of **data** — a
@@ -347,14 +354,12 @@ next.
 This is what avoids test explosion. The alternative — one hand-written test
 per (family, fault, size, interleaving) combination — has no natural upper
 bound, because the interleaving space is unbounded; that is how a suite
-balloons to many times the size of the code it covers. Instead there is one
-harness, one oracle, and a fixed, small table of 50 cells; the harness runs
-each cell with many random seeds, and on a failure the property-testing
-library shrinks the failing case to the smallest workload, interleaving, and
-fault timing that still reproduces it. A shrunk failure is then pinned
-permanently as a new entry in the named scenario catalogue below — the
-catalogue is how coverage accumulates over time; the matrix itself stays
-fixed at 50 cells.
+balloons to many times the size of the code it covers. Instead, one shared
+harness runs the fixed 50-cell table with many random seeds per cell,
+shrinking any failure to the smallest workload, interleaving, and fault
+timing that still reproduces it; that shrunk failure is then pinned
+permanently as a new entry in the named scenario catalogue below, which is
+how coverage accumulates while the matrix itself stays fixed at 50 cells.
 
 ## 4. Named anomaly and regression scenarios
 
@@ -384,7 +389,7 @@ that any specific named scenario below actually occurs.
 | Escrow at exactly zero | A draw that would take the remaining quantity to exactly zero, not below it. | The sum of committed escrow draws never exceeds the ceiling; the exact-boundary case is exercised, not only overflow past it. | §3.2, §5 |
 | Partial live publication of a multi-key commit | A commit touching two derived structures, A and B, becomes visible to a concurrent reader as (new A, old B). | For any commit touching more than one derived structure, no reader ever observes some but not all of its effects. | §9.1 (publication boundary) |
 | A specialization that matches its footprint but computes the wrong value | An AI-proposed specialization (for example, subtracting two instead of one) touches exactly its declared footprint, so the footprint-tag check passes, but its result differs from the reference semantics. | The specialization's response and resulting state equal the reference model's on every differential run; a passing footprint-tag check is never by itself treated as evidence of correctness. | §6 (trust model and certificate) |
-| A torn append into acknowledged bytes | A crash during an append corrupts bytes belonging to a record already acknowledged as durable, not the new record being appended. | Every previously acknowledged commit's bytes are intact after recovery; new records never land inside a byte range already told to a caller as durable. | §9.2 (storage failure model) |
+| Crash during an append | A crash lands while a new record is being appended, with an earlier record already acknowledged as durable sitting in the log. | A new record never lands inside a byte range already told to a caller as durable. | §9.2 (storage failure model) |
 | A bit flip in already-acknowledged bytes | A fault injector flips a byte inside a record already acknowledged as durable, after the acknowledgment, independent of any new write. | Recovery detects the corruption via the record's framing checksum and surfaces it as a recovery failure; the engine never silently serves, or silently skips, the corrupted record as if it were intact. | §9.2 (storage failure model) |
 | A backfill missing a commit after the snapshot point | A migration's backfill replays the log to its recorded watermark, but a commit lands before the catch-up phase starts tracking it and is silently absent from the new structures. | After the barrier commit, the new structures reflect every commit up to and including the barrier, with none missing and none duplicated. | §9.3 (migration watermark) |
 | Rollback after a relaxed invariant | V2 relaxes `balance ≥ 0` and commits a negative balance; the operator then rolls back to V1, whose invariant forbids that balance. | Rollback is refused once a post-relaxation commit violates the old invariant, or is only offered inside the defined window before such a commit occurs — never a silent "switch back" that leaves an invalid committed row. | §9.3 (rollback window) |
@@ -393,15 +398,17 @@ that any specific named scenario below actually occurs.
 
 Which of these need an injected fault to trigger and which do not is stated
 by each scenario's own "What happens" description above, not by a blanket
-count: write skew, both foreign-key-race presets, the uniqueness race,
-escrow at exactly zero, the specialization-correctness scenario, and
-rollback after a relaxed invariant need no fault, and are caught primarily
-by layer 3's commit-order replay; dirty read and read skew are caught
-primarily by layer 4's Elle-style checker; the remaining, fault-driven
-scenarios are caught primarily by layer 4's deterministic simulation. The
-kernel-ordering and publication-boundary scenarios are additionally modeled
-in layer 1 before any code exists, so a design flaw in those two is caught
-before it is ever implemented.
+count: lost update, write skew, the phantom from a range read against a
+reservation insert, both foreign-key-race presets, the uniqueness race,
+escrow at exactly zero, partial live publication of a multi-key commit, the
+specialization-correctness scenario, and rollback after a relaxed invariant
+all need no injected fault — each is caught by the invariant check named in
+its own row above, most of them via layer 3's commit-order replay; dirty
+read and read skew are caught primarily by layer 4's Elle-style checker;
+the remaining, fault-driven scenarios are caught primarily by layer 4's
+deterministic simulation. The kernel-ordering and publication-boundary
+scenarios are additionally modeled in layer 1 before any code exists, so a
+design flaw in those two is caught before it is ever implemented.
 
 ## 5. What kiln borrows from SQLite, and why not its test files
 
@@ -494,24 +501,16 @@ implementation and 31K lines of proof. Two corrections, both worth keeping
 straight: Anvil (OSDI 2024) verifies controller liveness, not storage; the
 Verus paper with the storage case study is at SOSP 2024, not OSDI.
 
-**Elle, cited as "VLDB 2020" — corrected: issue published November 2020,
-presented at VLDB 2021.** Kingsbury and Alvaro, "Elle: Inferring Isolation
-Anomalies from Experimental Observations," *Proceedings of the VLDB
-Endowment*, Vol. 14, No. 3
+**Elle, cited as "VLDB 2020" — corrected: the PVLDB issue was published
+November 2020, a different, both-true fact from "VLDB 2021," the correct
+citation for the conference proceedings volume it belongs to, held the
+following year
+([front matter PDF](https://www.vldb.org/pvldb/vol14/FrontMatterVol14No3.pdf)).**
+Kingsbury and Alvaro, "Elle: Inferring Isolation Anomalies from
+Experimental Observations," *Proceedings of the VLDB Endowment*, Vol. 14,
+No. 3
 ([paper page](https://www.vldb.org/pvldb/volumes/14/paper/Elle%3A%20Inferring%20Isolation%20Anomalies%20from%20Experimental%20Observations)).
-The issue's own front matter dates it precisely: "Volume 14, No. 3 —
-November 2020"
-([front matter PDF](https://www.vldb.org/pvldb/vol14/FrontMatterVol14No3.pdf)).
-So "2020" is not merely an artifact of the paper's arXiv preprint
-([arXiv:2003.10554](https://arxiv.org/abs/2003.10554), posted March 2020) —
-the PVLDB issue itself was genuinely published in November 2020. What
-makes "VLDB 2021" the correct citation for the *conference* is that PVLDB
-Volume 14 is the volume tied to the VLDB 2021 conference proceedings, held
-the following year; citing the paper requires naming both correctly:
-issue publication (November 2020) and conference presentation (VLDB 2021)
-are two different, both-true facts, not one date explained away by the
-other. What the
-paper confirms, independent of the year: Elle infers a dependency graph of
+What the paper confirms, independent of the year: Elle infers a dependency graph of
 client-observed transactions (in Adya's formalism) purely from the values
 reads return, detects every anomaly in that formalism except predicate
 anomalies, and was evaluated against real databases including a case study

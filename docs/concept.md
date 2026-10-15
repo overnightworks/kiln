@@ -100,13 +100,9 @@ including class 4. Class 4 (§3) is reserved for a function the front end
 down statically (navigational code, most often) — a representable
 transaction with an unknown footprint, not an unrepresentable one. Partial
 translation would let an untranslatable side effect hide inside an
-apparently-analyzed function; a whole-function refusal cannot.
-
-**The source-to-IR boundary.** This applies uniformly to every front end —
-the Rust-macro front end, a Django or TypeORM extractor for E1, any future
-front end (§11): each either emits only nodes from the table above for a
-given transaction function, or refuses that whole function per the rule
-above. No front end does partial or best-effort translation.
+apparently-analyzed function; a whole-function refusal cannot. This rule
+applies uniformly to every front end — the Rust-macro front end, a Django
+or TypeORM extractor for E1, any future front end (§11).
 
 ### 2.2 Reference meaning
 
@@ -160,7 +156,8 @@ the conservative path (class 4) for that interaction.
    can collide for some argument values (the same column, different keys),
    so instead of eliding, each call registers a keyed resource for its own
    key, atomically at dispatch and held through commit, in the same
-   namespace §4 defines; two calls contend only when their keys are equal —
+   namespace §4 defines; two calls contend when their keys are equal, and a
+   call also contends with any range or table resource covering its key —
    exactly the mechanism class 2's typed reservations use.
    *Example.* Two `update_profile(user_id, ...)` calls update the same
    table and the same columns; the compiler cannot prove their footprints
@@ -220,17 +217,10 @@ the conservative path (class 4) for that interaction.
    conservative path (§4). It is a safety net, never a silent
    approximation.
 
-At runtime, kiln never tags one concrete call with a single fixed class. An
-unconditionally proven call (class 1) touches no resource in the namespace
-at all — no neighbor, live or future, can ever contend with it, by the
-whole-program proof of §4. Every other call — guarded class 1, every
-class-2 reservation, and the kernel paths of classes 3 and 4 — registers in
-the namespace regardless of whether a neighbor happens to be live at that
-instant, exactly so a neighbor that arrives afterward still contends
-against it correctly; which neighbors it actually meets there, and under
-which pairwise proof, then decides whether it proceeds immediately (no live
-contending key), waits behind a tentative holder (§5), or enters the kernel
-of §4.
+At runtime, kiln never tags one concrete call with a single fixed class:
+whether it touches the namespace at all, and which live or future
+neighbors it then meets there, is decided by §4's registration-and-elision
+rule, not by this section's classification alone.
 
 ```mermaid
 flowchart LR
@@ -317,12 +307,13 @@ happen to meet.
 
 Class 1's *guarded* case, and every class-2 typed reservation (claim, pin,
 escrow draw), never elide: each registers a keyed resource in this same
-namespace — atomically at dispatch, held through commit, contended only
-against another resource with an equal key — so a guarded class-1 pair and
-a class-4 call touching the same region are ordered correctly by the same
+namespace — atomically at dispatch, held through commit, contended against
+another resource with an equal key (the point-versus-point case) and against
+any range or table resource covering it — so a guarded class-1 pair and a
+class-4 call touching the same region are ordered correctly by the same
 protocol instead of racing past each other. This is cheap, not absent:
-distinct keys never contend, but the registration itself is what makes
-composition with class 4 sound.
+two keyed resources with distinct keys never contend, but the registration
+itself is what makes composition with class 4 sound.
 
 **Unknown footprints acquire a genuinely conservative covering resource
 before access.** Class 4's conservative guess is acquired in the same
@@ -358,8 +349,9 @@ correct." The cost accepted in return is two-phase locking's classic
 latency cost under heavy contention for classes 3 and 4, with
 deadlock-avoidance-by-ordering bookkeeping; unconditional class-1 elision
 takes no resource at all, and class-1's guarded case plus every class-2
-reservation contend only when two calls' keys collide, under either
-proposal — so this cost is paid only where some
+reservation contend only when two calls' keys collide or a keyed resource
+meets a covering range or table resource, under either proposal — so this
+cost is paid only where some
 coordination is unavoidable regardless of kernel choice — how much of real
 traffic actually lands in classes 1–2 rather than 3–4 is a
 pairwise-eligibility question E1 does not answer (§14), not the
@@ -481,9 +473,8 @@ support for queries outside that workload
 always go to the one log first, and an unanticipated read degrades rather
 than breaks.
 
-This section's commitment stops at derived-and-rebuildable; §15 names the
-stronger incremental-view claim — every index as a compiled, parameterized
-incremental view — as a deferred hypothesis it does not adopt here.
+§15 names the stronger every-index-as-incremental-view claim as a deferred
+hypothesis this section does not adopt.
 
 ## 8. Workload migrations
 
@@ -492,21 +483,14 @@ compiler diffs the old compiled program against the new one and derives
 exactly which views, indexes, and reservation structures are new, changed,
 or removed. New structures are backfilled from the existing log while the
 old compiled version keeps serving traffic. The switch to the new version is
-atomic. Rollback reuses the same switch mechanism, run backward.
-
-The architecture-level commitment here is that migrations are driven by a
-diff of two compiled programs against one shared log, not hand-written ad
-hoc scripts; §9.3 is where the remaining obligations, and their current
-status, are named.
+atomic. Rollback reuses the same switch mechanism, run backward; §9.3 names
+the remaining obligations and their current status.
 
 ## 9. Engine-phase obligations
 
-Five correctness obligations belong to the engine build, not to this
-concept: each subsection below states the obligation, the direction this
-document commits to, and the condition under which that direction fails,
-precisely enough that no engine built against this document can honestly
-ignore it, without yet specifying the protocol itself — each subsection's
-own status line says so.
+The five subsections below name correctness obligations that belong to the
+engine build, not to this concept, each precise enough to honestly bind a
+builder without yet specifying the protocol itself.
 
 ### 9.1 Publication boundary
 
@@ -550,10 +534,15 @@ never previously acknowledged as committed (fresh aligned extents, or
 copy-on-write rather than in-place overwrite of a committed extent) so a
 torn write to a new record cannot reach already-durable bytes, and fsyncs
 directory entries separately from file contents. It fails — is outside this
-model — for a torn write that does reach already-acknowledged bytes, or a
-device that lies about a flush: the engine cannot repair either, and
-recovery must surface the failure rather than silently skip the damaged
-record, the same truthful-flush assumption
+model — for a torn write that does reach already-acknowledged bytes: the
+engine cannot repair that, and recovery surfaces the failure rather than
+silently skipping the damaged record. A device that lies about a flush is
+bounded differently: the engine guarantees only that its recovered history
+is a prefix of its own acknowledged history and detects framing-visible
+corruption within that prefix; whether an entire acknowledged append was
+lost is not something the engine alone can see, so an external harness that
+independently knows the acknowledged set checks prefix-ness and reports the
+loss — the same truthful-flush assumption
 [SQLite's own atomic-commit documentation](https://www.sqlite.org/atomiccommit.html)
 makes for the same reason. Because an `fsync` failure here does not tell
 the engine whether the bytes actually reached storage, it leaves the
@@ -581,13 +570,12 @@ validation** requires every row already committed under the old invariant
 to satisfy the new invariant before the switch is allowed to complete,
 regardless of how the new rule compares to the old one; **rollback
 availability** stays open only while every fact committed since the switch
-still satisfies the *old* invariant — the moment a post-switch commit
-produces a fact the old invariant would reject, rollback closes, whether or
-not the new rule is in any sense stricter. The rollback window is exactly
-"while the old rule still accepts everything committed since the switch,"
-never a schema-level classification decided once at migration time, and it
-closes for the same reason once the old structures have been reclaimed.
-**Status: not yet specified** — the watermark representation, the catch-up
+still satisfies the *old* invariant, never a schema-level classification
+decided once at migration time — the moment a post-switch commit produces
+a fact the old invariant would reject, whether or not the new rule is in
+any sense stricter, rollback closes, and it closes for the same reason once
+the old structures have been reclaimed. **Status: not yet specified** —
+the watermark representation, the catch-up
 write path, and the exact rollback-window length and reclaim trigger are
 engine-phase work.
 [F1's migration protocol](https://research.google.com/pubs/archive/41376.pdf)
@@ -615,22 +603,24 @@ checker language, or a meta-certificate, is engine-phase work
 ### 9.5 Liveness of tentative waits
 
 A transaction ordered behind a tentative reservation's holder (§5) must
-eventually proceed: the wait must be deadlock-free and bounded. §4's
-deadlock-freedom argument is built on canonical lock ordering over
-*exclusive* resources, where a waiter waits on one holder whose position in
-that order bounds the wait. An escrow draw is not exclusive — several
-transactions can each hold a tentative draw against the same ceiling at
-once — so a waiter behind a contended escrow is not waiting on a single
-ordered holder the way a claim or pin waiter is, and §4's argument does not,
-as written, extend to it. This document does not yet choose a direction (a
-wait budget, a priority rule, or restructuring escrow contention behind a
-single ordering point) — only the obligation: no transaction may wait on a
-tentative holder indefinitely, and no set of tentative waiters may form a
-deadlock cycle. It fails if a sequence of tentative, non-exclusive
-reservation draws can starve a waiter or form a cycle the canonical lock
-order does not prevent. **Status: not yet specified** — proving or
-disproving this is exactly what the TLA+ model of the kernel (§4) must
-settle; [issue #6](https://github.com/overnightworks/kiln/issues/6) owns it.
+eventually proceed: the wait must be deadlock-free, and every waiter must
+eventually proceed under stated fairness assumptions. §4's deadlock-freedom
+argument is built on canonical lock ordering over *exclusive* resources,
+where canonical ordering rules out a wait cycle. An escrow draw is not
+exclusive — several transactions can each hold a tentative draw against the
+same ceiling at once — so a waiter behind a contended escrow is not waiting
+on a single ordered holder the way a claim or pin waiter is, and §4's
+argument does not, as written, extend to it. This document does not yet
+choose a direction (a wait budget, a priority rule, or restructuring escrow
+contention behind a single ordering point) — only the obligation:
+deadlock-free, and every waiter eventually proceeds under fairness
+assumptions #6 states. It fails if a sequence of tentative, non-exclusive
+reservation draws can starve a waiter under those assumptions or form a
+cycle the canonical lock order does not prevent. **Status: not yet
+specified** — proving or disproving this, and stating the fairness
+assumptions themselves, is exactly what the TLA+ model of the kernel (§4)
+must settle; [issue #6](https://github.com/overnightworks/kiln/issues/6)
+owns it.
 
 ## 10. Exit door (operator ruling 15.10.2026)
 
@@ -748,10 +738,16 @@ kiln's bet dies on either of these:
 
 ## 14. Experiments
 
-Full protocols — corpus, extraction rules, baselines, aggregation, and
-gating — live in `docs/experiments.md`, written so a fresh builder starts
-from that document alone. This section states only what each experiment
-must show to keep or kill the thesis; the thresholds below are carried over
+This document is the entry point a builder starts from; `docs/experiments.md`
+holds each experiment's gate rules — the hypothesis, the gating predicate
+and numerator, the gating sizes, the aggregation rule, and the audits that
+keep the measurement honest. Neither document supplies the concrete inputs
+a builder runs against: each experiment's own item (#2 for E1, #3 for E2,
+E3's new item) freezes and independently reviews its corpus, extraction
+rules, and baselines before any result-bearing run, under the freeze
+protocol `docs/experiments.md` states. This section states only what each
+experiment must show to keep or kill the thesis; the thresholds below are
+carried over
 unmodified from the ideation brief
 (`docs/research/ideation/codex-astra-ideation.md`,
 `docs/research/ideation/fable-ideation.md`) and are not restated stronger or
@@ -762,23 +758,26 @@ frequency-weighted transaction instances, measured on TPC-C and on a corpus
 of real open-source applications, classify into a footprint category the
 compiler can analyze rather than unknown. Below 50% falsifies the thesis.
 This experiment is only a footprint extractor plus classifier — no runtime,
-no storage engine. The footprint categories, corpus, and extraction rules
-are defined in `docs/experiments.md`, section "E1".
+no storage engine. The footprint categories are defined in
+`docs/experiments.md`, section "E1"; the corpus and extraction rules are
+#2's frozen deliverable under that section's freeze protocol.
 
 **E2 — parallel evaluation of ordered transactions (issue #3).** Hypothesis:
 at least 3× throughput on 16 cores, against an optimized serial-batching
 baseline with identical per-call outcomes, for at least three useful
-class-3 transaction families, at batch sizes 1–256. The frozen family
-semantics, summary-size and cost bounds, baseline, and aggregation rule are
-defined in `docs/experiments.md`, section "E2".
+class-3 transaction families, at batch sizes 1–256. The summary-size and
+cost bounds, baseline, and aggregation rule are defined in
+`docs/experiments.md`, section "E2"; each family's frozen semantics is #3's
+deliverable under that section's freeze protocol.
 
 **E3 — automatic synthesis and checking of transaction summaries** (new;
 opens its own board item when this document lands). Hypothesis: a fixed
 rule library automatically admits at least 4 of 6 preregistered transaction
 families within ten minutes each, without hand-written per-family batch
 procedures, and correctly rejects semantic mutants of every family it
-admits. The frozen grammar, the six families, the gate, and the
-mutant-rejection check are defined in `docs/experiments.md`, section "E3".
+admits. The gate and the mutant-rejection check are defined in
+`docs/experiments.md`, section "E3"; the grammar and the six families are
+that item's deliverable under the same freeze protocol.
 
 ## 15. Prior art, confidence, and the closest collisions
 
@@ -841,17 +840,19 @@ hot spot); it does not remove the *dynamic* serialization strict 2PL
 imposes once two live batches actually conflict, and this document does
 not claim otherwise.
 
-**The narrowed candidate contribution.** What remains, after the collisions
-named above, is **checked synthesis of compact ordered transaction
-summaries (§3.3, tested by E2 and E3) plus *parametric* per-call footprint
-derivation, typed reservations, and ordered batch summaries under one
-logical-resource protocol, measured on real code rather than argued only by
-a correctness proof (§3, tested by E1)** — not the full six-part
-combination surveyed above, and not a claim that invariant-driven
-coordination itself is novel. Confidence in this narrowed claim is no
-higher than
-`notes/static_analysis_deterministic_scheduling.md`'s own phrase for it:
-plausible, not exhaustively proven. The sharpest named collision for the
+**The narrowed candidate contribution** — what remains after the
+collisions named above — is checked synthesis of compact ordered
+transaction summaries (§3.3, tested by E2 and E3) plus *parametric*
+per-call footprint derivation, typed reservations, and ordered batch
+summaries under one logical-resource protocol, measured on real code
+rather than argued only by a correctness proof (§3): not the full six-part
+combination surveyed above, not a claim that invariant-driven coordination
+itself is novel, and no higher confidence than
+`notes/static_analysis_deterministic_scheduling.md`'s own phrase for it —
+plausible, not exhaustively proven — since the evidence map above states
+exactly what E1, E2, and E3 each measure, and that none measures this
+integrated protocol, individually or combined. The sharpest named
+collision for the
 riskiest part of it (class 3, §3.3, E2/E3) is **TransactionMerger**
 (submitted January 2026): it already merges contended transactions and
 reconstructs per-caller results including allocated IDs, but its merged
