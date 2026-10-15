@@ -1,0 +1,13 @@
+--- Kernel.tla
++++ Kernel.tla
+@@ -422,9 +422,7 @@
+   /\ resp' = [resp EXCEPT ![t] = <<>>]
+   /\ held' = [held EXCEPT ![t] = {}]
+   /\ reserved' = [reserved EXCEPT ![t] = NoReservation]
+-  /\ wr' = [wr EXCEPT ![t] = NoWrites]
+-  /\ draws' = [draws EXCEPT ![t] = NoDraws]
+-  /\ UNCHANGED db
++  /\ UNCHANGED <<wr, draws, db>>
+ 
+ (* Commit applies the tentative writes and draws atomically - the view
+    becomes the committed state - and releases every resource and the

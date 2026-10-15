@@ -1,10 +1,10 @@
 TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
 Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 0 and seed 8444157072342069423 with 1 worker on 12 cores with 15518MB heap and 64MB offheap memory [pid: 3951283] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
-Starting... (2026-10-15 23:47:12)
+Running breadth-first search Model-Checking with fp 0 and seed 9015025231276271689 with 1 worker on 12 cores with 15518MB heap and 64MB offheap memory [pid: 46730] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-10-16 00:12:24)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-15 23:47:12.
+Finished computing initial states: 1 distinct state generated at 2026-10-16 00:12:24.
 Error: Invariant Serializable is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
@@ -14,6 +14,7 @@ State 1: <Initial predicate>
 /\ db = << [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0],
    [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0],
    [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >>
+/\ widened = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ reserved = [t1 |-> <<0, 0, 0>>, t2 |-> <<0, 0, 0>>, t3 |-> <<0, 0, 0>>]
 /\ draws = [ t1 |->
       << [val |-> 0, bal |-> 0],
@@ -31,13 +32,14 @@ State 1: <Initial predicate>
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 2: <Dispatch line 334, col 3 to line 336, col 66 of module Kernel>
+State 2: <Dispatch line 354, col 3 to line 356, col 75 of module Kernel>
 /\ seq = [t1 |-> 1, t2 |-> 0, t3 |-> 0]
 /\ resp = [t1 |-> <<>>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ db = << [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0],
    [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0],
    [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >>
+/\ widened = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ reserved = [t1 |-> <<0, 0, 0>>, t2 |-> <<0, 0, 0>>, t3 |-> <<0, 0, 0>>]
 /\ draws = [ t1 |->
       << [val |-> 0, bal |-> 0],
@@ -55,13 +57,14 @@ State 2: <Dispatch line 334, col 3 to line 336, col 66 of module Kernel>
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 3: <Acquire line 346, col 3 to line 354, col 42 of module Kernel>
+State 3: <Acquire line 367, col 3 to line 375, col 51 of module Kernel>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ resp = [t1 |-> <<>>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ db = << [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0],
    [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0],
    [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >>
+/\ widened = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ reserved = [t1 |-> <<0, 0, 0>>, t2 |-> <<0, 0, 0>>, t3 |-> <<0, 0, 0>>]
 /\ draws = [ t1 |->
       << [val |-> 0, bal |-> 0],
@@ -81,13 +84,14 @@ State 3: <Acquire line 346, col 3 to line 354, col 42 of module Kernel>
   t3 |-> {} ]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 4: <DoOp line 362, col 3 to line 384, col 26 of module Kernel>
+State 4: <DoOp line 387, col 3 to line 410, col 35 of module Kernel>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ resp = [t1 |-> <<"ok">>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 1, t2 |-> 0, t3 |-> 0]
 /\ db = << [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0],
    [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0],
    [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >>
+/\ widened = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ reserved = [t1 |-> <<0, 0, 0>>, t2 |-> <<0, 0, 0>>, t3 |-> <<0, 0, 0>>]
 /\ draws = [ t1 |->
       << [val |-> 0, bal |-> 0],
@@ -109,13 +113,14 @@ State 4: <DoOp line 362, col 3 to line 384, col 26 of module Kernel>
   t2 |-> << >>,
   t3 |-> << >> ]
 
-State 5: <Dispatch line 334, col 3 to line 336, col 66 of module Kernel>
+State 5: <Dispatch line 354, col 3 to line 356, col 75 of module Kernel>
 /\ seq = [t1 |-> 0, t2 |-> 1, t3 |-> 0]
 /\ resp = [t1 |-> <<"ok">>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 1, t2 |-> 0, t3 |-> 0]
 /\ db = << [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0],
    [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0],
    [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >>
+/\ widened = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ reserved = [t1 |-> <<0, 0, 0>>, t2 |-> <<0, 0, 0>>, t3 |-> <<0, 0, 0>>]
 /\ draws = [ t1 |->
       << [val |-> 0, bal |-> 0],
@@ -137,13 +142,14 @@ State 5: <Dispatch line 334, col 3 to line 336, col 66 of module Kernel>
   t2 |-> << >>,
   t3 |-> << >> ]
 
-State 6: <Acquire line 346, col 3 to line 354, col 42 of module Kernel>
+State 6: <Acquire line 367, col 3 to line 375, col 51 of module Kernel>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ resp = [t1 |-> <<"ok">>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 1, t2 |-> 0, t3 |-> 0]
 /\ db = << [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0],
    [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0],
    [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >>
+/\ widened = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ reserved = [t1 |-> <<0, 0, 0>>, t2 |-> <<0, 0, 0>>, t3 |-> <<0, 0, 0>>]
 /\ draws = [ t1 |->
       << [val |-> 0, bal |-> 0],
@@ -165,13 +171,14 @@ State 6: <Acquire line 346, col 3 to line 354, col 42 of module Kernel>
   t2 |-> << >>,
   t3 |-> << >> ]
 
-State 7: <DoOp line 362, col 3 to line 384, col 26 of module Kernel>
+State 7: <DoOp line 387, col 3 to line 410, col 35 of module Kernel>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ resp = [t1 |-> <<"ok">>, t2 |-> <<"exists">>, t3 |-> <<>>]
 /\ pc = [t1 |-> 1, t2 |-> 1, t3 |-> 0]
 /\ db = << [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0],
    [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0],
    [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >>
+/\ widened = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ reserved = [t1 |-> <<0, 0, 0>>, t2 |-> <<0, 0, 0>>, t3 |-> <<0, 0, 0>>]
 /\ draws = [ t1 |->
       << [val |-> 0, bal |-> 0],
@@ -196,4 +203,4 @@ State 7: <DoOp line 362, col 3 to line 384, col 26 of module Kernel>
 118 states generated, 72 distinct states found, 22 states left on queue.
 The depth of the complete state graph search is 7.
 The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 3 and the 95th percentile is 3).
-Finished in 00s at (2026-10-15 23:47:12)
+Finished in 00s at (2026-10-16 00:12:24)
