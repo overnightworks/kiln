@@ -224,9 +224,13 @@ for any deadlock-free protocol, bypass included: every transaction ends once
 nothing blocks the last one. So the `Starvation` scenario closes the cycle:
 `RepeatSpec` adds `Rearrive`, by which a finished transaction requests its
 program again, so a transaction that is overtaken forever is a lasso. Its
-history is unbounded, so it checks no `Serializable` and no `Uniqueness`
-(both compare a history with `InitDb`); `TypeOK` and the other state
-invariants are checked. The `NoBypass` mutant drops `OlderQueued` from
+history is unbounded, and `Rearrive` resets the transaction histories
+that `Serializable` and `Uniqueness` read (`Serializable` compares a
+history with `InitDb`, `Uniqueness` counts the retained committed
+insert and delete responses), so these history-based checks do not suit
+repeated executions and `Starvation` checks neither. Rearrival leaves a
+transaction pending and undispatched; only the next `Dispatch` queues it
+and starts the `RequestedLeadsToTerminal` obligation. The `NoBypass` mutant drops `OlderQueued` from
 `WaitsOn` (rule 3) and TLC returns the lasso: t1 is admitted, commits and
 requests again, over and over, while t3, queued since before t1's second
 request, is admitted in no state of the loop.
@@ -248,9 +252,16 @@ beyond those bounds.
 ## Scenarios and results
 
 For every scenario TLC explores the whole state space against every
-property above and the deadlock check; every scenario passes with no
-violation and no deadlock, each run in under one second with 4 workers;
-each also passes `RequestedLeadsToTerminal` under `Fairness`.
+invariant its configuration lists and the deadlock check; every scenario
+passes with no violation and no deadlock, each run in under one second
+with 4 workers. Each scenario also passes `RequestedLeadsToTerminal`
+under `Fairness`. `Starvation` (under `RepeatSpec`) checks `TypeOK`,
+`MutualExclusion`, `FootprintCovers`, `ReservationsFunded`,
+`DrawsWithinReservation`, `NoWaitCycle`, `ReferentialIntegrity`,
+`BalanceNonNegative` and `RequestedLeadsToTerminal`; it is exempt from
+`Serializable` and `Uniqueness` because `Rearrive` resets the histories
+they read. Every other scenario checks `Serializable` and `Uniqueness`
+too.
 Depth is the length of the longest shortest path (breadth-first).
 
 | Scenario | What runs | Distinct states | Depth | Log |

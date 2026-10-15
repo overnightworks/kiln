@@ -407,8 +407,11 @@ Next ==
 (* Rearrival: a finished transaction requests its program again, from
    a clean slate; the committed rows stay. Only the repeated-arrival
    scenarios (`RepeatSpec`) take this step: the cycle it closes is what
-   lets a lasso starve a request. `Serializable` compares a whole
-   history with `InitDb`, so those scenarios do not check it. *)
+   lets a lasso starve a request. The step only makes the transaction
+   pending again; the request starts with the next `Dispatch`.
+   Rearrival resets the transaction histories, which `Serializable` and
+   `Uniqueness` read, so those history-based checks do not apply to
+   repeated executions and those scenarios do not check them. *)
 Rearrive(t) ==
   /\ ~Live(t)
   /\ status' = [status EXCEPT ![t] = "pending"]
@@ -500,7 +503,8 @@ BalanceNonNegative == \A k \in Keys : db[k].bal >= 0
 
 (* Liveness (concept §9.5): every request ends, committed or rejected,
    under the fairness of `Spec`. After a `Rearrive` the transaction is
-   queued again, so a repeated request is a new request. *)
+   pending and undispatched; the obligation starts with the later
+   `Dispatch`, so a repeated request is a new request. *)
 RequestedLeadsToTerminal == \A t \in Txns : Queued(t) ~> ~Live(t)
 
 ============================================================================
