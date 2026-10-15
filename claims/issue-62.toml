@@ -1,0 +1,8 @@
+claim_id = "2464e4b5229e4bc79b88dbfbbd6369c6"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "27535cfcb237cb413ecb6cce595b32b8fc46b398"
+branch = "claude/issue-62-kiln-ir-module-split"
+scope = ["crates/kiln-ir"]
+opened_commit = "354299aa594ffaaaf2db57e2438a6fb2d1cf9a42"
+whole_reason = "a pure module split of one crate"
