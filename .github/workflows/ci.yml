@@ -48,3 +48,5 @@ jobs:
         with:
           args: --offline --no-progress './**/*.md'
           fail: true
+          # A checkout without Markdown links (e.g. just the aco config) must not fail.
+          failIfEmpty: false
