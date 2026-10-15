@@ -86,6 +86,39 @@ pub struct UpdateParams {
     pub id: u64,
 }
 
+/// Workload C's collision fallback (protocol §2, §5): protocol §5
+/// forbids PRNG work inside the timed window, but the redraw is only
+/// known to be needed once the primary `INSERT`, inside that window,
+/// reports a collision. [`prepare_insert_fallback`] draws it ahead of
+/// time, from a *clone* of the attempt's RNG, so the real stream
+/// advances only if the fallback is actually used —
+/// [`commit`](Self::commit) adopts the clone's post-draw state into it;
+/// dropped unused (no collision), `rng` is left exactly as if the
+/// fallback had never been drawn.
+pub struct InsertFallback<R> {
+    pub email: String,
+    advanced: R,
+}
+
+impl<R> InsertFallback<R> {
+    /// Adopts the clone's post-draw state into `rng`, since the
+    /// fallback was actually used to commit a row.
+    pub fn commit(self, rng: &mut R) {
+        *rng = self.advanced;
+    }
+}
+
+/// Clones `rng` and draws the fallback email from the clone alone, never
+/// advancing `rng` itself — see [`InsertFallback`].
+pub fn prepare_insert_fallback<R: Rng + Clone>(
+    rng: &R,
+    repetition_counter: u64,
+) -> InsertFallback<R> {
+    let mut advanced = rng.clone();
+    let email = inserted_email(&mut advanced, repetition_counter);
+    InsertFallback { email, advanced }
+}
+
 /// Workload C's per-operation parameters before any collision redraw
 /// (protocol §2): `id` is deterministic (the growing counter), `email`
 /// is this generator's first draw — the execution layer redraws `email`
@@ -181,46 +214,98 @@ mod tests {
         assert!(trace.iter().all(|p| (1..=37).contains(&p.id)));
     }
 
-    /// Pins workload A's trace against draws computed independently of
-    /// [`uniform_in_range`] — a fresh `ChaCha8Rng` seeded exactly as
-    /// protocol §2.1 specifies, reduced by the same `1 + next_u64() %
-    /// span` arithmetic written out here rather than called — so a
-    /// future change to either the seed formula or the generator is
-    /// caught even though the two sides never call the same function.
-    #[test]
-    fn point_read_trace_matches_independently_computed_draws() {
-        let seed = seed_for(0, 0);
-        let row_count = 37u64;
-        let mut reference_rng = ChaCha8Rng::seed_from_u64(seed);
-        let expected: Vec<u64> = (0..5)
-            .map(|_| 1 + reference_rng.next_u64() % row_count)
-            .collect();
+    /// Frozen golden traces for workloads A/B/C/D: literal values, not
+    /// recomputed at test time by a second implementation of the seed
+    /// formula or the modulo arithmetic — the gap review finding #9
+    /// named ("the new trace tests recompute expectations using the
+    /// same PRNG, production `seed_for`, and duplicated modulo
+    /// algorithm... not frozen, independently established traces").
+    ///
+    /// Produced once: a throwaway `#[ignore]`d test called
+    /// `point_read_trace`/`point_update_trace`/`insert_trace`/
+    /// `transfer_trace` directly against the seeds and sizes below and
+    /// printed the result with `--nocapture`, run against `rand_chacha`
+    /// 0.10.0 (the version `Cargo.lock` pins) on 2026-10-15; the printed
+    /// values were copied here verbatim and the throwaway test deleted.
+    /// A future change to the seed formula, the PRNG, or a generator's
+    /// arithmetic must change these literals by hand, deliberately, not
+    /// make the test pass by recomputing alongside it.
+    mod golden {
+        use super::*;
 
-        let trace = point_read_trace(seed, row_count, 5);
-        let actual: Vec<u64> = trace.iter().map(|p| p.id).collect();
-        assert_eq!(actual, expected);
-    }
+        const SEED_A: u64 = 424242;
+        const SEED_B: u64 = 424243;
+        const SEED_C: u64 = 424244;
+        const SEED_D: u64 = 424245;
+        const ROW_COUNT: u64 = 1000;
+        const N: usize = 10;
 
-    /// Pins workload D's sender/receiver draws the same independent way,
-    /// including the redraw-on-collision for the receiver.
-    #[test]
-    fn transfer_trace_matches_independently_computed_draws() {
-        let seed = seed_for(1, 0);
-        let row_count = 11u64;
-        let mut reference_rng = ChaCha8Rng::seed_from_u64(seed);
-        let mut expected = Vec::new();
-        for _ in 0..5 {
-            let sender = 1 + reference_rng.next_u64() % row_count;
-            let mut receiver = 1 + reference_rng.next_u64() % row_count;
-            while receiver == sender {
-                receiver = 1 + reference_rng.next_u64() % row_count;
-            }
-            expected.push((sender, receiver));
+        const EXPECTED_A_IDS: [u64; N] = [845, 223, 410, 920, 392, 896, 688, 321, 548, 732];
+        const EXPECTED_B_IDS: [u64; N] = [690, 285, 355, 971, 861, 768, 838, 215, 634, 323];
+        const EXPECTED_C: [(u64, &str); N] = [
+            (1001, "2a99d71e1cac944a-1"),
+            (1002, "7d186a203adba3fc-2"),
+            (1003, "cf0bc8141eb2a5ec-3"),
+            (1004, "e7192d5c027e119c-4"),
+            (1005, "dee8bb0d6d7de4a8-5"),
+            (1006, "842379b8711c744b-6"),
+            (1007, "2d3d78c4ab866370-7"),
+            (1008, "9d3449931fa47996-8"),
+            (1009, "92cadffd5feec7d1-9"),
+            (1010, "81993d19856ac9dd-10"),
+        ];
+        const EXPECTED_D: [(u64, u64); N] = [
+            (984, 827),
+            (31, 212),
+            (536, 921),
+            (649, 568),
+            (836, 673),
+            (101, 408),
+            (266, 821),
+            (480, 881),
+            (801, 784),
+            (750, 657),
+        ];
+
+        #[test]
+        fn point_read_matches_the_frozen_trace() {
+            let actual: Vec<u64> = point_read_trace(SEED_A, ROW_COUNT, N)
+                .iter()
+                .map(|p| p.id)
+                .collect();
+            assert_eq!(actual, EXPECTED_A_IDS);
         }
 
-        let trace = transfer_trace(seed, row_count, 5);
-        let actual: Vec<(u64, u64)> = trace.iter().map(|p| (p.sender, p.receiver)).collect();
-        assert_eq!(actual, expected);
+        #[test]
+        fn point_update_matches_the_frozen_trace() {
+            let actual: Vec<u64> = point_update_trace(SEED_B, ROW_COUNT, N)
+                .iter()
+                .map(|p| p.id)
+                .collect();
+            assert_eq!(actual, EXPECTED_B_IDS);
+        }
+
+        #[test]
+        fn insert_matches_the_frozen_trace() {
+            let actual: Vec<(u64, String)> = insert_trace(SEED_C, ROW_COUNT, N)
+                .iter()
+                .map(|p| (p.id, p.email.clone()))
+                .collect();
+            let expected: Vec<(u64, String)> = EXPECTED_C
+                .iter()
+                .map(|(id, email)| (*id, email.to_string()))
+                .collect();
+            assert_eq!(actual, expected);
+        }
+
+        #[test]
+        fn transfer_matches_the_frozen_trace() {
+            let actual: Vec<(u64, u64)> = transfer_trace(SEED_D, ROW_COUNT, N)
+                .iter()
+                .map(|p| (p.sender, p.receiver))
+                .collect();
+            assert_eq!(actual, EXPECTED_D);
+        }
     }
 
     #[test]

@@ -12,7 +12,6 @@
 //! pointer instead of the private struct they expect, corrupting memory
 //! the moment one dereferenced it.
 
-use std::cell::Cell;
 use std::ffi::{CStr, c_int, c_void};
 use std::mem::size_of;
 use std::ptr;
@@ -471,54 +470,27 @@ pub enum TimingError<E> {
     Measurement(InconsistentTiming),
 }
 
-/// Accumulates durations an operation explicitly excludes from `wall` —
-/// work that is the call's own input (PRNG draws, key formatting, §5),
-/// not SQLite's, but that cannot be done before the window opens because
-/// it is only known to be needed partway through the transaction (e.g.
-/// workload C's collision redraw, protocol §2). [`time_operation`]
-/// subtracts the total from the measured elapsed time.
-pub struct Excluded(Cell<Duration>);
-
-impl Excluded {
-    pub fn new() -> Self {
-        Excluded(Cell::new(Duration::ZERO))
-    }
-
-    /// Runs `f`, timing it, and adds that duration to the excluded total.
-    pub fn exclude<T>(&self, f: impl FnOnce() -> T) -> T {
-        let start = Instant::now();
-        let value = f();
-        self.0.set(self.0.get() + start.elapsed());
-        value
-    }
-
-    fn total(&self) -> Duration {
-        self.0.get()
-    }
-}
-
-impl Default for Excluded {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Times one operation end to end: resets the shim counters, runs `op`,
 /// and reports the wall/xsync/xwrite/remainder/cpu split (protocol §5).
-/// `op` receives an [`Excluded`] handle for any sub-interval that must
-/// not count toward `wall` even though it cannot run before this
-/// function is called; everything else — bind, step, reset, materializing
-/// a `SELECT`'s rows — is SQLite's own work and stays timed.
+/// `wall` is the `CLOCK_MONOTONIC` delta from just before `op` is called
+/// to just after it returns, exactly — no sub-interval is excluded from
+/// it, because `op` must itself contain no PRNG draws or other
+/// non-SQLite work (protocol §5: "PRNG draws/key formatting happen
+/// before this window opens"; workload C's collision fallback is drawn
+/// ahead of time by `generators::prepare_insert_fallback` for exactly
+/// this reason). Everything `op` does — bind, step, materializing a
+/// `SELECT`'s rows — is SQLite's own work and stays timed; `op` must
+/// return the instant its last statement's `step` returns (protocol §5:
+/// workloads.rs's `TransactionStatements::end_operation` resets `COMMIT`
+/// only after this function has already returned).
 pub fn time_operation<T, E>(
-    op: impl FnOnce(&Excluded) -> Result<T, E>,
+    op: impl FnOnce() -> Result<T, E>,
 ) -> Result<(T, OperationTiming), TimingError<E>> {
     counters::reset();
-    let excluded = Excluded::new();
     let cpu_start = thread_cpu_time();
     let start = Instant::now();
-    let value = op(&excluded).map_err(TimingError::Operation)?;
-    let elapsed = start.elapsed();
-    let wall = elapsed.saturating_sub(excluded.total());
+    let value = op().map_err(TimingError::Operation)?;
+    let wall = start.elapsed();
     let cpu = thread_cpu_time().saturating_sub(cpu_start);
     let snapshot = counters::snapshot();
     let timing = OperationTiming::from_measurements(wall, cpu, &snapshot)
@@ -564,7 +536,7 @@ mod tests {
             .unwrap();
         conn.execute_batch("CREATE TABLE t (x INTEGER);").unwrap();
 
-        let (_, timing) = time_operation(|_excluded| -> rusqlite::Result<()> {
+        let (_, timing) = time_operation(|| -> rusqlite::Result<()> {
             conn.execute_batch("BEGIN IMMEDIATE; INSERT INTO t (x) VALUES (1); COMMIT;")
         })
         .unwrap();
@@ -593,7 +565,7 @@ mod tests {
         // shim's counters are process-wide globals (see above).
         // `time_operation` resets the counters itself, so no manual
         // reset is needed between scenarios.
-        let (_, ordinary_commit) = time_operation(|_excluded| -> rusqlite::Result<()> {
+        let (_, ordinary_commit) = time_operation(|| -> rusqlite::Result<()> {
             conn.execute_batch("BEGIN IMMEDIATE; INSERT INTO t (x) VALUES (2); COMMIT;")
         })
         .unwrap();
@@ -615,7 +587,7 @@ mod tests {
             after_ordinary_commit.xsync_duration()
         );
 
-        let (_, _checkpoint_timing) = time_operation(|_excluded| -> rusqlite::Result<()> {
+        let (_, _checkpoint_timing) = time_operation(|| -> rusqlite::Result<()> {
             conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
         })
         .unwrap();

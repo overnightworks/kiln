@@ -63,6 +63,38 @@ impl From<io::Error> for CheckpointError {
     }
 }
 
+/// Why [`save_pristine`] refused to proceed: the WAL beside `db_path` was
+/// not empty. The pristine snapshot is only ever meant to be the
+/// fully-checkpointed state [`checkpoint_truncate`] establishes
+/// (protocol §2.1); copying a nonempty WAL would freeze a snapshot with
+/// outstanding, uncheckpointed frames instead, defeating the restore
+/// boundary every repetition depends on.
+#[derive(Debug)]
+pub enum PristineSaveError {
+    NonemptyWal,
+    Io(io::Error),
+}
+
+impl fmt::Display for PristineSaveError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PristineSaveError::NonemptyWal => write!(
+                f,
+                "refusing to save a pristine snapshot: the WAL file is not empty"
+            ),
+            PristineSaveError::Io(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl std::error::Error for PristineSaveError {}
+
+impl From<io::Error> for PristineSaveError {
+    fn from(err: io::Error) -> Self {
+        PristineSaveError::Io(err)
+    }
+}
+
 /// Whether `PRAGMA wal_checkpoint(TRUNCATE)`'s first returned column
 /// reports the checkpoint blocked
 /// (https://www.sqlite.org/pragma.html#pragma_wal_checkpoint). A pure
@@ -121,8 +153,19 @@ fn pristine_wal(pristine_dir: &Path) -> PathBuf {
 /// [`checkpoint_truncate`]) into `pristine_dir`, creating it if needed.
 /// A missing WAL file is treated as already empty, not an error — a
 /// checkpoint that fully truncates it may remove the file rather than
-/// leave a zero-byte one, depending on the filesystem.
-pub fn save_pristine(db_path: &Path, wal_path: &Path, pristine_dir: &Path) -> io::Result<()> {
+/// leave a zero-byte one, depending on the filesystem. Refuses — before
+/// creating `pristine_dir` or copying anything — to save a nonempty WAL
+/// (see [`PristineSaveError::NonemptyWal`]): the pristine snapshot's own
+/// save boundary must hold even if a caller skips
+/// [`checkpoint_truncate`] or it silently left frames behind.
+pub fn save_pristine(
+    db_path: &Path,
+    wal_path: &Path,
+    pristine_dir: &Path,
+) -> Result<(), PristineSaveError> {
+    if !wal_is_empty_or_absent(wal_path)? {
+        return Err(PristineSaveError::NonemptyWal);
+    }
     fs::create_dir_all(pristine_dir)?;
     fs::copy(db_path, pristine_main(pristine_dir))?;
     if wal_path.exists() {
@@ -153,7 +196,10 @@ mod tests {
         let pristine_dir = dir.path().join("pristine");
 
         fs::write(&db_path, b"pristine database bytes").unwrap();
-        fs::write(&wal_path, b"pristine wal bytes").unwrap();
+        // A real pristine snapshot's WAL is always empty by the time
+        // save_pristine runs (it only follows a successful TRUNCATE
+        // checkpoint, protocol §2.1).
+        fs::write(&wal_path, b"").unwrap();
         save_pristine(&db_path, &wal_path, &pristine_dir).unwrap();
 
         // An attempt mutates both files...
@@ -163,7 +209,26 @@ mod tests {
         // ...and restoring brings them back byte-for-byte.
         restore_pristine(&pristine_dir, &db_path, &wal_path).unwrap();
         assert_eq!(fs::read(&db_path).unwrap(), b"pristine database bytes");
-        assert_eq!(fs::read(&wal_path).unwrap(), b"pristine wal bytes");
+        assert_eq!(fs::read(&wal_path).unwrap(), b"");
+    }
+
+    #[test]
+    fn save_pristine_refuses_a_nonempty_wal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("main.db");
+        let wal_path = dir.path().join("main.db-wal");
+        let pristine_dir = dir.path().join("pristine");
+
+        fs::write(&db_path, b"not actually checkpointed").unwrap();
+        fs::write(&wal_path, b"still has outstanding frames").unwrap();
+
+        let result = save_pristine(&db_path, &wal_path, &pristine_dir);
+
+        assert!(matches!(result, Err(PristineSaveError::NonemptyWal)));
+        assert!(
+            !pristine_dir.exists(),
+            "a refused save must not leave a partial pristine snapshot behind"
+        );
     }
 
     #[test]

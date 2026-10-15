@@ -291,24 +291,13 @@ mod tests {
         assert!(matches!(result, CheckResult::Fail(msg) if msg.contains("CFLAGS")));
     }
 
-    #[test]
-    fn build_env_detects_a_present_value_that_is_not_valid_utf8() {
-        // `std::env::var(...).ok()` would collapse this to `None` (an
-        // unset-looking Err(NotUnicode)); `var_os` still reports it set.
-        #[cfg(unix)]
-        {
-            use std::os::unix::ffi::OsStringExt;
-            let non_utf8 = std::ffi::OsString::from_vec(vec![0xFF, 0xFE]);
-            let offenders = build_env_offenders(|name| {
-                if name == "LIBSQLITE3_FLAGS" {
-                    Some(non_utf8.clone())
-                } else {
-                    None
-                }
-            });
-            assert_eq!(offenders, vec!["LIBSQLITE3_FLAGS".to_string()]);
-        }
-    }
+    // A present-but-not-valid-UTF-8 value's detection is pinned against
+    // the real `std::env::var_os`-based reader `run_real` actually uses,
+    // not an injected closure — see
+    // `tests/preflight_environment.rs`'s
+    // `preflight_reports_a_present_non_utf8_libsqlite3_flags_as_an_offending_build_env_var`,
+    // which drives the real `preflight` binary with the variable set
+    // only on that child process.
 
     #[test]
     fn cpu_siblings_passes_for_the_pinned_pair_in_either_order() {

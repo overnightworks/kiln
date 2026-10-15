@@ -8,11 +8,13 @@
 //! through a one-off `execute_batch`, not a cached statement — protocol
 //! §2).
 
-use rand_chacha::rand_core::Rng;
+use std::ffi::{CStr, c_int};
+use std::ptr;
+
+use libsqlite3_sys as ffi;
 use rusqlite::{Connection, Error as SqlError, ErrorCode, Statement};
 
 use crate::generators::{self, InsertParams, ReadParams, TransferParams, UpdateParams};
-use crate::vfs::Excluded;
 
 /// Protocol §2's schema, verbatim.
 pub const SCHEMA_SQL: &str = "
@@ -145,6 +147,127 @@ fn is_constraint_violation(err: &SqlError) -> bool {
     )
 }
 
+/// Builds a [`rusqlite::Error::SqliteFailure`] from a raw result code and
+/// the connection's current error message — the same information
+/// `rusqlite`'s own statement methods attach, assembled by hand because
+/// [`RawCommitStatement`] bypasses them.
+fn sqlite_error(db: *mut ffi::sqlite3, rc: c_int) -> rusqlite::Error {
+    // SAFETY: `db` is a live connection handle for the whole call; a null
+    // `sqlite3_errmsg` result (no error recorded) is handled below rather
+    // than assumed non-null.
+    let message = unsafe {
+        let msg = ffi::sqlite3_errmsg(db);
+        if msg.is_null() {
+            None
+        } else {
+            Some(CStr::from_ptr(msg).to_string_lossy().into_owned())
+        }
+    };
+    rusqlite::Error::SqliteFailure(ffi::Error::new(rc), message)
+}
+
+/// `COMMIT`, prepared and stepped through direct FFI calls rather than
+/// [`rusqlite::Statement::execute`]/`raw_execute`: both funnel into
+/// `rusqlite`'s shared `execute_with_bound_parameters` (0.40.2), which
+/// always steps, resets, and reads `sqlite3_changes()` in one call —
+/// `rusqlite` exposes no public way to split them. Protocol §5's timed
+/// window must end the instant `COMMIT`'s step returns, so [`step`] does
+/// only that; [`reset`] runs separately, after the window has closed,
+/// via [`TransactionStatements::end_operation`].
+///
+/// [`step`]: RawCommitStatement::step
+/// [`reset`]: RawCommitStatement::reset
+struct RawCommitStatement {
+    stmt: *mut ffi::sqlite3_stmt,
+    // Counts `reset` calls for the window-boundary test below.
+    // `sqlite3_stmt_busy` cannot stand in for this: it already reports
+    // "not busy" the instant `step` returns `SQLITE_DONE`, reset or not
+    // (https://www.sqlite.org/c3ref/stmt_busy.html), so only this
+    // self-instrumented counter can show reset has not run yet.
+    #[cfg(test)]
+    reset_calls: std::cell::Cell<u32>,
+}
+
+impl RawCommitStatement {
+    /// Prepares `COMMIT` against `conn`'s raw handle. The returned value
+    /// must not outlive `conn` — enforced by [`TransactionStatements`]
+    /// never constructing one outside its own `'conn`-bound fields.
+    fn prepare(conn: &Connection) -> rusqlite::Result<Self> {
+        let mut stmt: *mut ffi::sqlite3_stmt = ptr::null_mut();
+        // SAFETY: `conn.handle()` is valid for this call; `c"COMMIT"` is
+        // nul-terminated; `stmt`/`ptr::null_mut()` (no tail pointer
+        // needed, one statement per string) are valid out-parameters.
+        let rc = unsafe {
+            ffi::sqlite3_prepare_v2(
+                conn.handle(),
+                c"COMMIT".as_ptr(),
+                -1,
+                &mut stmt,
+                ptr::null_mut(),
+            )
+        };
+        if rc != ffi::SQLITE_OK {
+            // SAFETY: `conn.handle()` is valid for this call.
+            return Err(sqlite_error(unsafe { conn.handle() }, rc));
+        }
+        Ok(Self {
+            stmt,
+            #[cfg(test)]
+            reset_calls: std::cell::Cell::new(0),
+        })
+    }
+
+    /// Steps `COMMIT` to completion and returns immediately — the
+    /// caller's measured window must end here (protocol §5): nothing
+    /// this call's return triggers, including [`reset`](Self::reset),
+    /// may run before the caller has already stopped timing.
+    fn step(&mut self) -> rusqlite::Result<()> {
+        // SAFETY: `self.stmt` is a live statement from `prepare`, not yet
+        // finalized (finalization only happens in `Drop`).
+        match unsafe { ffi::sqlite3_step(self.stmt) } {
+            ffi::SQLITE_DONE => Ok(()),
+            rc => Err(self.error(rc)),
+        }
+    }
+
+    /// Resets `COMMIT` for its next run. Must only be called after the
+    /// timed window [`step`](Self::step) ended has already closed.
+    fn reset(&mut self) -> rusqlite::Result<()> {
+        #[cfg(test)]
+        self.reset_calls.set(self.reset_calls.get() + 1);
+        // SAFETY: see `step`.
+        match unsafe { ffi::sqlite3_reset(self.stmt) } {
+            ffi::SQLITE_OK => Ok(()),
+            rc => Err(self.error(rc)),
+        }
+    }
+
+    fn error(&self, rc: c_int) -> rusqlite::Error {
+        // SAFETY: `self.stmt` is live; `sqlite3_db_handle` never fails
+        // for a non-null statement.
+        let db = unsafe { ffi::sqlite3_db_handle(self.stmt) };
+        sqlite_error(db, rc)
+    }
+
+    /// How many times [`reset`](Self::reset) has actually run — the
+    /// instrumented boundary a test pins the window's end against: still
+    /// 0 right after [`step`](Self::step) returns, only becoming nonzero
+    /// once `reset` has actually been called.
+    #[cfg(test)]
+    fn reset_calls(&self) -> u32 {
+        self.reset_calls.get()
+    }
+}
+
+impl Drop for RawCommitStatement {
+    fn drop(&mut self) {
+        // SAFETY: `self.stmt` is live and owned exclusively by `self`.
+        unsafe {
+            ffi::sqlite3_finalize(self.stmt);
+        }
+    }
+}
+
 /// The `BEGIN`/`COMMIT` statements every workload shares (protocol §2:
 /// "it prepares the three BEGIN variants and COMMIT itself"), prepared
 /// once per connection and held for the run — one `COMMIT` statement
@@ -152,7 +275,7 @@ fn is_constraint_violation(err: &SqlError) -> bool {
 pub struct TransactionStatements<'conn> {
     begin_deferred: Statement<'conn>,
     begin_immediate: Statement<'conn>,
-    commit: Statement<'conn>,
+    commit: RawCommitStatement,
 }
 
 impl<'conn> TransactionStatements<'conn> {
@@ -160,8 +283,17 @@ impl<'conn> TransactionStatements<'conn> {
         Ok(Self {
             begin_deferred: conn.prepare("BEGIN DEFERRED")?,
             begin_immediate: conn.prepare("BEGIN IMMEDIATE")?,
-            commit: conn.prepare("COMMIT")?,
+            commit: RawCommitStatement::prepare(conn)?,
         })
+    }
+
+    /// Resets `COMMIT` so the next operation's `BEGIN` can run. Must be
+    /// called exactly once per completed operation, after the caller has
+    /// already obtained its [`crate::vfs::time_operation`] result —
+    /// protocol §5's timed window has closed by then, so the reset's own
+    /// (negligible but nonzero) cost is correctly excluded from it.
+    pub fn end_operation(&mut self) -> rusqlite::Result<()> {
+        self.commit.reset()
     }
 }
 
@@ -192,7 +324,7 @@ pub fn execute_point_read(
     let row = stmts.select.query_row([params.id as i64], |r| {
         Ok((r.get(0)?, r.get(1)?, r.get(2)?))
     })?;
-    txn.commit.execute(())?;
+    txn.commit.step()?;
     Ok(row)
 }
 
@@ -218,7 +350,7 @@ pub fn execute_point_update(
 ) -> rusqlite::Result<()> {
     txn.begin_immediate.execute(())?;
     stmts.update.execute([params.id as i64])?;
-    txn.commit.execute(())?;
+    txn.commit.step()?;
     Ok(())
 }
 
@@ -235,42 +367,51 @@ impl<'conn> InsertStatements<'conn> {
     }
 }
 
+/// Whether workload C's insert committed on the primary email or needed
+/// the precomputed collision fallback (protocol §2) — the signal the
+/// caller uses to decide whether to adopt
+/// [`generators::InsertFallback`]'s advanced RNG state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsertOutcome {
+    Committed,
+    CommittedWithFallback,
+}
+
 /// Workload C (protocol §2): `BEGIN IMMEDIATE; INSERT INTO accounts (id,
 /// email, balance) VALUES (?1, ?2, 0); COMMIT;`. On `SQLITE_CONSTRAINT`
-/// (an email collision), redraws the random component once from `rng`;
-/// a second collision propagates the constraint error — "a second
+/// (an email collision), retries once with `fallback_email`; a second
+/// collision propagates the constraint error unchanged — "a second
 /// collision aborts the run as a protocol violation." The collision is
-/// only known once the first `INSERT` has already run inside the timed
-/// transaction, so the redraw cannot happen before the window opens
-/// (protocol §5); `excluded` instead marks its PRNG draw and formatting
-/// as excluded from `wall` once it is known to be needed — the RNG still
-/// advances only on that conditional path, never on every operation.
+/// only known once the first `INSERT` has already run, inside the timed
+/// transaction, but protocol §5 forbids any PRNG work inside that
+/// window, so `fallback_email` must already be drawn —
+/// [`generators::prepare_insert_fallback`], before this function (and
+/// before `crate::vfs::time_operation`'s window around it) is even
+/// called.
 pub fn execute_insert(
     txn: &mut TransactionStatements<'_>,
     stmts: &mut InsertStatements<'_>,
     params: &InsertParams,
-    rng: &mut impl Rng,
-    repetition_counter: u64,
-    excluded: &Excluded,
-) -> rusqlite::Result<()> {
+    fallback_email: &str,
+) -> rusqlite::Result<InsertOutcome> {
     txn.begin_immediate.execute(())?;
-    let mut email = params.email.clone();
-    for attempt in 0..2 {
-        let outcome = stmts
-            .insert
-            .execute(rusqlite::params![params.id as i64, email]);
-        match outcome {
-            Ok(_) => {
-                txn.commit.execute(())?;
-                return Ok(());
-            }
-            Err(err) if attempt == 0 && is_constraint_violation(&err) => {
-                email = excluded.exclude(|| generators::inserted_email(rng, repetition_counter));
-            }
-            Err(err) => return Err(err),
+    let primary = stmts
+        .insert
+        .execute(rusqlite::params![params.id as i64, &params.email]);
+    match primary {
+        Ok(_) => {
+            txn.commit.step()?;
+            Ok(InsertOutcome::Committed)
         }
+        Err(err) if is_constraint_violation(&err) => {
+            stmts
+                .insert
+                .execute(rusqlite::params![params.id as i64, fallback_email])?;
+            txn.commit.step()?;
+            Ok(InsertOutcome::CommittedWithFallback)
+        }
+        Err(err) => Err(err),
     }
-    unreachable!("the loop above returns on its first or second attempt")
 }
 
 /// Workload D's own statements (protocol §2), prepared once and held.
@@ -315,7 +456,7 @@ pub fn execute_transfer(
         stmts.credit.raw_bind_parameter(3, params.receiver as i64)?;
         stmts.credit.raw_execute()?;
     }
-    txn.commit.execute(())?;
+    txn.commit.step()?;
     Ok(blocked)
 }
 
@@ -348,6 +489,8 @@ pub mod checks {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand_chacha::ChaCha8Rng;
+    use rand_chacha::rand_core::{Rng, SeedableRng};
     use rusqlite::StatementStatus;
 
     fn loaded_connection(row_count: u64) -> Connection {
@@ -383,6 +526,7 @@ mod tests {
 
         for id in 1..=5u64 {
             execute_point_read(&mut txn, &mut stmts, &ReadParams { id }).unwrap();
+            txn.end_operation().unwrap();
         }
 
         assert_eq!(
@@ -465,30 +609,33 @@ mod tests {
     }
 
     #[test]
-    fn insert_redraws_once_on_a_collision_and_commits_with_the_fallback_email() {
+    fn insert_falls_back_on_a_collision_and_commits_with_the_precomputed_email() {
         let conn = loaded_connection(5);
         let mut txn = TransactionStatements::prepare(&conn).unwrap();
         let mut stmts = InsertStatements::prepare(&conn).unwrap();
-        let excluded = Excluded::new();
 
-        // Force the first attempt's email to collide with row 1's.
+        // Force the primary attempt's email to collide with row 1's.
         let colliding_email = generators::initial_load_email(1);
         let params = InsertParams {
             id: 6,
             email: colliding_email.clone(),
         };
-        let mut rng = generators::rng_for_attempt(0, 0);
+        let rng = generators::rng_for_attempt(0, 0);
+        let fallback = generators::prepare_insert_fallback(&rng, 1);
 
-        execute_insert(&mut txn, &mut stmts, &params, &mut rng, 1, &excluded).unwrap();
+        let outcome = execute_insert(&mut txn, &mut stmts, &params, &fallback.email).unwrap();
+        txn.end_operation().unwrap();
 
+        assert_eq!(outcome, InsertOutcome::CommittedWithFallback);
         assert_eq!(checks::row_count(&conn).unwrap(), 6);
         let landed_email: String = conn
             .query_row("SELECT email FROM accounts WHERE id = 6", [], |r| r.get(0))
             .unwrap();
-        assert_ne!(
-            landed_email, colliding_email,
-            "the row must have landed with the redrawn fallback email, not the colliding one"
+        assert_eq!(
+            landed_email, fallback.email,
+            "the row must have landed with the precomputed fallback email, not the colliding one"
         );
+        assert_ne!(landed_email, colliding_email);
     }
 
     #[test]
@@ -496,19 +643,17 @@ mod tests {
         let conn = loaded_connection(2);
         let mut txn = TransactionStatements::prepare(&conn).unwrap();
         let mut stmts = InsertStatements::prepare(&conn).unwrap();
-        let excluded = Excluded::new();
 
         let colliding_email = generators::initial_load_email(1);
-        let mut rng = generators::rng_for_attempt(0, 0);
+        let rng = generators::rng_for_attempt(0, 0);
         let repetition_counter = 1;
+        let fallback = generators::prepare_insert_fallback(&rng, repetition_counter);
 
-        // Predict the exact fallback email the real call will redraw,
-        // from a cloned RNG at the same point in the stream, and
-        // pre-insert a row holding it — so the retry collides too.
-        let predicted_fallback = generators::inserted_email(&mut rng.clone(), repetition_counter);
+        // Pre-insert a row already holding the precomputed fallback
+        // email, so the retry collides too.
         conn.execute(
             "INSERT INTO accounts (id, email, balance) VALUES (?1, ?2, 0)",
-            rusqlite::params![999_i64, predicted_fallback],
+            rusqlite::params![999_i64, &fallback.email],
         )
         .unwrap();
         let row_count_before = checks::row_count(&conn).unwrap();
@@ -517,14 +662,7 @@ mod tests {
             id: 3,
             email: colliding_email,
         };
-        let result = execute_insert(
-            &mut txn,
-            &mut stmts,
-            &params,
-            &mut rng,
-            repetition_counter,
-            &excluded,
-        );
+        let result = execute_insert(&mut txn, &mut stmts, &params, &fallback.email);
 
         assert!(
             result.is_err(),
@@ -535,5 +673,179 @@ mod tests {
             row_count_before,
             "neither the primary nor the fallback attempt may have committed a row"
         );
+    }
+
+    #[test]
+    fn the_main_rng_advances_only_when_the_fallback_is_actually_used() {
+        let conn = loaded_connection(5);
+        let mut txn = TransactionStatements::prepare(&conn).unwrap();
+        let mut stmts = InsertStatements::prepare(&conn).unwrap();
+
+        let mut rng = generators::rng_for_attempt(0, 0);
+        let before_draw = rng.clone().next_u64();
+        let fallback = generators::prepare_insert_fallback(&rng, 1);
+
+        // A genuinely unique email: no collision, so the fallback must
+        // never be adopted.
+        let params = InsertParams {
+            id: 6,
+            email: "0000000000000000-unique-1".to_string(),
+        };
+        let outcome = execute_insert(&mut txn, &mut stmts, &params, &fallback.email).unwrap();
+        txn.end_operation().unwrap();
+
+        assert_eq!(outcome, InsertOutcome::Committed);
+        // `fallback` is dropped here without ever calling `commit`, so
+        // `rng`'s stream must be exactly as if the fallback had never
+        // been drawn.
+        assert_eq!(
+            rng.next_u64(),
+            before_draw,
+            "a non-colliding insert must leave the main RNG stream untouched"
+        );
+    }
+
+    #[test]
+    fn the_main_rng_adopts_the_fallback_s_advanced_state_once_committed() {
+        let conn = loaded_connection(5);
+        let mut txn = TransactionStatements::prepare(&conn).unwrap();
+        let mut stmts = InsertStatements::prepare(&conn).unwrap();
+
+        let mut rng = generators::rng_for_attempt(0, 0);
+        let colliding_email = generators::initial_load_email(1);
+        let params = InsertParams {
+            id: 6,
+            email: colliding_email,
+        };
+        let fallback = generators::prepare_insert_fallback(&rng, 1);
+        let expected_next = fallback_rng_lookahead(&rng, 1);
+
+        let outcome = execute_insert(&mut txn, &mut stmts, &params, &fallback.email).unwrap();
+        txn.end_operation().unwrap();
+        assert_eq!(outcome, InsertOutcome::CommittedWithFallback);
+
+        fallback.commit(&mut rng);
+
+        assert_eq!(
+            rng.next_u64(),
+            expected_next,
+            "committing the fallback must leave `rng` exactly where the clone that drew it ended up"
+        );
+    }
+
+    /// What `rng` would draw next *after* drawing one fallback email —
+    /// computed independently of [`generators::prepare_insert_fallback`]
+    /// itself, so the test above pins its contract rather than mirroring
+    /// its implementation.
+    fn fallback_rng_lookahead(rng: &ChaCha8Rng, repetition_counter: u64) -> u64 {
+        let mut clone = rng.clone();
+        generators::inserted_email(&mut clone, repetition_counter);
+        clone.next_u64()
+    }
+
+    #[test]
+    fn no_prng_call_happens_inside_insert_s_timed_window() {
+        let conn = loaded_connection(5);
+        let mut txn = TransactionStatements::prepare(&conn).unwrap();
+        let mut stmts = InsertStatements::prepare(&conn).unwrap();
+
+        let colliding_email = generators::initial_load_email(1);
+        let params = InsertParams {
+            id: 6,
+            email: colliding_email,
+        };
+        let rng = CountingRng::new(1);
+        let fallback = generators::prepare_insert_fallback(&rng, 1);
+        let calls_before_window = rng.calls();
+        assert!(
+            calls_before_window > 0,
+            "preparing the fallback must itself draw from the PRNG, before any window opens"
+        );
+
+        let (outcome, _timing) = crate::vfs::time_operation(|| {
+            execute_insert(&mut txn, &mut stmts, &params, &fallback.email)
+        })
+        .unwrap();
+        txn.end_operation().unwrap();
+
+        assert_eq!(outcome, InsertOutcome::CommittedWithFallback);
+        assert_eq!(
+            rng.calls(),
+            calls_before_window,
+            "no PRNG draw may happen inside the timed window"
+        );
+    }
+
+    #[test]
+    fn the_timed_window_ends_at_commits_step_leaving_it_unreset() {
+        let conn = loaded_connection(5);
+        let mut txn = TransactionStatements::prepare(&conn).unwrap();
+        let mut stmts = PointReadStatements::prepare(&conn).unwrap();
+
+        let (_, _timing) = crate::vfs::time_operation(|| {
+            execute_point_read(&mut txn, &mut stmts, &ReadParams { id: 1 })
+        })
+        .unwrap();
+
+        assert_eq!(
+            txn.commit.reset_calls(),
+            0,
+            "the op must return immediately after COMMIT's step, before any reset runs — \
+             nothing after the step may fall inside the measured interval"
+        );
+
+        txn.end_operation().unwrap();
+        assert_eq!(
+            txn.commit.reset_calls(),
+            1,
+            "end_operation must reset COMMIT exactly once the window has closed"
+        );
+    }
+
+    /// A `Rng` that counts every draw, via a shared counter so the test
+    /// can read it after the counted `Rng` has been moved into a
+    /// closure. Delegates to a real `ChaCha8Rng` so its draws are still
+    /// genuine PRNG output, not a stub value.
+    #[derive(Clone)]
+    struct CountingRng {
+        inner: rand_chacha::ChaCha8Rng,
+        calls: std::rc::Rc<std::cell::Cell<u64>>,
+    }
+
+    impl CountingRng {
+        fn new(seed: u64) -> Self {
+            CountingRng {
+                inner: rand_chacha::ChaCha8Rng::seed_from_u64(seed),
+                calls: std::rc::Rc::new(std::cell::Cell::new(0)),
+            }
+        }
+
+        fn calls(&self) -> u64 {
+            self.calls.get()
+        }
+
+        fn record(&self) {
+            self.calls.set(self.calls.get() + 1);
+        }
+    }
+
+    impl rand_chacha::rand_core::TryRng for CountingRng {
+        type Error = std::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            self.record();
+            Ok(self.inner.next_u32())
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            self.record();
+            Ok(self.inner.next_u64())
+        }
+
+        fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+            self.record();
+            self.inner.fill_bytes(dst);
+            Ok(())
+        }
     }
 }

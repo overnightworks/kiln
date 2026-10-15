@@ -2,7 +2,6 @@
 //! against real (tiny) SQLite files — never a benchmark or pilot run,
 //! just proof that the pieces compose correctly.
 
-use kiln_e4_harness::vfs::Excluded;
 use kiln_e4_harness::workloads::{
     InsertStatements, PointReadStatements, PointUpdateStatements, Synchronous,
     TransactionStatements, TransferStatements,
@@ -43,6 +42,7 @@ fn point_read_returns_the_row_it_asked_for() {
     for params in &trace {
         let (id, _email, _balance) =
             workloads::execute_point_read(&mut txn, &mut stmts, params).unwrap();
+        txn.end_operation().unwrap();
         assert_eq!(id as u64, params.id);
     }
 }
@@ -57,6 +57,7 @@ fn point_update_never_drives_a_balance_negative() {
     let trace = generators::point_update_trace(generators::seed_for(1, 0), 50, 20);
     for params in &trace {
         workloads::execute_point_update(&mut txn, &mut stmts, params).unwrap();
+        txn.end_operation().unwrap();
     }
     assert!(workloads::checks::no_negative_balances(&conn).unwrap());
 }
@@ -67,12 +68,14 @@ fn insert_grows_the_row_count_by_exactly_the_operation_count() {
     let conn = reopen(&db_path, Synchronous::Full);
     let mut txn = TransactionStatements::prepare(&conn).unwrap();
     let mut stmts = InsertStatements::prepare(&conn).unwrap();
-    let excluded = Excluded::new();
     let before = workloads::checks::row_count(&conn).unwrap();
 
     // A real driver threads one rng across both generation and
     // execution's redraw-on-collision, rather than pre-generating a
-    // closed trace: a redraw consumes extra draws from the same stream.
+    // closed trace: a redraw consumes extra draws from the same stream,
+    // but only if a collision actually happens (protocol §2, §5) — the
+    // fallback is prepared from a clone before the operation runs, and
+    // adopted into `rng` only on the outcome that used it.
     let mut rng = generators::rng_for_attempt(2, 0);
     let row_count = 50;
     for ordinal in 1..=10u64 {
@@ -80,8 +83,13 @@ fn insert_grows_the_row_count_by_exactly_the_operation_count() {
             id: row_count + ordinal,
             email: generators::inserted_email(&mut rng, ordinal),
         };
-        workloads::execute_insert(&mut txn, &mut stmts, &params, &mut rng, ordinal, &excluded)
-            .unwrap();
+        let fallback = generators::prepare_insert_fallback(&rng, ordinal);
+        let outcome =
+            workloads::execute_insert(&mut txn, &mut stmts, &params, &fallback.email).unwrap();
+        txn.end_operation().unwrap();
+        if outcome == workloads::InsertOutcome::CommittedWithFallback {
+            fallback.commit(&mut rng);
+        }
     }
 
     let after = workloads::checks::row_count(&conn).unwrap();
@@ -99,6 +107,7 @@ fn transfer_keeps_the_sum_of_balances_invariant_and_never_goes_negative() {
     let trace = generators::transfer_trace(generators::seed_for(3, 0), 50, 30);
     for params in &trace {
         workloads::execute_transfer(&mut txn, &mut stmts, params).unwrap();
+        txn.end_operation().unwrap();
     }
 
     assert_eq!(
