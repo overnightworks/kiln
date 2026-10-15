@@ -109,22 +109,98 @@ or TypeORM extractor for E1, any future front end (§11).
 Every oracle this document and `docs/experiments.md` rely on — E1's
 lowering audit, E2's elementwise comparison, E3's checker, and
 `docs/verification.md`'s differential tests — interprets the IR against
-exactly this reference meaning; none of them may read a node kind above
-differently from this paragraph.
+exactly these seven decisions; none of them may read a node kind above, or
+any decision below, differently from this section. This section is their
+single owner: a fact stated here is not restated in `docs/experiments.md`,
+`docs/verification.md`, or elsewhere in this document, which instead point
+back here. `crates/kiln-ir` is the reference interpreter that implements
+this meaning, one slice at a time.
 
-- **Arithmetic** is over checked integers of the column's or argument's
-  declared width. Overflow aborts the transaction unless the value is
-  covered by a declared `bound` (the Constraint node kind above), which
-  clamps to the bound instead of aborting.
-- **An absent key** read by a Key read, Range read, or Dependent read is a
-  branchable absent value — a transaction may test for it and branch
-  (Control flow), the same as any other value.
-- **A Write (update or delete) targeting an absent row aborts** the
-  transaction; there is no implicit insert-on-update or no-op-on-delete.
-- **Bounded iteration proceeds in key order.**
-- **Write effects apply in program order** within one transaction.
-- **An Abort discards every effect** the transaction produced before the
-  abort, not only the operation that triggered it.
+- **D1 Declarations.** A `Program` is one `Schema` — tables, each with
+  typed columns that declare an integer width and an optional numeric
+  domain, plus the schema's unique constraints, foreign keys, and check
+  constraints — together with the program's named transaction `Function`s.
+  A constraint lives only in the schema; a transaction function's own body
+  has no Constraint node to write.
+  *Example.* `accounts.email` carries `unique(accounts.email)` in the
+  schema; no `transfer` or `sign_up` function states that rule inline, and
+  nothing in a function body could restate it even if it tried.
+- **D2 Constraint checking.** Declared constraints are checked once,
+  serially, at the end of a transaction, against its tentative final
+  state — a temporary violation part-way through the same transaction is
+  allowed, and a parent-deletion check runs against the children that
+  still exist at that point. Checking happens before any response or
+  effect is published; a violation aborts the call with a typed reason.
+  *Example.* `accounts.balance` carries `check(balance >= 0)`. A
+  transaction debits an account with balance 50 by 100, then credits that
+  same account back by 100 in a second, separate write; the account sits
+  at -50 between the two writes, a temporary violation of
+  `check(balance >= 0)` that D2 allows, but the transaction only checks
+  the balance at its end, where the credit has repaired it back to 50 and
+  the call commits. This stays distinct from D3's clamping domain: a
+  check judges only the end state and aborts on violation, where a clamp
+  bounds every write's own value as it is made and never aborts.
+- **D3 Arithmetic.** Arithmetic runs over checked integers at the column's
+  or argument's declared width. Overflow aborts the transaction unless the
+  target column declares a clamping domain, in which case the value
+  clamps to that domain instead of aborting; a computed write and a
+  literal write are clamped alike, since the clamp binds the column's
+  declared domain, not the writing expression's shape — a clamp and a
+  check constraint are different declarations, never interchangeable.
+  *Example.* `balance + amount` overflowing the column's declared width
+  aborts if `balance` has no clamp; if `balance` instead declares a
+  saturating-counter domain, the same overflow clamps to the domain's
+  bound and the transaction continues. Intermediate arithmetic is checked
+  at `i64`, and only the expression's one final value — of a write, a
+  response, or any other expression — is then checked against the target
+  column's declared width (aborting on overflow) or clamped to its domain;
+  an `i64`-level overflow at any step always aborts, never clamps, since a
+  clamp judges only the final value a write produces. Text-typed column
+  declarations arrive with slice 4.
+- **D4 Invocation.** A `Call { function, args }` is run by `run(&Program,
+  &Call, &Store)`, or replayed in sequence by `replay(&Program, &[Call],
+  &Store)`. Every call keeps its position in the result; an aborted call
+  changes no state and never stops the calls after it. A response and an
+  abort reason are both typed values, comparable for equality.
+  *Example.* Replaying `[transfer(a, b, 10), sign_up(taken_email)]`
+  against the same store returns two results in order; the second call's
+  typed abort reason sits at index 1 and does not erase or block the
+  first call's committed transfer.
+- **D5 Access log.** Every attempted access — a point read, a range read,
+  an insert, an update, or a delete — is logged with its table, its key or
+  range bounds, the columns it touched, and its origin (the transaction's
+  own logic, or a constraint check). A constraint check logs only the
+  accesses it logically needs — a uniqueness check is a point read on the
+  unique key, never a table scan — and an aborted call keeps every access
+  it attempted.
+  *Example.* `sign_up(email)` inserting a duplicate email logs the insert
+  attempt and the uniqueness check's point read on that email, both kept
+  in the log even though the call aborts.
+- **D6 Observable semantics.** A read sees the transaction's own earlier
+  writes. An empty range reads as an empty sequence. Exceeding a bounded
+  iteration's declared bound aborts the transaction. Inserting an already
+  existing primary key aborts. A write (update or delete) targeting an
+  absent row aborts — there is no implicit insert-on-update or
+  no-op-on-delete. An absent key is itself a branchable value a
+  transaction may test and branch on, the same as any other value. Bounded
+  iteration proceeds in key order. Write effects apply in program order
+  within one transaction. An abort discards every effect the transaction
+  produced before it, not only the operation that triggered it. A
+  successful call returns exactly the function's declared response.
+  *Example.* `withdraw(account_id, amount)` reads `account_id`; if the key
+  is absent, that absence is itself branched on and the function aborts
+  with `account_not_found` before any effect is applied. If present, it
+  writes the debited balance, then a later read of the same key inside the
+  same call sees that debit — not the balance the transaction started
+  with — and the call returns the new balance as its response.
+- **D7 Reserved boundary.** Verification layer 4 will need a per-call
+  disposition — execute it, or force an abort replayed as a no-op — and
+  will wrap `replay` to add it later. This meaning's `replay` and `run`
+  add no durability machinery of their own, so there is room for that
+  wrapper without a later, incompatible redesign.
+  *Example.* A future crash-recovery harness marks one call in a replayed
+  batch as a forced abort without changing `replay`'s own signature or
+  adding a log, write-ahead buffer, or other durability mechanism here.
 
 ## 3. The thesis: compile-time compatibility between transaction pairs
 

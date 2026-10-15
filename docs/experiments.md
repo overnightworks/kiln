@@ -42,10 +42,12 @@ private interpreter.
 
 ## E1 — classification coverage (issue #2)
 
-**Hypothesis.** At least 70% of frequency-weighted transaction instances,
-measured on TPC-C and on a corpus of real open-source applications, classify
-into a footprint category the compiler can analyze rather than unknown.
-Below 50% falsifies the thesis.
+**Hypothesis.** At least 70% of transaction instances classify into a
+footprint category the compiler can analyze rather than unknown, measured
+on TPC-C — weighted by its frozen transaction mix (`inputs.md` §1) — and on
+a corpus of real open-source applications — unweighted, one instance per
+enumerated transaction function, because no trace source exists for any of
+them (`inputs.md` §4). Below 50% falsifies the thesis.
 
 **Scope.** A footprint extractor plus classifier only — no runtime, no
 storage engine, no kernel from `docs/concept.md` §4.
@@ -82,15 +84,33 @@ questions and are reported as two separate numbers, never conflated:
 
 ### Gating numerator and verdict
 
-The gating numerator is the percentage of frequency-weighted transaction
-instances whose category above is static or one-hop. Domain-bounded
+The gating numerator is the percentage of transaction instances whose
+category above is static or one-hop — weighted by TPC-C's frozen
+transaction mix for TPC-C (`inputs.md` §1), and unweighted, one instance
+per enumerated transaction function, for the application corpus, because no
+trace source exists for it (below, and `inputs.md` §4). Domain-bounded
 instances are not in the numerator; their share is reported separately and
-never gates the verdict. An application with no trace source, and the
-unweighted fallback metric (one per transaction function) where no trace
-exists, are likewise reported but non-gating.
+never gates the verdict.
 
-- **Pass** when TPC-C's coverage is at least 70% *and* the median coverage
-  over at least five traced applications is at least 70%.
+**Application-side gating metric.** #2's freeze
+(`experiments/e1-classification-coverage/inputs.md` §4) establishes, before
+any classification result exists, that no trace source exists for any
+application in the frozen corpus. The application half of the gate
+therefore does not wait on traces the corpus cannot produce: it gates on
+the median, over the frozen application corpus, of each application's own
+unweighted coverage share — one unit per enumerated transaction function
+(`inputs.md` §3), with no frequency weight, that classifies static or
+one-hop — reported and labelled **"unweighted — no trace source exists."**
+This replaces the "at least five traced applications" condition this
+section previously carried: that condition assumed a trace source would
+exist for some applications by the time a result was produced, and the
+freeze establishes the opposite before any result exists, so the condition
+is retired now rather than left to fail by construction on every run.
+TPC-C's own transaction mix is unaffected by this and stays weighted
+(`inputs.md` §1).
+
+- **Pass** when TPC-C's weighted coverage is at least 70% *and* the median
+  unweighted coverage over the frozen application corpus is at least 70%.
 - **Fail** when TPC-C's coverage is below 50% *or* that median is below 50%.
 - **Inconclusive** otherwise. A unit landing strictly between 50% and 70% is
   reported as inconclusive for that unit specifically, never rounded into a
@@ -100,7 +120,12 @@ Separately from the gating numerator, the builder reports the percentage of
 instances whose pairwise execution class (`docs/concept.md` §3) could be
 resolved to class 1, 2, or 3 against their observed neighbors in the traced
 workload — a different measurement from footprint coverage, never presented
-as the same result.
+as the same result. This report is produced for TPC-C, which is actually
+run to generate that traced workload. It is not produced for the
+application corpus, decided now rather than discovered mid-run: no
+application in the frozen corpus has a trace source at all (`inputs.md`
+§4), so there is no traced workload for this report to resolve neighbors
+against for any of the 110 applications.
 
 ### Audits
 
@@ -111,14 +136,24 @@ as the same result.
   every transaction "static" with no analysis) and confirms the evaluation
   harness rejects that stub's output for lacking evidence.
 - **Lowering audit.** A classifier can raise its coverage number by
-  weakening what "static" or "one-hop" require. Before the first result
-  counts, and again on every change that reclassifies transactions, a
-  sample of the classified transactions is re-checked: that the IR the
-  front end produced for each one is equivalent to the function's actual
-  source behavior, judged against the IR's reference meaning
-  (`docs/concept.md` §2.1) through the reference interpreter — not merely
-  that the classifier's own logic about its own IR is internally
-  consistent.
+  weakening what "static" or "one-hop" require, or by excluding a real
+  database operation from the denominator as a false "not a database
+  operation" under S4 (`experiments/e1-classification-coverage/inputs.md`
+  §3). Before the first result counts, and again on every change that
+  reclassifies transactions, a sample — drawn by the frozen rule in
+  `experiments/e1-classification-coverage/inputs.md` §3 ("S4 audit
+  sample") — is re-checked from both the included, classified transactions
+  and the candidates S4 excluded as non-database operations: for an
+  included transaction, that the IR the front end produced for it is
+  equivalent to the function's actual source behavior, judged against the
+  IR's reference meaning (`docs/concept.md` §2.1) through the reference
+  interpreter; for an S4-excluded candidate, that the evidence recorded for
+  it is itself affirmative — that its receiver genuinely resolves to a
+  concrete non-ORM type whose called method has no path to an ORM
+  operation, never merely that the receiver is unresolved (`Any`) or that
+  the classifier's own logic about its own exclusion is internally
+  consistent, so a candidate wrongly dropped from the denominator on
+  unresolved-receiver grounds alone is caught, not confirmed.
 - **Containment audit.** Independently of the lowering audit, and on the
   same before-first-result-and-every-reclassification schedule, confirm
   that the resources a classified transaction actually touched while
@@ -135,12 +170,18 @@ inferable read/write sets, and that about 27% query by a secondary attribute
 (`docs/research/notes/open_problems_and_challenged_assumptions.md:72-73`).
 E1 is not a restatement of that count: it adds the one-hop category (the
 study's binary inferable/not-inferable split does not distinguish static
-from one-hop), frequency weighting (the study's figure is a count over
-transactions, not over frequency-weighted instances), and kiln's IR
-unsupported-source boundary (`docs/concept.md` §2.1) as the exact rule for
-what falls into "unknown." If the study's own per-application data can be
-obtained, it is a cheaper first pass at an order-of-magnitude estimate — not
-a substitute for E1's own measurement against kiln's categories and IR.
+from one-hop), TPC-C's own frequency weighting by its frozen transaction
+mix (`inputs.md` §1) — the study's figure is a plain count over
+transactions, with no weighting on either TPC-C or the application corpus
+— and kiln's IR unsupported-source boundary (`docs/concept.md` §2.1) as the
+exact rule for what falls into "unknown." The application corpus itself
+stays unweighted under E1 too, for the same reason the study's own count
+is: no trace source exists for any application (`inputs.md` §4). Of the
+three additions listed above, frequency weighting by TPC-C's mix is the one
+that applies only to TPC-C, not uniformly across every corpus. If
+the study's own per-application data can be obtained, it is a cheaper first
+pass at an order-of-magnitude estimate — not a substitute for E1's own
+measurement against kiln's categories and IR.
 
 ### Deferred to #2
 
