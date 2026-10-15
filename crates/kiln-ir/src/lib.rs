@@ -1,0 +1,29 @@
+//! `kiln-ir`: the reference interpreter for kiln's semantic IR.
+//!
+//! E1's lowering audit, E2's elementwise comparison, E3's checker and
+//! `docs/verification.md`'s layer 3 differential tests each need one
+//! executable interpreter of the IR to compare against
+//! (`docs/experiments.md`, "Shared dependency"). This crate is that
+//! interpreter. It covers this slice's node kinds only — key read, insert,
+//! update, delete, branch, abort and response — with read-your-writes
+//! inside a transaction; the reference meaning it implements is recorded in
+//! `docs/concept.md` §2.2, the single owner of that meaning.
+//!
+//! The crate has no I/O: [`run`] is a pure function from a [`Program`], a
+//! [`Call`] and a [`Store`] to an [`Execution`].
+
+mod call;
+mod evaluator;
+mod identifiers;
+mod ir;
+mod store;
+
+pub use call::Call;
+pub use evaluator::{
+    run, AbortReason, AccessKind, AccessLogEntry, AccessedColumns, Execution, Outcome,
+};
+pub use identifiers::{AbortName, ColumnName, FunctionName, ParameterName, TableName};
+pub use ir::{
+    Block, Condition, Effect, Expr, Function, Program, Row, Schema, Slot, Table, Terminal, Value,
+};
+pub use store::Store;
