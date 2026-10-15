@@ -334,7 +334,11 @@ depends on a predecessor whose commit survived or was lost.
 **Bounds.** One log, one writer, three transactions, at most two
 failures; a failure discards every volatile transaction. Recovery
 discards every queued or active request; only a request not yet
-dispatched stays runnable.
+dispatched stays runnable. Not covered: the
+publication pointer (§9.1), torn writes that reach acknowledged bytes and
+a device that lies about a flush (outside §9.2's model), retried commits
+after an unknown outcome, storage layout. Records are abstract effect
+deltas, not bytes: framing and checksums are not modelled.
 
 **Not proved.** `DFairness` covers the protocol steps and `Flush`, but
 neither `Ack` nor `Recover`: a failure-free run may flush everything and
@@ -342,11 +346,7 @@ leave a caller unanswered forever, and a fenced engine may stay fenced.
 `RequestedLeadsToTerminal` (checked on `CrashFree` only) speaks of
 terminal transaction status, not of the caller's answer. Eventual
 acknowledgement and eventual recovery are unproved, and no temporal
-claim is made for them. Not covered: the
-publication pointer (§9.1), torn writes that reach acknowledged bytes and
-a device that lies about a flush (outside §9.2's model), retried commits
-after an unknown outcome, storage layout. Records are abstract effect
-deltas, not bytes: framing and checksums are not modelled.
+claim is made for them.
 
 ## Scenarios and results
 
