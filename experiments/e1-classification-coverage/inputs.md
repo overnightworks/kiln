@@ -994,7 +994,8 @@ source-to-IR boundary of `docs/concept.md` §2.1 and the lowering audit.
 1. A lowering may cover only recognised idioms, but never drops a helper's
    effects, failures, responses or constraints. A function with anything
    not translated is refused in full and stays in the denominator as
-   Unknown (the frozen rule), and counts toward R below.
+   Unknown (the frozen rule), and counts toward R as `docs/experiments.md`,
+   "Gating numerator and verdict", defines it.
 2. The lowering audit's expected outcomes are derived independently from the
    function's source and the framework's semantics, never from the IR under
    test; an expectation generated from that IR checks only consistency and
