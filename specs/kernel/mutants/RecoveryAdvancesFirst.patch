@@ -1,0 +1,12 @@
+--- Publication.tla
++++ Publication.tla
+@@ -65,7 +65,8 @@
+ RecoverPublication ==
+   /\ Recover
+   /\ recovering' = TRUE
+-  /\ UNCHANGED <<installed, pointer, interrupted>>
++  /\ pointer' = Len(log)
++  /\ UNCHANGED <<installed, interrupted>>
+ 
+ Open ==
+   /\ recovering /\ pointer = Len(log)

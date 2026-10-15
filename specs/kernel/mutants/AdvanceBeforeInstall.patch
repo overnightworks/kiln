@@ -1,0 +1,10 @@
+--- Publication.tla
++++ Publication.tla
+@@ -58,7 +58,6 @@
+ 
+ Advance ==
+   /\ Serving /\ pointer < Len(log)
+-  /\ CompletelyInstalled(log[pointer + 1].txn)
+   /\ pointer' = pointer + 1
+   /\ UNCHANGED <<DVars, installed, recovering, interrupted>>
+ 
