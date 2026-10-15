@@ -2,7 +2,7 @@
 //
 //   extract.mjs install-analyzer
 //   extract.mjs fetch OWNER/REPO
-//   extract.mjs install-dependencies OWNER/REPO
+//   extract.mjs install-dependencies OWNER/REPO   (verifies the checkout before and after)
 //   extract.mjs units OWNER/REPO --output-dir DIR
 //
 // The corpus directory comes from `--corpus-dir` or `KILN_E1_CORPUS_DIR` and
@@ -17,12 +17,13 @@ import { runAnalyzer } from "./analyzer_command.mjs";
 import { parseAnalyzerJson } from "./analyzer_report.mjs";
 import {
   MANIFEST_PATH, analyzerInstallCommands, analyzerScript, applicationDirectory, applicationRow, corpusDirectory,
-  dependencyCommands, fetchCommands, readManifest, trackedFiles, verifySnapshot,
+  dependencyCommands, fetchCommands, readManifest,
 } from "./corpus.mjs"; // fmt: skip
 import { enumerateUnits } from "./enumeration.mjs";
 import { selectionOf } from "./file_selection.mjs";
 import { installScriptsOf } from "./install_scripts.mjs";
-import { renderInstallScripts, renderReceiverEvidence, renderUnits, renderUnmatchedMarkers } from "./rendering.mjs";
+import { renderGeneratedLocks, renderInstallScripts, renderReceiverEvidence, renderUnits, renderUnmatchedMarkers } from "./rendering.mjs";
+import { installDependencies, trackedFiles, verifyInstalledCheckout } from "./snapshot.mjs";
 
 function main(argv) {
   const { values, positionals } = parseArgs({
@@ -38,7 +39,7 @@ function main(argv) {
   if (command === "install-analyzer") return runCommands(analyzerInstallCommands(corpus));
   const row = applicationRow(readManifest(MANIFEST_PATH), application);
   if (command === "fetch") return runCommands(fetchCommands(row, corpus));
-  if (command === "install-dependencies") return runCommands(dependencyCommands(row, corpus));
+  if (command === "install-dependencies") return installDependencies(row, applicationDirectory(row, corpus), () => runCommands(dependencyCommands(row, corpus)));
   if (command === "units" && values["output-dir"]) return writeUnits(row, corpus, values["output-dir"]);
   throw new Error("usage: extract.mjs install-analyzer | fetch|install-dependencies|units OWNER/REPO [--output-dir DIR]");
 }
@@ -60,7 +61,7 @@ function writeUnits(row, corpus, outputDirectory) {
   const stem = path.join(outputDirectory, row.directoryName);
   const root = applicationDirectory(row, corpus);
   const selection = selectionOf(trackedFiles(root));
-  verifySnapshot(row, root);
+  const generatedLocks = verifyInstalledCheckout(row, root);
   const messages = `${stem}.analyzer.json`;
   const analyzerLog = runAnalyzer({ script: analyzerScript(corpus), workingDirectory: corpus, selection, applicationRoot: root, output: path.resolve(messages) });
   writeFileSync(`${stem}.analyzer.log`, analyzerLog);
@@ -71,6 +72,7 @@ function writeUnits(row, corpus, outputDirectory) {
   writeFileSync(`${stem}.units.jsonl`, renderUnits(enumeration.units));
   writeFileSync(`${stem}.receivers.jsonl`, renderReceiverEvidence(enumeration.receiverEvidence));
   writeFileSync(`${stem}.unmatched-markers.jsonl`, renderUnmatchedMarkers(enumeration.unmatchedMarkers));
+  writeFileSync(`${stem}.generated-locks.jsonl`, renderGeneratedLocks(generatedLocks));
   writeFileSync(`${stem}.install-scripts.jsonl`, renderInstallScripts(installScriptsOf(root)));
 }
 

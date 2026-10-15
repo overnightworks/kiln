@@ -690,6 +690,14 @@ it is applied to TypeScript.
   installed package that declares a `preinstall`, `install` or `postinstall`
   script (the application also `prepare`), read from the package manifests
   without running anything.
+- **Installation inputs.** Before the installation the whole checkout,
+  lockfiles included, is verified against the manifest commit (nothing
+  modified, deleted, untracked or ignored apart from `node_modules`). After
+  `npm install --ignore-scripts` every tracked lockfile must be byte-identical
+  to the commit, otherwise the run fails and names it; `npm ci` is not used.
+  An application that tracks no lockfile gets the lock the installation
+  generated recorded with its SHA-256 and install date in
+  `<application>.generated-locks.jsonl`, as evidence of what resolved.
 
 ### 3.1 Worked examples: full unit counts against the frozen rule
 

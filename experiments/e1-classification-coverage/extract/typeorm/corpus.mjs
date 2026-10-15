@@ -1,7 +1,6 @@
 // The corpus edge: manifest rows, where the clones live, and the commands that
 // fetch an application, install its dependencies and install the pinned analyzer.
 
-import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -67,36 +66,4 @@ export function dependencyCommands(row, corpus) {
 export function analyzerInstallCommands(corpus) {
   const directory = path.join(corpus, ANALYZER_DIRECTORY);
   return [{ program: "npm", arguments: ["install", ...ANALYZER_PACKAGES], directory }];
-}
-
-export function trackedFiles(applicationRoot) {
-  return git(applicationRoot, "ls-files", "-z").split("\0").filter((file) => file !== "");
-}
-
-/** What `npm install` rewrites in the checkout; the analyzer reads neither. */
-const INSTALLER_OUTPUTS = new Set(["package-lock.json", "npm-shrinkwrap.json"]);
-
-/**
- * The analyzer reads the filesystem: the sources and every configuration file it extends. The
- * checkout must therefore be exactly the manifest commit, apart from what the installation adds.
- */
-export function verifySnapshot(row, applicationRoot) {
-  const head = git(applicationRoot, "rev-parse", "HEAD").trim();
-  if (head !== row.commitShaFull) {
-    throw new ExtractorError(`${applicationRoot} is at ${head}, not the manifest commit ${row.commitShaFull}`);
-  }
-  const status = git(applicationRoot, "status", "--porcelain", "-z", "--no-renames", "--ignored", "--untracked-files=all");
-  const strays = status.split("\0").filter((entry) => entry !== "").map((entry) => entry.slice(3)).filter(isOutsideTheInstallation);
-  if (strays.length > 0) {
-    throw new ExtractorError(`${applicationRoot} differs from its commit: ${strays.sort().join(", ")}`);
-  }
-}
-
-function isOutsideTheInstallation(file) {
-  const installed = file.split("/").includes("node_modules");
-  return !installed && !INSTALLER_OUTPUTS.has(path.posix.basename(file));
-}
-
-function git(directory, ...gitArguments) {
-  return execFileSync("git", gitArguments, { cwd: directory, encoding: "utf8", maxBuffer: 1 << 28 });
 }
