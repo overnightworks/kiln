@@ -83,25 +83,25 @@ impl Store {
 }
 
 #[cfg(test)]
-#[allow(
-    non_snake_case,
-    reason = "test names claim a criterion as kiln_ir_nn__name (specs/kiln-ir.spec.md)"
-)]
 mod tests {
     use super::*;
     use crate::identifiers::ColumnName;
     use proptest::prelude::*;
 
-    #[test]
-    fn kiln_ir_19__insert_then_delete_from_empty_store_equals_the_empty_store() {
-        let table = TableName("t".to_owned());
-        let key = Value::Integer(1);
-        let mut store = Store::empty();
+    mod kiln_ir_19 {
+        use super::*;
 
-        store.put_row(table.clone(), key.clone(), Row::default());
-        store.remove_row(&table, &key);
+        #[test]
+        fn insert_then_delete_from_empty_store_equals_the_empty_store() {
+            let table = TableName("t".to_owned());
+            let key = Value::Integer(1);
+            let mut store = Store::empty();
 
-        assert_eq!(store, Store::empty());
+            store.put_row(table.clone(), key.clone(), Row::default());
+            store.remove_row(&table, &key);
+
+            assert_eq!(store, Store::empty());
+        }
     }
 
     /// Builds a row whose own column `"k"` restates the key it was inserted
@@ -122,69 +122,77 @@ mod tests {
             .collect()
     }
 
-    proptest! {
+    mod kiln_ir_09 {
+        use super::*;
+
+        proptest! {
+            #[test]
+            fn rows_in_range_returns_every_matched_row_in_key_order(
+                keys in prop::collection::hash_set(any::<i64>(), 1..20),
+            ) {
+                let table = TableName("t".to_owned());
+                let mut sorted_keys: Vec<i64> = keys.iter().copied().collect();
+                sorted_keys.sort_unstable();
+                let store = Store::containing(
+                    keys.iter().map(|&key| (table.clone(), Value::Integer(key), row_keyed(key))),
+                );
+
+                let rows = store.rows_in_range(&table, &Value::Integer(i64::MIN), &Value::Integer(i64::MAX));
+
+                prop_assert_eq!(observed_keys(&rows), sorted_keys);
+            }
+        }
+
         #[test]
-        fn kiln_ir_09__rows_in_range_returns_every_matched_row_in_key_order(
-            keys in prop::collection::hash_set(any::<i64>(), 1..20),
-        ) {
+        fn rows_in_range_includes_both_inclusive_bounds_and_excludes_rows_outside_them() {
             let table = TableName("t".to_owned());
-            let mut sorted_keys: Vec<i64> = keys.iter().copied().collect();
-            sorted_keys.sort_unstable();
             let store = Store::containing(
-                keys.iter().map(|&key| (table.clone(), Value::Integer(key), row_keyed(key))),
+                [0, 5, 10, 15]
+                    .into_iter()
+                    .map(|key| (table.clone(), Value::Integer(key), row_keyed(key))),
             );
 
-            let rows = store.rows_in_range(&table, &Value::Integer(i64::MIN), &Value::Integer(i64::MAX));
+            let rows = store.rows_in_range(&table, &Value::Integer(5), &Value::Integer(10));
 
-            prop_assert_eq!(observed_keys(&rows), sorted_keys);
+            assert_eq!(observed_keys(&rows), vec![5, 10]);
+        }
+
+        #[test]
+        fn rows_in_range_includes_the_single_row_when_start_equals_end() {
+            let table = TableName("t".to_owned());
+            let store = Store::containing([
+                (table.clone(), Value::Integer(4), row_keyed(4)),
+                (table.clone(), Value::Integer(5), row_keyed(5)),
+                (table.clone(), Value::Integer(6), row_keyed(6)),
+            ]);
+
+            let rows = store.rows_in_range(&table, &Value::Integer(5), &Value::Integer(5));
+
+            assert_eq!(observed_keys(&rows), vec![5]);
         }
     }
 
-    #[test]
-    fn kiln_ir_09__rows_in_range_includes_both_inclusive_bounds_and_excludes_rows_outside_them() {
-        let table = TableName("t".to_owned());
-        let store = Store::containing(
-            [0, 5, 10, 15]
-                .into_iter()
-                .map(|key| (table.clone(), Value::Integer(key), row_keyed(key))),
-        );
+    mod kiln_ir_10 {
+        use super::*;
 
-        let rows = store.rows_in_range(&table, &Value::Integer(5), &Value::Integer(10));
+        #[test]
+        fn rows_in_range_is_empty_when_start_sorts_after_end() {
+            let table = TableName("t".to_owned());
+            let store = Store::containing([(table.clone(), Value::Integer(5), Row::default())]);
 
-        assert_eq!(observed_keys(&rows), vec![5, 10]);
-    }
+            let rows = store.rows_in_range(&table, &Value::Integer(10), &Value::Integer(0));
 
-    #[test]
-    fn kiln_ir_09__rows_in_range_includes_the_single_row_when_start_equals_end() {
-        let table = TableName("t".to_owned());
-        let store = Store::containing([
-            (table.clone(), Value::Integer(4), row_keyed(4)),
-            (table.clone(), Value::Integer(5), row_keyed(5)),
-            (table.clone(), Value::Integer(6), row_keyed(6)),
-        ]);
+            assert!(rows.is_empty());
+        }
 
-        let rows = store.rows_in_range(&table, &Value::Integer(5), &Value::Integer(5));
+        #[test]
+        fn rows_in_range_is_empty_for_a_table_with_no_rows() {
+            let table = TableName("t".to_owned());
+            let store = Store::empty();
 
-        assert_eq!(observed_keys(&rows), vec![5]);
-    }
+            let rows = store.rows_in_range(&table, &Value::Integer(0), &Value::Integer(10));
 
-    #[test]
-    fn kiln_ir_10__rows_in_range_is_empty_when_start_sorts_after_end() {
-        let table = TableName("t".to_owned());
-        let store = Store::containing([(table.clone(), Value::Integer(5), Row::default())]);
-
-        let rows = store.rows_in_range(&table, &Value::Integer(10), &Value::Integer(0));
-
-        assert!(rows.is_empty());
-    }
-
-    #[test]
-    fn kiln_ir_10__rows_in_range_is_empty_for_a_table_with_no_rows() {
-        let table = TableName("t".to_owned());
-        let store = Store::empty();
-
-        let rows = store.rows_in_range(&table, &Value::Integer(0), &Value::Integer(10));
-
-        assert!(rows.is_empty());
+            assert!(rows.is_empty());
+        }
     }
 }

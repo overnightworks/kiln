@@ -3,10 +3,6 @@
 //! `tests/arithmetic.rs` so neither file approaches the repository's size
 //! ratchet. `tests/arithmetic.rs` covers D3's ordinary overflow, width, and
 //! clamp behaviour instead.
-#![allow(
-    non_snake_case,
-    reason = "test names claim a criterion as kiln_ir_nn__name (specs/kiln-ir.spec.md)"
-)]
 
 mod support;
 
@@ -179,59 +175,63 @@ fn boundary_cases() -> Vec<BoundaryCase> {
     ]
 }
 
-#[test]
-fn kiln_ir_23__width_boundaries_are_enforced_for_add_and_subtract_via_insert_and_update() {
-    for case in boundary_cases() {
-        for via in [WriteVia::Insert, WriteVia::Update] {
-            let declared_column = Column {
-                name: column("c"),
-                width: case.width,
-                domain: None,
-            };
-            let execution = run_write(
-                declared_column,
-                arithmetic(case.op, case.lhs, case.rhs),
-                via,
-            );
+mod kiln_ir_23 {
+    use super::*;
 
-            match case.expected {
-                Expected::Committed(value) => {
-                    let row = execution
-                        .store
-                        .row(&table("t"), &Value::Integer(1))
-                        .unwrap_or_else(|| {
-                            panic!("case {} ({via:?}): expected a commit", case.name)
-                        });
-                    assert_eq!(
-                        row.columns.get(&column("c")),
-                        Some(&Value::Integer(value)),
-                        "case {} ({via:?})",
-                        case.name
-                    );
-                }
-                Expected::WidthOverflow => {
-                    assert_eq!(
-                        execution.outcome,
-                        Outcome::Aborted {
-                            reason: AbortReason::Overflow(OverflowReason::Width {
-                                table: table("t"),
-                                column: column("c"),
-                                key: Value::Integer(1),
-                            }),
-                        },
-                        "case {} ({via:?})",
-                        case.name
-                    );
-                }
-                Expected::ArithmeticOverflow => {
-                    assert_eq!(
-                        execution.outcome,
-                        Outcome::Aborted {
-                            reason: AbortReason::Overflow(OverflowReason::Arithmetic),
-                        },
-                        "case {} ({via:?})",
-                        case.name
-                    );
+    #[test]
+    fn width_boundaries_are_enforced_for_add_and_subtract_via_insert_and_update() {
+        for case in boundary_cases() {
+            for via in [WriteVia::Insert, WriteVia::Update] {
+                let declared_column = Column {
+                    name: column("c"),
+                    width: case.width,
+                    domain: None,
+                };
+                let execution = run_write(
+                    declared_column,
+                    arithmetic(case.op, case.lhs, case.rhs),
+                    via,
+                );
+
+                match case.expected {
+                    Expected::Committed(value) => {
+                        let row = execution
+                            .store
+                            .row(&table("t"), &Value::Integer(1))
+                            .unwrap_or_else(|| {
+                                panic!("case {} ({via:?}): expected a commit", case.name)
+                            });
+                        assert_eq!(
+                            row.columns.get(&column("c")),
+                            Some(&Value::Integer(value)),
+                            "case {} ({via:?})",
+                            case.name
+                        );
+                    }
+                    Expected::WidthOverflow => {
+                        assert_eq!(
+                            execution.outcome,
+                            Outcome::Aborted {
+                                reason: AbortReason::Overflow(OverflowReason::Width {
+                                    table: table("t"),
+                                    column: column("c"),
+                                    key: Value::Integer(1),
+                                }),
+                            },
+                            "case {} ({via:?})",
+                            case.name
+                        );
+                    }
+                    Expected::ArithmeticOverflow => {
+                        assert_eq!(
+                            execution.outcome,
+                            Outcome::Aborted {
+                                reason: AbortReason::Overflow(OverflowReason::Arithmetic),
+                            },
+                            "case {} ({via:?})",
+                            case.name
+                        );
+                    }
                 }
             }
         }
@@ -263,120 +263,132 @@ fn schema_with_domain(width: IntegerWidth, domain: ClampDomain) -> kiln_ir::Sche
     }
 }
 
-#[test]
-fn kiln_ir_02__a_domain_reaching_outside_its_columns_width_is_rejected() {
-    let schema = schema_with_domain(IntegerWidth::I8, ClampDomain { min: 0, max: 1000 });
+mod kiln_ir_02 {
+    use super::*;
 
-    assert_eq!(
-        schema.validate(),
-        Err(SchemaError::DomainExceedsWidth {
-            table: table_name(),
-            column: column_name(),
-        })
-    );
+    #[test]
+    fn a_domain_reaching_outside_its_columns_width_is_rejected() {
+        let schema = schema_with_domain(IntegerWidth::I8, ClampDomain { min: 0, max: 1000 });
+
+        assert_eq!(
+            schema.validate(),
+            Err(SchemaError::DomainExceedsWidth {
+                table: table_name(),
+                column: column_name(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_domain_exactly_at_its_columns_width_bounds_is_accepted() {
+        let (width_min, width_max) = IntegerWidth::I8.range();
+        let schema = schema_with_domain(
+            IntegerWidth::I8,
+            ClampDomain {
+                min: width_min,
+                max: width_max,
+            },
+        );
+
+        assert_eq!(schema.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_domain_one_below_its_columns_width_minimum_is_rejected() {
+        let (width_min, _) = IntegerWidth::I8.range();
+        let schema = schema_with_domain(
+            IntegerWidth::I8,
+            ClampDomain {
+                min: width_min - 1,
+                max: width_min,
+            },
+        );
+
+        assert_eq!(
+            schema.validate(),
+            Err(SchemaError::DomainExceedsWidth {
+                table: table_name(),
+                column: column_name(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_domain_one_above_its_columns_width_maximum_is_rejected() {
+        let (_, width_max) = IntegerWidth::I8.range();
+        let schema = schema_with_domain(
+            IntegerWidth::I8,
+            ClampDomain {
+                min: width_max,
+                max: width_max + 1,
+            },
+        );
+
+        assert_eq!(
+            schema.validate(),
+            Err(SchemaError::DomainExceedsWidth {
+                table: table_name(),
+                column: column_name(),
+            })
+        );
+    }
 }
 
-#[test]
-fn kiln_ir_01__a_domain_with_reversed_bounds_is_rejected() {
-    let schema = schema_with_domain(IntegerWidth::I32, ClampDomain { min: 100, max: 0 });
+mod kiln_ir_01 {
+    use super::*;
 
-    assert_eq!(
-        schema.validate(),
-        Err(SchemaError::ReversedDomain {
-            table: table_name(),
-            column: column_name(),
-            min: 100,
-            max: 0,
-        })
-    );
+    #[test]
+    fn a_domain_with_reversed_bounds_is_rejected() {
+        let schema = schema_with_domain(IntegerWidth::I32, ClampDomain { min: 100, max: 0 });
+
+        assert_eq!(
+            schema.validate(),
+            Err(SchemaError::ReversedDomain {
+                table: table_name(),
+                column: column_name(),
+                min: 100,
+                max: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn a_domain_whose_min_equals_its_max_is_accepted() {
+        let schema = schema_with_domain(IntegerWidth::I32, ClampDomain { min: 50, max: 50 });
+
+        assert_eq!(schema.validate(), Ok(()));
+    }
 }
 
 // --- D3: a domain's own bounds and width containment are checked at their exact boundary,
 // not only when they are far outside it ---
 
-#[test]
-fn kiln_ir_01__a_domain_whose_min_equals_its_max_is_accepted() {
-    let schema = schema_with_domain(IntegerWidth::I32, ClampDomain { min: 50, max: 50 });
+mod kiln_ir_03 {
+    use super::*;
 
-    assert_eq!(schema.validate(), Ok(()));
-}
+    #[test]
+    fn run_rejects_an_invalid_schema_instead_of_panicking() {
+        let schema = schema_with_domain(IntegerWidth::I8, ClampDomain { min: 0, max: 1000 });
+        let program = kiln_ir::Program {
+            schema,
+            functions: vec![kiln_ir::Function {
+                name: kiln_ir::FunctionName("under_test".to_owned()),
+                parameters: vec![],
+                body: kiln_ir::Block {
+                    effects: vec![],
+                    terminal: Terminal::Return(Expr::Literal(Value::Integer(0))),
+                },
+            }],
+        };
 
-#[test]
-fn kiln_ir_02__a_domain_exactly_at_its_columns_width_bounds_is_accepted() {
-    let (width_min, width_max) = IntegerWidth::I8.range();
-    let schema = schema_with_domain(
-        IntegerWidth::I8,
-        ClampDomain {
-            min: width_min,
-            max: width_max,
-        },
-    );
+        let result = run(&program, &call_under_test(vec![]), &Store::empty());
 
-    assert_eq!(schema.validate(), Ok(()));
-}
-
-#[test]
-fn kiln_ir_02__a_domain_one_below_its_columns_width_minimum_is_rejected() {
-    let (width_min, _) = IntegerWidth::I8.range();
-    let schema = schema_with_domain(
-        IntegerWidth::I8,
-        ClampDomain {
-            min: width_min - 1,
-            max: width_min,
-        },
-    );
-
-    assert_eq!(
-        schema.validate(),
-        Err(SchemaError::DomainExceedsWidth {
-            table: table_name(),
-            column: column_name(),
-        })
-    );
-}
-
-#[test]
-fn kiln_ir_02__a_domain_one_above_its_columns_width_maximum_is_rejected() {
-    let (_, width_max) = IntegerWidth::I8.range();
-    let schema = schema_with_domain(
-        IntegerWidth::I8,
-        ClampDomain {
-            min: width_max,
-            max: width_max + 1,
-        },
-    );
-
-    assert_eq!(
-        schema.validate(),
-        Err(SchemaError::DomainExceedsWidth {
-            table: table_name(),
-            column: column_name(),
-        })
-    );
-}
-
-#[test]
-fn kiln_ir_03__run_rejects_an_invalid_schema_instead_of_panicking() {
-    let schema = schema_with_domain(IntegerWidth::I8, ClampDomain { min: 0, max: 1000 });
-    let program = kiln_ir::Program {
-        schema,
-        functions: vec![kiln_ir::Function {
-            name: kiln_ir::FunctionName("under_test".to_owned()),
-            parameters: vec![],
-            body: kiln_ir::Block {
-                effects: vec![],
-                terminal: Terminal::Return(Expr::Literal(Value::Integer(0))),
-            },
-        }],
-    };
-
-    let result = run(&program, &call_under_test(vec![]), &Store::empty());
-
-    assert_eq!(
-        result,
-        Err(SchemaError::DomainExceedsWidth {
-            table: table_name(),
-            column: column_name(),
-        })
-    );
+        assert_eq!(
+            result,
+            Err(SchemaError::DomainExceedsWidth {
+                table: table_name(),
+                column: column_name(),
+            })
+        );
+    }
 }
