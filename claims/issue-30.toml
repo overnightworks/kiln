@@ -1,0 +1,7 @@
+claim_id = "61dd0d4041744084ae73012fd860e385"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "e97b3d2f226cc1144bacaf941a11f383e231ec72"
+branch = "claude/issue-30-e4-protocol-amendment"
+scope = ["experiments/e4-sqlite-cost-anatomy/protocol.md"]
+opened_commit = "8ac9c9eb447380ec8688e400ffda59a1ba9b32ec"
