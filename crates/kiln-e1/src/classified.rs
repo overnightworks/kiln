@@ -1,6 +1,6 @@
 use std::fmt;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::unit::UnitRecord;
 
@@ -91,6 +91,10 @@ impl Reason {
         }
         Ok(Self(text))
     }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 #[derive(Deserialize)]
@@ -103,7 +107,7 @@ struct RawS4Exclusion {
 
 /// The affirmative evidence `inputs.md` §3 (S4) demands before a candidate
 /// leaves the denominator.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(try_from = "RawS4Exclusion")]
 pub struct S4Exclusion {
     receiver_type: String,
@@ -161,7 +165,7 @@ pub enum Classification {
     ExcludedNonDatabase(S4Exclusion),
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum WireCategory {
     Static,
@@ -183,6 +187,56 @@ struct WireClassifiedUnit {
     refusal_reason: Option<String>,
     #[serde(default)]
     s4_exclusion: Option<S4Exclusion>,
+}
+
+/// The JSONL line a [`ClassifiedUnit`] is written as; the reader accepts it
+/// back as [`WireClassifiedUnit`].
+#[derive(Serialize)]
+struct WrittenClassifiedUnit<'a> {
+    unit: &'a UnitRecord,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category: Option<WireCategory>,
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    evidence: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refusal_reason: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    s4_exclusion: Option<&'a S4Exclusion>,
+}
+
+impl<'a> From<&'a ClassifiedUnit> for WrittenClassifiedUnit<'a> {
+    fn from(classified: &'a ClassifiedUnit) -> Self {
+        let written = Self {
+            unit: &classified.unit,
+            category: None,
+            evidence: &[],
+            refusal_reason: None,
+            s4_exclusion: None,
+        };
+        match &classified.classification {
+            Classification::Proven { category, evidence } => Self {
+                category: Some(WireCategory::from(*category)),
+                evidence: evidence.paths(),
+                ..written
+            },
+            Classification::Unknown { reason, evidence } => Self {
+                category: Some(WireCategory::Unknown),
+                evidence: evidence.as_ref().map_or(&[], Evidence::paths),
+                refusal_reason: Some(reason.as_str()),
+                ..written
+            },
+            Classification::ExcludedNonDatabase(exclusion) => Self {
+                s4_exclusion: Some(exclusion),
+                ..written
+            },
+        }
+    }
+}
+
+impl Serialize for ClassifiedUnit {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        WrittenClassifiedUnit::from(self).serialize(serializer)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -247,6 +301,16 @@ impl TryFrom<WireClassifiedUnit> for ClassifiedUnit {
             },
         };
         Ok(Self::new(wire.unit, classification))
+    }
+}
+
+impl From<ProvenCategory> for WireCategory {
+    fn from(category: ProvenCategory) -> Self {
+        match category {
+            ProvenCategory::Static => Self::Static,
+            ProvenCategory::OneHop => Self::OneHop,
+            ProvenCategory::DomainBounded => Self::DomainBounded,
+        }
     }
 }
 

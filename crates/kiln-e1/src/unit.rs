@@ -1,11 +1,11 @@
 use std::fmt;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::tpcc::TpccTransaction;
 
 /// The application's `owner_repo` in `corpus-manifest.csv`.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(transparent)]
 pub struct ApplicationId(String);
 
@@ -27,14 +27,14 @@ impl fmt::Display for ApplicationId {
 
 /// The rules of `inputs.md` §3 that make a unit; S1 reports sites and S4
 /// excludes candidates, so neither makes a unit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum UnitRule {
     S2,
     S3,
     S5,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SiteLocation {
     pub file: String,
@@ -45,7 +45,7 @@ pub struct SiteLocation {
 /// What a unit belongs to: a manifest application, or one of TPC-C's
 /// transaction types (`inputs.md` §1). The JSON boundary tells them apart, so
 /// no later step parses a name.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Subject {
     Application(ApplicationId),
@@ -53,7 +53,7 @@ pub enum Subject {
 }
 
 /// One enumerated transaction function, as an extractor reports it.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct UnitRecord {
     pub subject: Subject,
