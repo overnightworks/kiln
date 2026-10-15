@@ -144,8 +144,12 @@ pub enum CellComparison {
         summary: OverheadSummary,
     },
     /// A pair exhausted its retry budget (protocol §5 repeat policy, §9):
-    /// "inconclusive — insufficient repetitions".
-    InsufficientPairs { succeeded: usize, required: usize },
+    /// "inconclusive — insufficient repetitions". The pairs that did
+    /// complete stay, each with its index and starting build (§11).
+    InsufficientPairs {
+        pairs: Vec<ComparisonPair>,
+        required: usize,
+    },
 }
 
 impl CellComparison {
@@ -176,74 +180,81 @@ impl WorkloadComparison {
                 "  {label}: not gated — its read-only transaction never reaches the timed VFS \
                  calls, so the bound holds by construction (§5); no comparison ran\n"
             ),
-            CellComparison::InsufficientPairs {
-                succeeded,
-                required,
-            } => format!(
-                "  {label}: inconclusive — insufficient repetitions ({succeeded}/{required} pairs succeeded)\n"
+            CellComparison::InsufficientPairs { pairs, required } => format!(
+                "  {label}: inconclusive — insufficient repetitions ({}/{required} pairs succeeded)\n{}",
+                pairs.len(),
+                render_pairs(pairs),
             ),
-            CellComparison::Judged { pairs, summary } => {
-                let mut out = format!("  {label}: gated, {} pairs\n", pairs.len());
-                for pair in pairs {
-                    out.push_str(&format!(
-                        "    pair={:<2} first={:<12} ops={:<6} instrumented_mean_ns={:>10.1} passthrough_mean_ns={:>10.1} overhead={:>6.2}%\n",
-                        pair.pair_index,
-                        pair.first_build.label(),
-                        pair.operations_measured,
-                        pair.instrumented_mean_wall_ns,
-                        pair.passthrough_mean_wall_ns,
-                        pair.overhead_fraction * 100.0,
-                    ));
-                }
-                out.push_str(&format!(
-                    "    median={:.2}% range=[{:.2}%, {:.2}%] -> {}\n",
-                    summary.median * 100.0,
-                    summary.min * 100.0,
-                    summary.max * 100.0,
-                    summary.verdict.label(),
-                ));
-                out
-            }
+            CellComparison::Judged { pairs, summary } => format!(
+                "  {label}: gated, {} pairs\n{}    median={:.2}% range=[{:.2}%, {:.2}%] -> {}\n",
+                pairs.len(),
+                render_pairs(pairs),
+                summary.median * 100.0,
+                summary.min * 100.0,
+                summary.max * 100.0,
+                summary.verdict.label(),
+            ),
         }
     }
 }
 
-/// Reduces one gated workload's driver outcome to its judged cell — pure,
-/// so it is tested without spawning any process.
+/// One line per pair, with its index and the build that ran first (§11).
+fn render_pairs(pairs: &[ComparisonPair]) -> String {
+    pairs
+        .iter()
+        .map(|pair| {
+            format!(
+                "    pair={:<2} first={:<12} ops={:<6} instrumented_mean_ns={:>10.1} passthrough_mean_ns={:>10.1} overhead={:>6.2}%\n",
+                pair.pair_index,
+                pair.first_build.label(),
+                pair.operations_measured,
+                pair.instrumented_mean_wall_ns,
+                pair.passthrough_mean_wall_ns,
+                pair.overhead_fraction * 100.0,
+            )
+        })
+        .collect()
+}
+
+/// The reported pair for one completed repetition: the repetition's
+/// 0-based index gives the pair index (1-based, §5) and the counterbalanced
+/// starting build.
+fn pair_of(finished: &driver::FinishedRepetition<ComparisonMeasurement>) -> ComparisonPair {
+    let measurement = &finished.value;
+    ComparisonPair {
+        pair_index: finished.repetition_index + 1,
+        first_build: first_build(finished.repetition_index),
+        operations_measured: measurement.operations_measured,
+        instrumented_mean_wall_ns: measurement.instrumented_mean_wall_ns,
+        passthrough_mean_wall_ns: measurement.passthrough_mean_wall_ns,
+        overhead_fraction: overhead_fraction(
+            measurement.instrumented_mean_wall_ns,
+            measurement.passthrough_mean_wall_ns,
+        ),
+    }
+}
+
+/// Reduces one gated cell's driver outcome to its judged cell — pure, so
+/// it is tested without spawning any process.
 pub fn judge_cell(outcome: &driver::CellOutcome<ComparisonMeasurement>) -> CellComparison {
     match outcome {
-        driver::CellOutcome::Completed(successes) => {
-            let pairs: Vec<ComparisonPair> = successes
-                .iter()
-                .enumerate()
-                .map(|(repetition_index, measurement)| ComparisonPair {
-                    pair_index: repetition_index + 1,
-                    first_build: first_build(repetition_index),
-                    operations_measured: measurement.operations_measured,
-                    instrumented_mean_wall_ns: measurement.instrumented_mean_wall_ns,
-                    passthrough_mean_wall_ns: measurement.passthrough_mean_wall_ns,
-                    overhead_fraction: overhead_fraction(
-                        measurement.instrumented_mean_wall_ns,
-                        measurement.passthrough_mean_wall_ns,
-                    ),
-                })
-                .collect();
+        driver::CellOutcome::Completed(finished) => {
+            let pairs: Vec<ComparisonPair> = finished.iter().map(pair_of).collect();
             let ratios: Vec<f64> = pairs.iter().map(|pair| pair.overhead_fraction).collect();
             match summarize(&ratios) {
                 Some(summary) => CellComparison::Judged { pairs, summary },
                 None => CellComparison::InsufficientPairs {
-                    succeeded: 0,
+                    pairs,
                     required: machine::REPETITIONS_PER_CELL,
                 },
             }
         }
-        driver::CellOutcome::InsufficientRepetitions {
-            succeeded,
-            required,
-        } => CellComparison::InsufficientPairs {
-            succeeded: *succeeded,
-            required: *required,
-        },
+        driver::CellOutcome::InsufficientRepetitions { finished, required } => {
+            CellComparison::InsufficientPairs {
+                pairs: finished.iter().map(pair_of).collect(),
+                required: *required,
+            }
+        }
     }
 }
 
@@ -415,13 +426,21 @@ mod tests {
         }
     }
 
+    fn finished(
+        overheads_percent: &[(usize, f64)],
+    ) -> Vec<driver::FinishedRepetition<ComparisonMeasurement>> {
+        overheads_percent
+            .iter()
+            .map(|(repetition_index, percent)| driver::FinishedRepetition {
+                repetition_index: *repetition_index,
+                value: measurement(1000.0 * (1.0 + percent / 100.0), 1000.0),
+            })
+            .collect()
+    }
+
     fn completed(overheads_percent: &[f64]) -> driver::CellOutcome<ComparisonMeasurement> {
-        driver::CellOutcome::Completed(
-            overheads_percent
-                .iter()
-                .map(|percent| measurement(1000.0 * (1.0 + percent / 100.0), 1000.0))
-                .collect(),
-        )
+        let indexed: Vec<(usize, f64)> = overheads_percent.iter().copied().enumerate().collect();
+        driver::CellOutcome::Completed(finished(&indexed))
     }
 
     mod kiln_e4_11 {
@@ -613,44 +632,66 @@ mod tests {
     mod kiln_e4_14 {
         use super::*;
 
-        #[test]
-        fn a_cell_with_an_exhausted_pair_is_reported_inconclusive_with_no_pairs() {
-            let outcome: driver::CellOutcome<ComparisonMeasurement> =
-                driver::CellOutcome::InsufficientRepetitions {
-                    succeeded: 8,
-                    required: 9,
-                };
-            assert_eq!(
-                judge_cell(&outcome),
-                CellComparison::InsufficientPairs {
-                    succeeded: 8,
-                    required: 9
-                }
-            );
+        /// Pairs 1, 2, 3 and 5 of nine completed; pair 4 exhausted its retries.
+        fn eight_of_nine_outcome() -> driver::CellOutcome<ComparisonMeasurement> {
+            driver::CellOutcome::InsufficientRepetitions {
+                finished: finished(&[(0, 1.0), (1, 1.0), (2, 1.0), (4, 1.0)]),
+                required: 9,
+            }
         }
 
         #[test]
-        fn the_rendered_insufficient_cell_names_its_reason() {
+        fn a_cell_with_an_exhausted_pair_keeps_every_completed_pair_with_its_index_and_build() {
+            let CellComparison::InsufficientPairs { pairs, required } =
+                judge_cell(&eight_of_nine_outcome())
+            else {
+                panic!("an exhausted pair makes the cell insufficient");
+            };
+
+            let kept: Vec<(usize, Build)> = pairs
+                .iter()
+                .map(|pair| (pair.pair_index, pair.first_build))
+                .collect();
+            assert_eq!(
+                kept,
+                vec![
+                    (1, Build::Instrumented),
+                    (2, Build::Passthrough),
+                    (3, Build::Instrumented),
+                    (5, Build::Instrumented),
+                ]
+            );
+            assert_eq!(required, 9);
+        }
+
+        #[test]
+        fn the_rendered_insufficient_cell_names_its_reason_and_lists_its_completed_pairs() {
             let row = WorkloadComparison {
                 workload: PilotWorkload::PointUpdate,
-                comparison: CellComparison::InsufficientPairs {
-                    succeeded: 8,
-                    required: 9,
-                },
+                comparison: judge_cell(&eight_of_nine_outcome()),
             };
+            let rendered = row.render();
+
             assert!(
-                row.render()
-                    .contains("inconclusive — insufficient repetitions (8/9 pairs succeeded)")
+                rendered.contains("inconclusive — insufficient repetitions (4/9 pairs succeeded)")
             );
+            for line in [
+                "pair=1  first=instrumented",
+                "pair=2  first=passthrough",
+                "pair=3  first=instrumented",
+                "pair=5  first=instrumented",
+            ] {
+                assert!(rendered.contains(line), "{line} missing from:\n{rendered}");
+            }
+            assert!(!rendered.contains("pair=4"), "{rendered}");
+            for verdict in ["PASS", "FAIL", "INCONCLUSIVE"] {
+                assert!(!rendered.contains(verdict), "no verdict without nine pairs");
+            }
         }
 
         #[test]
         fn an_insufficient_cell_never_lets_the_pilot_succeed() {
-            let insufficient = CellComparison::InsufficientPairs {
-                succeeded: 0,
-                required: 9,
-            };
-            assert!(!insufficient.allows_pilot_success());
+            assert!(!judge_cell(&eight_of_nine_outcome()).allows_pilot_success());
         }
     }
 }

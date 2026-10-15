@@ -76,8 +76,21 @@ impl std::error::Error for ExecutionFailure {}
 /// repetitions`... instead of stopping the run").
 #[derive(Debug, Clone)]
 pub enum CellOutcome<T> {
-    Completed(Vec<T>),
-    InsufficientRepetitions { succeeded: usize, required: usize },
+    Completed(Vec<FinishedRepetition<T>>),
+    /// Some repetition exhausted its retries; every repetition that did
+    /// succeed stays here with its index, since each one is a completed
+    /// measurement a report must not lose.
+    InsufficientRepetitions {
+        finished: Vec<FinishedRepetition<T>>,
+        required: usize,
+    },
+}
+
+/// A repetition that succeeded, with its 0-based index within its cell.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FinishedRepetition<T> {
+    pub repetition_index: usize,
+    pub value: T,
 }
 
 /// A discarded attempt, as protocol §9's rejected-attempt log records it:
@@ -192,7 +205,8 @@ pub fn run_with_logging<T>(
     mut attempt: impl FnMut(AttemptId) -> AttemptOutcome<T>,
     mut on_rejected: impl FnMut(&RejectedAttempt),
 ) -> Result<DriverRun<T>, ExecutionFailure> {
-    let mut per_cell_successes: Vec<Vec<T>> = (0..cell_count).map(|_| Vec::new()).collect();
+    let mut per_cell_finished: Vec<Vec<FinishedRepetition<T>>> =
+        (0..cell_count).map(|_| Vec::new()).collect();
     let mut rejected_attempts = Vec::new();
 
     for (cell_index, repetition_index) in interleaved_order(cell_count, repetitions_per_cell) {
@@ -214,20 +228,25 @@ pub fn run_with_logging<T>(
             },
         );
         match outcome {
-            RepetitionOutcome::Succeeded(value) => per_cell_successes[cell_index].push(value),
+            RepetitionOutcome::Succeeded(value) => {
+                per_cell_finished[cell_index].push(FinishedRepetition {
+                    repetition_index,
+                    value,
+                });
+            }
             RepetitionOutcome::FailedInterference => {}
             RepetitionOutcome::ExecutionFailed(failure) => return Err(failure),
         }
     }
 
-    let cell_outcomes = per_cell_successes
+    let cell_outcomes = per_cell_finished
         .into_iter()
-        .map(|successes| {
-            if successes.len() == repetitions_per_cell {
-                CellOutcome::Completed(successes)
+        .map(|finished| {
+            if finished.len() == repetitions_per_cell {
+                CellOutcome::Completed(finished)
             } else {
                 CellOutcome::InsufficientRepetitions {
-                    succeeded: successes.len(),
+                    finished,
                     required: repetitions_per_cell,
                 }
             }
@@ -441,6 +460,13 @@ mod tests {
     mod kiln_e4_03 {
         use super::*;
 
+        fn values_and_indices(finished: &[FinishedRepetition<usize>]) -> Vec<(usize, usize)> {
+            finished
+                .iter()
+                .map(|repetition| (repetition.value, repetition.repetition_index))
+                .collect()
+        }
+
         #[test]
         fn a_cell_with_every_repetition_succeeding_is_completed() {
             let result =
@@ -449,7 +475,9 @@ mod tests {
             assert_eq!(result.cell_outcomes.len(), 2);
             for outcome in &result.cell_outcomes {
                 match outcome {
-                    CellOutcome::Completed(successes) => assert_eq!(successes, &vec![0, 1, 2]),
+                    CellOutcome::Completed(finished) => {
+                        assert_eq!(values_and_indices(finished), vec![(0, 0), (1, 1), (2, 2)]);
+                    }
                     CellOutcome::InsufficientRepetitions { .. } => panic!("expected Completed"),
                 }
             }
@@ -472,17 +500,18 @@ mod tests {
             });
 
             match &result.cell_outcomes[0] {
-                CellOutcome::InsufficientRepetitions {
-                    succeeded,
-                    required,
-                } => {
-                    assert_eq!(*succeeded, 2);
+                CellOutcome::InsufficientRepetitions { finished, required } => {
+                    // The failed repetition 1 leaves a gap in the indices:
+                    // the survivors keep theirs.
+                    assert_eq!(values_and_indices(finished), vec![(0, 0), (2, 2)]);
                     assert_eq!(*required, 3);
                 }
                 CellOutcome::Completed(_) => panic!("expected cell 0 to be insufficient"),
             }
             match &result.cell_outcomes[1] {
-                CellOutcome::Completed(successes) => assert_eq!(successes, &vec![0, 1, 2]),
+                CellOutcome::Completed(finished) => {
+                    assert_eq!(values_and_indices(finished), vec![(0, 0), (1, 1), (2, 2)]);
+                }
                 CellOutcome::InsufficientRepetitions { .. } => panic!("expected cell 1 completed"),
             }
             // 4 attempts (1 original + 3 retries), all rejected, for exactly

@@ -650,7 +650,7 @@ mod tests {
             let insufficient = WorkloadComparison {
                 workload: PilotWorkload::PointUpdate,
                 comparison: CellComparison::InsufficientPairs {
-                    succeeded: 3,
+                    pairs: Vec::new(),
                     required: 9,
                 },
             };
