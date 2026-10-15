@@ -1,6 +1,6 @@
 --- Durable.tla
 +++ Durable.tla
-@@ -136,13 +136,16 @@
+@@ -138,14 +138,17 @@
    /\ Serving /\ FailureBudgetLeft /\ unflushed # <<>>
    /\ \E persistedFromTail \in 0..Len(unflushed) :
         log' = Persisted(persistedFromTail)
@@ -11,6 +11,7 @@
 +  /\ reserved' = [t \in Txns |-> IF t \in TxnsOf(unflushed) THEN NoReservation ELSE reserved[t]]
    /\ fsyncFailed' = fsyncFailed \cup TxnsOf(unflushed)
    /\ unresolved' = TxnsOf(unflushed)
+   /\ reservedAtUnknown' = reserved
    /\ unflushed' = <<>>
    /\ engine' = "fenced"
    /\ failuresUsed' = failuresUsed + 1

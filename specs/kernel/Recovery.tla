@@ -36,8 +36,10 @@ RecoveryInitDb ==
 RecoveryDurableUnackedUnreached ==
   ~(engine = "down" /\ "t1" \in TxnsOf(history) /\ answer["t1"] = "none")
 
-(* After that crash, recovery serves t1's commit although its caller was
-   never acknowledged: the caller's answer is unknown. *)
+(* Recovery serves t1's commit although its caller was never
+   acknowledged, with no fsync failure involved: t1's record was in the
+   tail when the crash persisted it (Enqueue, Crash, Recover; no Flush),
+   and the caller's answer is unknown. *)
 RecoveryUnackedCommittedUnreached ==
   ~(engine = "up" /\ failuresUsed = 1 /\ fsyncFailed = {}
     /\ status["t1"] = "committed" /\ answer["t1"] = "unknown")

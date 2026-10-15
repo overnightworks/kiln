@@ -37,9 +37,10 @@ VARIABLES
   answer,        \* [Txns -> {"none", "committed", "unknown", "aborted"}]: the commit call's response
   fsyncFailed,   \* ghost: every transaction whose commit call met an fsync failure
   unresolved,    \* ghost: the transactions whose outcome is unknown until recovery
+  reservedAtUnknown, \* ghost: every transaction's escrow reservations when the last fsync failure struck
   failuresUsed
 
-DVars == <<Vars, log, unflushed, history, engine, answer, fsyncFailed, unresolved, failuresUsed>>
+DVars == <<Vars, log, unflushed, history, engine, answer, fsyncFailed, unresolved, reservedAtUnknown, failuresUsed>>
 
 (* A commit record carries the transaction's effects as Commit applies
    them: tentative rows and escrow deltas. Effects of transactions in the
@@ -74,10 +75,11 @@ DInit ==
   /\ answer = [t \in Txns |-> "none"]
   /\ fsyncFailed = {}
   /\ unresolved = {}
+  /\ reservedAtUnknown = [t \in Txns |-> NoReservation]
   /\ failuresUsed = 0
 
 JournalUnchanged ==
-  UNCHANGED <<log, unflushed, history, engine, answer, fsyncFailed, unresolved, failuresUsed>>
+  UNCHANGED <<log, unflushed, history, engine, answer, fsyncFailed, unresolved, reservedAtUnknown, failuresUsed>>
 
 Serving == engine = "up"
 
@@ -91,7 +93,7 @@ Enqueue(t) ==
   /\ Serving /\ Active(t) /\ pc[t] = Len(Prog[t])
   /\ t \notin TxnsOf(unflushed)
   /\ unflushed' = Append(unflushed, Record(t))
-  /\ UNCHANGED <<Vars, log, history, engine, answer, fsyncFailed, unresolved, failuresUsed>>
+  /\ UNCHANGED <<Vars, log, history, engine, answer, fsyncFailed, unresolved, reservedAtUnknown, failuresUsed>>
 
 (* The flush of the oldest record succeeds: the commit is durable and takes
    effect, releasing everything the transaction held (strict two-phase
@@ -109,12 +111,12 @@ Flush ==
      /\ reserved' = [reserved EXCEPT ![t] = NoReservation]
      /\ wr' = [wr EXCEPT ![t] = NoWrites]
      /\ draws' = [draws EXCEPT ![t] = NoDraws]
-  /\ UNCHANGED <<seq, pc, resp, widened, engine, answer, fsyncFailed, unresolved, failuresUsed>>
+  /\ UNCHANGED <<seq, pc, resp, widened, engine, answer, fsyncFailed, unresolved, reservedAtUnknown, failuresUsed>>
 
 Ack(t) ==
   /\ Serving /\ status[t] = "committed" /\ answer[t] = "none"
   /\ answer' = [answer EXCEPT ![t] = "committed"]
-  /\ UNCHANGED <<Vars, log, unflushed, history, engine, fsyncFailed, unresolved, failuresUsed>>
+  /\ UNCHANGED <<Vars, log, unflushed, history, engine, fsyncFailed, unresolved, reservedAtUnknown, failuresUsed>>
 
 FailureBudgetLeft == failuresUsed < Failures
 
@@ -127,7 +129,7 @@ Crash ==
   /\ unflushed' = <<>>
   /\ engine' = "down"
   /\ failuresUsed' = failuresUsed + 1
-  /\ UNCHANGED <<Vars, history, answer, fsyncFailed, unresolved>>
+  /\ UNCHANGED <<Vars, history, answer, fsyncFailed, unresolved, reservedAtUnknown>>
 
 (* A flush fails (§9.2): the writer is fenced and every transaction in the
    flush is answered "unknown" - the bytes may already be durable. They keep
@@ -139,6 +141,7 @@ FsyncFail ==
   /\ answer' = [t \in Txns |-> IF t \in TxnsOf(unflushed) THEN "unknown" ELSE answer[t]]
   /\ fsyncFailed' = fsyncFailed \cup TxnsOf(unflushed)
   /\ unresolved' = TxnsOf(unflushed)
+  /\ reservedAtUnknown' = reserved
   /\ unflushed' = <<>>
   /\ engine' = "fenced"
   /\ failuresUsed' = failuresUsed + 1
@@ -173,7 +176,7 @@ Recover ==
   /\ unresolved' = {}
   /\ unflushed' = <<>>
   /\ engine' = "up"
-  /\ UNCHANGED <<pc, resp, widened, log, fsyncFailed, failuresUsed>>
+  /\ UNCHANGED <<pc, resp, widened, log, fsyncFailed, reservedAtUnknown, failuresUsed>>
 
 DTerminating == Finished /\ Serving /\ UNCHANGED DVars
 
@@ -200,6 +203,7 @@ DTypeOK ==
   /\ engine \in {"up", "fenced", "down"}
   /\ answer \in [Txns -> {"none", "committed", "unknown", "aborted"}]
   /\ fsyncFailed \subseteq Txns /\ unresolved \subseteq fsyncFailed
+  /\ reservedAtUnknown \in [Txns -> [Keys -> Nat]]
   /\ failuresUsed \in 0..Failures
   /\ Len(log) = Cardinality(TxnsOf(log))
   /\ db = Replay(history)
@@ -224,11 +228,13 @@ NoKnownAbortAfterFsyncFailure ==
 KnownAbortNotInLog ==
   \A t \in Txns : (answer[t] = "aborted" \/ status[t] = "aborted") => t \notin TxnsOf(log)
 
-(* §5: an unknown outcome releases nothing until recovery resolves it. *)
+(* §5: an unknown outcome releases nothing until recovery resolves it: the
+   footprint is whole and every reservation, a zero one included, is
+   exactly what the transaction held when the flush failed. *)
 UnknownKeepsReservations ==
   \A t \in unresolved :
     /\ status[t] = "active"
     /\ held[t] = Requested(t)
-    /\ \A k \in EscrowKeys(t) : reserved[t][k] > 0
+    /\ reserved[t] = reservedAtUnknown[t]
 
 ============================================================================

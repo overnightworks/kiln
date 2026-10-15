@@ -1,10 +1,10 @@
 TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
 Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 0 and seed 5386055031857875436 with 1 worker on 12 cores with 15518MB heap and 64MB offheap memory [pid: 623008] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
-Starting... (2026-10-16 00:44:30)
+Running breadth-first search Model-Checking with fp 0 and seed 6115097622145020746 with 1 worker on 12 cores with 15518MB heap and 64MB offheap memory [pid: 731061] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-10-16 00:50:50)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-16 00:44:30.
+Finished computing initial states: 1 distinct state generated at 2026-10-16 00:50:50.
 Error: Invariant RecoveryResolvedCommittedUnreached is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
@@ -36,11 +36,12 @@ State 1: <Initial predicate>
       << [val |-> 0, bal |-> 0],
          [val |-> 0, bal |-> 0],
          [val |-> 0, bal |-> 0] >> ]
+/\ reservedAtUnknown = [t1 |-> <<0, 0, 0>>, t2 |-> <<0, 0, 0>>, t3 |-> <<0, 0, 0>>]
 /\ status = [t1 |-> "pending", t2 |-> "pending", t3 |-> "pending"]
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 2: <Dispatched line 85, col 18 to line 85, col 59 of module Durable>
+State 2: <Dispatched line 87, col 18 to line 87, col 59 of module Durable>
 /\ seq = [t1 |-> 1, t2 |-> 0, t3 |-> 0]
 /\ answer = [t1 |-> "none", t2 |-> "none", t3 |-> "none"]
 /\ log = <<>>
@@ -69,11 +70,12 @@ State 2: <Dispatched line 85, col 18 to line 85, col 59 of module Durable>
       << [val |-> 0, bal |-> 0],
          [val |-> 0, bal |-> 0],
          [val |-> 0, bal |-> 0] >> ]
+/\ reservedAtUnknown = [t1 |-> <<0, 0, 0>>, t2 |-> <<0, 0, 0>>, t3 |-> <<0, 0, 0>>]
 /\ status = [t1 |-> "pending", t2 |-> "pending", t3 |-> "pending"]
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 3: <Acquired line 86, col 16 to line 86, col 56 of module Durable>
+State 3: <Acquired line 88, col 16 to line 88, col 56 of module Durable>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ answer = [t1 |-> "none", t2 |-> "none", t3 |-> "none"]
 /\ log = <<>>
@@ -102,11 +104,12 @@ State 3: <Acquired line 86, col 16 to line 86, col 56 of module Durable>
       << [val |-> 0, bal |-> 0],
          [val |-> 0, bal |-> 0],
          [val |-> 0, bal |-> 0] >> ]
+/\ reservedAtUnknown = [t1 |-> <<0, 0, 0>>, t2 |-> <<0, 0, 0>>, t3 |-> <<0, 0, 0>>]
 /\ status = [t1 |-> "active", t2 |-> "pending", t3 |-> "pending"]
 /\ held = [t1 |-> {[kind |-> "DRAW", cov |-> {1}]}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 4: <Executed line 87, col 16 to line 87, col 53 of module Durable>
+State 4: <Executed line 89, col 16 to line 89, col 53 of module Durable>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ answer = [t1 |-> "none", t2 |-> "none", t3 |-> "none"]
 /\ log = <<>>
@@ -135,11 +138,12 @@ State 4: <Executed line 87, col 16 to line 87, col 53 of module Durable>
       << [val |-> 0, bal |-> 0],
          [val |-> 0, bal |-> 0],
          [val |-> 0, bal |-> 0] >> ]
+/\ reservedAtUnknown = [t1 |-> <<0, 0, 0>>, t2 |-> <<0, 0, 0>>, t3 |-> <<0, 0, 0>>]
 /\ status = [t1 |-> "active", t2 |-> "pending", t3 |-> "pending"]
 /\ held = [t1 |-> {[kind |-> "DRAW", cov |-> {1}]}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 5: <Enqueue line 91, col 3 to line 94, col 92 of module Durable>
+State 5: <Enqueue line 93, col 3 to line 96, col 111 of module Durable>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ answer = [t1 |-> "none", t2 |-> "none", t3 |-> "none"]
 /\ log = <<>>
@@ -173,11 +177,12 @@ State 5: <Enqueue line 91, col 3 to line 94, col 92 of module Durable>
       << [val |-> 0, bal |-> 0],
          [val |-> 0, bal |-> 0],
          [val |-> 0, bal |-> 0] >> ]
+/\ reservedAtUnknown = [t1 |-> <<0, 0, 0>>, t2 |-> <<0, 0, 0>>, t3 |-> <<0, 0, 0>>]
 /\ status = [t1 |-> "active", t2 |-> "pending", t3 |-> "pending"]
 /\ held = [t1 |-> {[kind |-> "DRAW", cov |-> {1}]}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 6: <FsyncFail line 136, col 3 to line 145, col 32 of module Durable>
+State 6: <FsyncFail line 138, col 3 to line 148, col 32 of module Durable>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ answer = [t1 |-> "unknown", t2 |-> "none", t3 |-> "none"]
 /\ log = << [ txn |-> "t1",
@@ -211,11 +216,12 @@ State 6: <FsyncFail line 136, col 3 to line 145, col 32 of module Durable>
       << [val |-> 0, bal |-> 0],
          [val |-> 0, bal |-> 0],
          [val |-> 0, bal |-> 0] >> ]
+/\ reservedAtUnknown = [t1 |-> <<1, 0, 0>>, t2 |-> <<0, 0, 0>>, t3 |-> <<0, 0, 0>>]
 /\ status = [t1 |-> "active", t2 |-> "pending", t3 |-> "pending"]
 /\ held = [t1 |-> {[kind |-> "DRAW", cov |-> {1}]}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 7: <Recover line 159, col 3 to line 176, col 68 of module Durable>
+State 7: <Recover line 162, col 3 to line 179, col 87 of module Durable>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ answer = [t1 |-> "unknown", t2 |-> "none", t3 |-> "none"]
 /\ log = << [ txn |-> "t1",
@@ -254,6 +260,7 @@ State 7: <Recover line 159, col 3 to line 176, col 68 of module Durable>
       << [val |-> 0, bal |-> 0],
          [val |-> 0, bal |-> 0],
          [val |-> 0, bal |-> 0] >> ]
+/\ reservedAtUnknown = [t1 |-> <<1, 0, 0>>, t2 |-> <<0, 0, 0>>, t3 |-> <<0, 0, 0>>]
 /\ status = [t1 |-> "committed", t2 |-> "pending", t3 |-> "pending"]
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
@@ -261,4 +268,4 @@ State 7: <Recover line 159, col 3 to line 176, col 68 of module Durable>
 323 states generated, 228 distinct states found, 114 states left on queue.
 The depth of the complete state graph search is 7.
 The average outdegree of the complete state graph is 2 (minimum is 0, the maximum 6 and the 95th percentile is 4).
-Finished in 00s at (2026-10-16 00:44:30)
+Finished in 00s at (2026-10-16 00:50:50)
