@@ -188,6 +188,31 @@ mod kiln_ir_45 {
     }
 }
 
+fn nodes_program(effects: Vec<Effect>) -> Program {
+    let schema = Schema {
+        tables: vec![Table {
+            name: table("nodes"),
+            columns: vec![integer_column("parent")],
+        }],
+        foreign_keys: vec![ForeignKey {
+            table: table("nodes"),
+            column: column("parent"),
+            references: table("nodes"),
+        }],
+        ..Default::default()
+    };
+    program_with_schema(
+        schema,
+        vec![],
+        effects,
+        Terminal::Return(kiln_ir::Expr::Literal(integer(0))),
+    )
+}
+
+fn run_nodes(effects: Vec<Effect>, store: &Store) -> Execution {
+    run_ok(&nodes_program(effects), &call_under_test(vec![]), store)
+}
+
 mod kiln_ir_46 {
     use super::*;
 
@@ -216,7 +241,60 @@ mod kiln_ir_46 {
                 }
             );
             assert_eq!(execution.store, store);
+            assert_eq!(constraint_entries(&execution), vec![parent_read(2)]);
         }
+    }
+
+    #[test]
+    fn child_pointing_at_a_parent_deleted_in_the_same_call_aborts_as_dangling() {
+        let store = store_with_orders(&[1], &[]);
+
+        let execution = run_shop(
+            vec![
+                delete_row("customers", 1),
+                insert_row("orders", 11, [("customer", integer(1))]),
+            ],
+            &store,
+        );
+
+        assert_eq!(
+            aborted_reason(&execution),
+            &AbortReason::DanglingReference {
+                foreign_key: orders_customer(),
+                value: integer(1),
+            }
+        );
+    }
+
+    #[test]
+    fn table_referencing_itself_is_checked_like_any_other() {
+        let store = store_of_rows(&[("nodes", 1, vec![("parent", integer(1))])]);
+
+        let committed = run_nodes(
+            vec![insert_row("nodes", 2, [("parent", integer(1))])],
+            &store,
+        );
+        let dangling = run_nodes(
+            vec![insert_row("nodes", 2, [("parent", integer(9))])],
+            &store,
+        );
+        let parent_removed = run_nodes(
+            vec![delete_row("nodes", 1)],
+            &store_of_rows(&[
+                ("nodes", 1, vec![("parent", integer(1))]),
+                ("nodes", 2, vec![("parent", integer(1))]),
+            ]),
+        );
+
+        assert!(matches!(committed.outcome, Outcome::Committed { .. }));
+        assert!(matches!(
+            aborted_reason(&dangling),
+            AbortReason::DanglingReference { .. }
+        ));
+        assert!(matches!(
+            aborted_reason(&parent_removed),
+            AbortReason::ReferencedParentDeleted { .. }
+        ));
     }
 }
 
@@ -269,6 +347,23 @@ mod kiln_ir_48 {
             }
         );
         assert_eq!(execution.store, store);
+        assert_eq!(constraint_entries(&execution), vec![children_lookup(1)]);
+    }
+
+    #[test]
+    fn deleting_a_parent_key_that_never_existed_aborts_as_a_missing_row() {
+        let store = store_with_orders(&[1], &[(10, 1)]);
+
+        let execution = run_shop(vec![delete_row("customers", 9)], &store);
+
+        assert_eq!(
+            aborted_reason(&execution),
+            &AbortReason::MissingRow {
+                table: table("customers"),
+                key: integer(9),
+            }
+        );
+        assert!(constraint_entries(&execution).is_empty());
     }
 }
 
@@ -340,6 +435,11 @@ mod kiln_ir_50 {
                     delete_row("orders", 11),
                 ],
                 vec![],
+            ),
+            (
+                "child row inserted without the foreign-key column",
+                vec![insert_row("orders", 11, [("code", text("z"))])],
+                vec![code_check("z")],
             ),
             (
                 "other column written",

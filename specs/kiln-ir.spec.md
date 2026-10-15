@@ -80,16 +80,16 @@ module; several tests may share it.
 ## Foreign keys
 
 - [KILN-IR-45] A foreign key is declared in the schema on one column of one table and references another declared table's key. A schema that declares one on an undeclared table or column, or that references an undeclared table, is rejected with a typed schema error.
-- [KILN-IR-46] A row in a transaction's final state whose foreign-key column names a key that no row of the referenced table holds aborts the call with a typed reason naming the foreign key and the dangling value; the call changes no state.
+- [KILN-IR-46] A row the transaction wrote the foreign-key column on, whose final state names a key that no row of the referenced table holds aborts the call with a typed reason naming the foreign key and the dangling value; the call changes no state.
 - [KILN-IR-47] A reference that is dangling only in the middle of a transaction, because the parent is inserted or the child is repointed or removed before the end, commits.
 - [KILN-IR-48] A parent row the transaction deleted, while a row of the final state still references its key, aborts the call with a typed reason naming the foreign key and the key; the call changes no state.
 - [KILN-IR-49] A parent row the transaction deleted commits when no row of the final state references its key any more, including when the transaction removed or repointed the children first, and when the transaction inserted the parent again.
-- [KILN-IR-50] A child check logs one constraint-origin point read, touching no column, on the referenced table at the referenced key per child row the transaction wrote the foreign-key column on, however often it wrote the row. A parent-deletion check logs one constraint-origin lookup on the child table by the deleted key (the representation the unique check uses) per deleted parent key absent from the final state. Neither logs a range read or table scan.
+- [KILN-IR-50] A child check logs one constraint-origin point read, touching no column, on the referenced table at the referenced key per child row the transaction wrote the foreign-key column on, however often it wrote the row; a child row written without that column is not checked. A parent-deletion check logs one constraint-origin lookup on the child table by the deleted key (the representation the unique check uses) per deleted parent key absent from the final state. Neither logs a range read or table scan.
 
 ## Check constraints
 
-- [KILN-IR-51] A check constraint is declared in the schema on one column of one table as a comparison (at least, at most) against a literal. A schema that declares one on an undeclared table or column is rejected with a typed schema error.
-- [KILN-IR-52] A row in a transaction's final state that violates a check constraint aborts the call with a typed reason naming the constraint and the row's key; the call changes no state. A violation that exists only in the middle of the transaction commits.
+- [KILN-IR-51] A check constraint is declared in the schema on one column of one table as a comparison (at least, at most) against a literal. A schema that declares one on an undeclared table or column is rejected with a typed schema error. The operand's type is not validated against the column's type: text compares lexicographically and a mismatched type compares by variant order.
+- [KILN-IR-52] A row the transaction wrote the constrained column on, whose final state violates a check constraint aborts the call with a typed reason naming the constraint and the row's key; the call changes no state. A violation that exists only in the middle of the transaction commits.
 - [KILN-IR-53] The same out-of-range write has three distinct outcomes: a check constraint aborts with a check violation, a clamping domain writes the clamped value and commits, and a value outside the column's width without a domain aborts with an overflow.
 - [KILN-IR-54] A check constraint reads only the row it judges: it logs no access of constraint origin, and the log holds only the row's own write.
 

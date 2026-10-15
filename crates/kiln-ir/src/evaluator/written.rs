@@ -1,7 +1,8 @@
 //! The rows a transaction wrote, derived from its access log: the one
 //! owner every end-of-transaction check asks which rows it must judge.
-//! The log already records every attempted write, so no second record of
-//! them is kept.
+//! Deriving them from the log is sound only because a failed write always
+//! aborts the call; a write that logged and then did nothing (an upsert or
+//! insert-if-absent) would make every check judge a row never written.
 
 use std::collections::BTreeSet;
 
