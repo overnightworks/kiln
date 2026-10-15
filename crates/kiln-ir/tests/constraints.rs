@@ -288,6 +288,11 @@ mod kiln_ir_42 {
                 vec![update_account(1, "name", text("Ann"))],
                 vec![],
             ),
+            (
+                "insert omitting the unique column",
+                vec![insert_account(2, "name", text("Ann"))],
+                vec![],
+            ),
             ("no write", vec![], vec![]),
         ];
 
@@ -354,7 +359,6 @@ mod kiln_ir_44 {
         let execution = run_accounts(vec![insert_account(2, "email", text("a@x"))], &store);
 
         assert!(matches!(execution.outcome, Outcome::Aborted { .. }));
-        assert_eq!(execution.access_log.len(), 2);
-        assert_eq!(execution.access_log[1], email_check("a@x"));
+        assert_eq!(constraint_entries(&execution), vec![email_check("a@x")]);
     }
 }
