@@ -1,8 +1,0 @@
-claim_id = "84cbd2f26baa4b6faff7a4fa88c33477"
-agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
-role = "builder"
-base = "d906c56970b968235604edd6c199f9f8ae89025e"
-branch = "claude/issue-59-kernel-publication-pointer"
-scope = ["docs/concept.md", "specs/README.md", "specs/kernel"]
-opened_commit = "d9654149473a1a01527ddc9ec82e245b30b175ed"
-whole_reason = "one kernel publication rule, its mutants and its concept status line"
