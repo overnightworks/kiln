@@ -6,11 +6,11 @@ mod support;
 use kiln_ir::{
     AbortReason, AccessKind, AccessLogEntry, AccessOrigin, AccessTarget, AccessedColumns,
     CheckConstraint, ClampDomain, Column, ColumnType, Comparison, Effect, Execution, Expr,
-    IntegerWidth, Outcome, OverflowReason, Schema, SchemaError, Store, Table, Terminal,
+    IntegerWidth, Outcome, OverflowReason, Schema, SchemaError, Store, Table, Terminal, Value,
 };
 use support::{
     aborted_reason, call_under_test, column, constraint_entries, insert_row, integer,
-    program_with_schema, run_ok, store_of_rows, table, update_row,
+    program_with_schema, run_ok, store_of_rows, table, text, update_row,
 };
 
 fn balance_check(comparison: Comparison, operand: i64) -> CheckConstraint {
@@ -230,5 +230,41 @@ mod kiln_ir_54 {
                 origin: AccessOrigin::TransactionLogic,
             }]
         );
+    }
+}
+
+mod kiln_ir_56 {
+    use super::*;
+
+    fn check_with(operand: Value) -> CheckConstraint {
+        CheckConstraint {
+            operand,
+            ..balance_check(Comparison::AtLeast, 0)
+        }
+    }
+
+    #[test]
+    fn operand_must_have_the_type_of_its_column() {
+        let text_balance = ColumnType::Text;
+        let cases = [
+            (plain_balance(), integer(0), true),
+            (plain_balance(), text("0"), false),
+            (text_balance, text("a"), true),
+            (text_balance, integer(0), false),
+        ];
+
+        for (column_type, operand, accepted) in cases {
+            let constraint = check_with(operand);
+            let expected = if accepted {
+                Ok(())
+            } else {
+                Err(SchemaError::CheckOperandTypeMismatch(constraint.clone()))
+            };
+
+            assert_eq!(
+                accounts_schema(column_type, vec![constraint]).validate(),
+                expected
+            );
+        }
     }
 }

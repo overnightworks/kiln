@@ -117,6 +117,15 @@ pub enum Comparison {
     AtMost,
 }
 
+impl ColumnType {
+    fn holds_kind_of(&self, value: &Value) -> bool {
+        matches!(
+            (self, value),
+            (ColumnType::Integer { .. }, Value::Integer(_)) | (ColumnType::Text, Value::Text(_))
+        )
+    }
+}
+
 impl Comparison {
     fn holds(self, value: &Value, operand: &Value) -> bool {
         match self {
@@ -215,18 +224,20 @@ impl Schema {
             }
         }
         for foreign_key in &self.foreign_keys {
-            let parent_declared = self.has_table(&foreign_key.references);
-            if !parent_declared
-                || self
-                    .column(&foreign_key.table, &foreign_key.column)
-                    .is_none()
-            {
+            let child = self.column(&foreign_key.table, &foreign_key.column);
+            let Some(child) = child.filter(|_| self.has_table(&foreign_key.references)) else {
                 return Err(SchemaError::UnknownForeignKeyTarget(foreign_key.clone()));
+            };
+            if child.kind == ColumnType::Text {
+                return Err(SchemaError::ForeignKeyTypeMismatch(foreign_key.clone()));
             }
         }
         for constraint in &self.check_constraints {
-            if self.column(&constraint.table, &constraint.column).is_none() {
+            let Some(constrained) = self.column(&constraint.table, &constraint.column) else {
                 return Err(SchemaError::UnknownCheckTarget(constraint.clone()));
+            };
+            if !constrained.kind.holds_kind_of(&constraint.operand) {
+                return Err(SchemaError::CheckOperandTypeMismatch(constraint.clone()));
             }
         }
         Ok(())
@@ -280,6 +291,12 @@ pub enum SchemaError {
     UnknownForeignKeyTarget(ForeignKey),
     /// A check constraint names a table or column the schema does not declare.
     UnknownCheckTarget(CheckConstraint),
+    /// A foreign key sits on a column that is not an integer, but tables are
+    /// keyed by integers, so no value of that column could name a parent.
+    ForeignKeyTypeMismatch(ForeignKey),
+    /// A check constraint compares its column with an operand of the other
+    /// type (integer or text), so the comparison would not depend on the data.
+    CheckOperandTypeMismatch(CheckConstraint),
 }
 
 /// A position in a function's body that a later [`Condition`] or [`Expr`]
