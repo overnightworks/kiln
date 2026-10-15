@@ -34,7 +34,8 @@ test("KILN-E1TO-01 an unknown message type or method type fails loudly", () => {
 });
 
 const TRACKED = [
-  ["the shortest path wins, not the shallowest", ["client/tsconfig.json", "src/tsconfig.json", "package.json"], "src"],
+  ["fewer characters win over fewer directories", ["packages/tsconfig.json", "a/b/tsconfig.json"], "a/b"],
+  ["a shorter path wins among tsconfigs of the same depth", ["client/tsconfig.json", "src/tsconfig.json", "package.json"], "src"],
   ["a tsconfig at the root is the root", ["src/tsconfig.json", "tsconfig.json"], ""],
   ["equal lengths are ordered lexically", ["bbb/tsconfig.json", "aaa/tsconfig.json"], "aaa"],
   ["only files named tsconfig.json count", ["a/tsconfig.build.json", "b/mytsconfig.json", "web/tsconfig.json"], "web"],
@@ -83,20 +84,39 @@ test("KILN-E1TO-04 reports are located relative to the application root and repo
   assert.deepEqual(reportOf([site(SOURCE, "repo.find(a)", "find", { file: "/etc/db.ts" })]).sites, []);
 });
 
-const PROJECT_FILE_ERROR = `Parsing error: ESLint was configured to run on \`<tsconfigRootDir>/${FILE}\` using \`parserOptions.project\`:
-- <tsconfigRootDir>/tsconfig.json
+const DOCS_LINE = "See the typescript-eslint docs for more info: https://typescript-eslint.io/troubleshooting/typed-linting#i-get-errors-telling-me-eslint-was-configured-to-run--however-that-tsconfig-does-not--none-of-those-tsconfigs-include-this-file\n";
+const CREATE_LINE = "- Create a new TSConfig that includes this file and include it in your parserOptions.project\n";
+
+const SEVERAL_PROJECTS_ERROR = `Parsing error: ESLint was configured to run on \`<tsconfigRootDir>/${FILE}\` using \`parserOptions.project\`: \n- <tsconfigRootDir>/tsconfig.json\n- <tsconfigRootDir>/packages/core/tsconfig.json
 However, none of those TSConfigs include this file. Either:
-- Create a new TSConfig that includes this file and include it in your parserOptions.project
-`;
+- Change ESLint's list of included files to not include this file
+- Change one of those TSConfigs to include this file
+${CREATE_LINE}${DOCS_LINE}`;
 
-test("KILN-E1TO-06 error output naming only files outside the project is accepted", () => {
+const ONE_PROJECT_ERROR = `Parsing error: ESLint was configured to run on \`<tsconfigRootDir>/${FILE}\` using \`parserOptions.project\`: <tsconfigRootDir>/tsconfig.json
+However, that TSConfig does not include this file. Either:
+- Change ESLint's list of included files to not include this file
+- Change that TSConfig to include this file
+${CREATE_LINE}${DOCS_LINE}`;
+
+test("KILN-E1TO-06 error output naming only files outside the project is accepted, for one or several projects", () => {
   assertOnlyFilesOutsideTheProject("");
-  assertOnlyFilesOutsideTheProject(PROJECT_FILE_ERROR + PROJECT_FILE_ERROR);
+  assertOnlyFilesOutsideTheProject(SEVERAL_PROJECTS_ERROR + ONE_PROJECT_ERROR + SEVERAL_PROJECTS_ERROR);
 });
 
-test("KILN-E1TO-06 any other error output fails loudly, wherever it sits", () => {
-  const syntaxError = "Parsing error: ';' expected.\n";
-  for (const output of [syntaxError, `${PROJECT_FILE_ERROR}${syntaxError}`, `TypeError: boom\n${PROJECT_FILE_ERROR}`]) {
+const OTHER_ERRORS = [
+  ["a syntax error", "Parsing error: ';' expected.\n"],
+  ["a syntax error after a project error", `${SEVERAL_PROJECTS_ERROR}Parsing error: ';' expected.\n`],
+  ["an unrelated error before a project error", `TypeError: boom\n${SEVERAL_PROJECTS_ERROR}`],
+  ["an unrelated error after a project error", `${SEVERAL_PROJECTS_ERROR}TypeError: boom\n`],
+  ["an unrelated error after a project error on the same line", `${ONE_PROJECT_ERROR.trimEnd()} TypeError: boom\n`],
+  ["a project error missing its explanation", SEVERAL_PROJECTS_ERROR.replace(CREATE_LINE, "")],
+  ["a project error cut off", SEVERAL_PROJECTS_ERROR.slice(0, 120)],
+  ["a project error with an extra line inside", SEVERAL_PROJECTS_ERROR.replace(CREATE_LINE, `${CREATE_LINE}Warning: stale cache\n`)],
+];
+
+for (const [name, output] of OTHER_ERRORS) {
+  test(`KILN-E1TO-06 ${name} fails loudly`, () => {
     assert.throws(() => assertOnlyFilesOutsideTheProject(output), /the analyzer reported errors/);
-  }
-});
+  });
+}
