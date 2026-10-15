@@ -8,6 +8,14 @@ publish = false
 # workspace (protocol.md §12, issue #19).
 [workspace]
 
+[features]
+# The passthrough build protocol §5's overhead bound compares the
+# instrumented build against: same code path, the timing VFS shim's two
+# `clock_gettime` calls around `xWrite`/`xSync` skipped (see src/vfs.rs).
+# Selected at build time (`cargo build --release --features
+# passthrough_shim`) so nothing else about the binary changes.
+passthrough_shim = []
+
 [dependencies]
 # Versions frozen by protocol.md §4/§12; keep both in lockstep so the
 # bundled SQLite build is the one the direct FFI (libsqlite3-sys) and
@@ -22,8 +30,9 @@ rand_core = "0.10.0"
 sha2 = "0.10"
 # CPU affinity and CLOCK_THREAD_CPUTIME_ID (protocol.md §5, §9).
 libc = "0.2"
-
-[dev-dependencies]
+# The pilot (protocol.md §13) needs its own scratch directory for a real
+# SQLite file at run time, not only in tests, so this is a normal
+# dependency rather than a dev-only one.
 tempfile = "3"
 
 [profile.release]

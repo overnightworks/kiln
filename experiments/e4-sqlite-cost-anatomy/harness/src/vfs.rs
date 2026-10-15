@@ -239,6 +239,27 @@ passthrough!(shim_shm_unmap, xShmUnmap, (delete_flag: c_int) -> c_int);
 passthrough!(shim_fetch, xFetch, (offset: ffi::sqlite3_int64, amt: c_int, out: *mut *mut c_void) -> c_int);
 passthrough!(shim_unfetch, xUnfetch, (offset: ffi::sqlite3_int64, buf: *mut c_void) -> c_int);
 
+/// Times `body`'s call around the real `xWrite`/`xSync` method with
+/// `CLOCK_MONOTONIC`, unless the `passthrough_shim` feature is enabled, in
+/// which case `body` still runs through the exact same call site but the
+/// two `clock_gettime` calls around it are skipped and the recorded
+/// elapsed time is zero (protocol §5's overhead-acceptance bound: "A
+/// second, identical build with a passthrough shim (no timer calls)
+/// measures what the two `clock_gettime` calls... cost"). Kept as one
+/// function so both timed methods below select the same way, instead of
+/// each repeating its own `#[cfg(...)]` pair.
+#[cfg(not(feature = "passthrough_shim"))]
+fn timed<R>(body: impl FnOnce() -> R) -> (R, Duration) {
+    let start = Instant::now();
+    let result = body();
+    (result, start.elapsed())
+}
+
+#[cfg(feature = "passthrough_shim")]
+fn timed<R>(body: impl FnOnce() -> R) -> (R, Duration) {
+    (body(), Duration::ZERO)
+}
+
 unsafe extern "C" fn shim_write(
     file: *mut ffi::sqlite3_file,
     buf: *const c_void,
@@ -249,9 +270,8 @@ unsafe extern "C" fn shim_write(
         let header = file as *mut ShimFileHeader;
         let real = real_file_ptr(file);
         let write = (*(*real).pMethods).xWrite.expect("real file has no xWrite");
-        let start = Instant::now();
-        let rc = write(real, buf, amt, offset);
-        counters::record((*header).kind, Bucket::Write, start.elapsed());
+        let (rc, elapsed) = timed(|| write(real, buf, amt, offset));
+        counters::record((*header).kind, Bucket::Write, elapsed);
         rc
     }
 }
@@ -261,9 +281,8 @@ unsafe extern "C" fn shim_sync(file: *mut ffi::sqlite3_file, flags: c_int) -> c_
         let header = file as *mut ShimFileHeader;
         let real = real_file_ptr(file);
         let sync = (*(*real).pMethods).xSync.expect("real file has no xSync");
-        let start = Instant::now();
-        let rc = sync(real, flags);
-        counters::record((*header).kind, Bucket::Sync, start.elapsed());
+        let (rc, elapsed) = timed(|| sync(real, flags));
+        counters::record((*header).kind, Bucket::Sync, elapsed);
         rc
     }
 }
