@@ -5,12 +5,13 @@
 mod support;
 
 use kiln_ir::{
-    replay, AbortName, AbortReason, ArithmeticOp, Block, Call, CheckConstraint, Column, ColumnType,
+    AbortName, AbortReason, ArithmeticOp, Block, Call, CheckConstraint, Column, ColumnType,
     Comparison, Condition, Effect, Execution, Expr, Function, FunctionName, IntegerWidth, Outcome,
     ParameterName, Program, Schema, Slot, Store, Table, Terminal, UniqueConstraint, Value,
 };
 use support::{
-    column, columns_of, integer, store_of_rows, table, text, text_parameter, typed_parameter,
+    column, columns_of, integer, replayed, store_of_rows, table, text, text_parameter,
+    typed_parameter,
 };
 
 fn named_call(function: &str, args: Vec<Value>) -> Call {
@@ -44,10 +45,6 @@ fn integer_column(name: &str) -> Column {
             domain: None,
         },
     }
-}
-
-fn replayed(program: &Program, calls: &[Call], store: &Store) -> Vec<Execution> {
-    replay(program, calls, store).expect("example schema is valid")
 }
 
 fn committed_with(response: i64) -> Outcome {
@@ -174,14 +171,14 @@ mod kiln_ir_61 {
 mod kiln_ir_62 {
     use super::*;
 
-    fn email_unique() -> UniqueConstraint {
+    pub(super) fn email_unique() -> UniqueConstraint {
         UniqueConstraint {
             table: table("users"),
             column: column("email"),
         }
     }
 
-    fn sign_up_program() -> Program {
+    pub(super) fn sign_up_program() -> Program {
         let schema = Schema {
             tables: vec![Table {
                 name: table("users"),
@@ -214,7 +211,7 @@ mod kiln_ir_62 {
         }
     }
 
-    fn user(id: i64, email: &str) -> support::RowSpec {
+    pub(super) fn user(id: i64, email: &str) -> support::RowSpec {
         ("users", id, vec![("email", text(email))])
     }
 
@@ -382,5 +379,103 @@ mod kiln_ir_63 {
         let executions = replayed(&rota_program(), &[call], &on_call(&[1, 2]));
 
         assert_eq!(final_store(&executions), &on_call(&[1]));
+    }
+}
+
+mod kiln_ir_64 {
+    use super::kiln_ir_62::{email_unique, sign_up_program, user};
+    use super::*;
+
+    fn balance(account: i64, amount: i64) -> support::RowSpec {
+        ("accounts", account, vec![("balance", integer(amount))])
+    }
+
+    fn balance_moved(slot: Slot, operator: ArithmeticOp) -> Expr {
+        Expr::Arithmetic(
+            operator,
+            Box::new(Expr::Projection {
+                slot,
+                column: column("balance"),
+            }),
+            Box::new(argument("amount")),
+        )
+    }
+
+    fn transfer() -> Function {
+        let body = Block {
+            effects: vec![
+                Effect::Read {
+                    table: table("accounts"),
+                    key: argument("from"),
+                    into: Slot(0),
+                },
+                Effect::Read {
+                    table: table("accounts"),
+                    key: argument("to"),
+                    into: Slot(1),
+                },
+                Effect::Update {
+                    table: table("accounts"),
+                    key: argument("from"),
+                    columns: columns_of([(
+                        "balance",
+                        balance_moved(Slot(0), ArithmeticOp::Subtract),
+                    )]),
+                },
+                Effect::Update {
+                    table: table("accounts"),
+                    key: argument("to"),
+                    columns: columns_of([("balance", balance_moved(Slot(1), ArithmeticOp::Add))]),
+                },
+            ],
+            terminal: Terminal::Return(argument("amount")),
+        };
+        function(
+            "transfer",
+            vec![
+                typed_parameter("from", IntegerWidth::I64),
+                typed_parameter("to", IntegerWidth::I64),
+                typed_parameter("amount", IntegerWidth::I32),
+            ],
+            body,
+        )
+    }
+
+    fn bank_with_sign_up() -> Program {
+        let mut program = sign_up_program();
+        program.schema.tables.push(Table {
+            name: table("accounts"),
+            columns: vec![integer_column("balance")],
+        });
+        program.functions.push(transfer());
+        program
+    }
+
+    #[test]
+    fn an_aborted_sign_up_leaves_the_committed_transfer_before_it() {
+        let calls = [
+            named_call("transfer", vec![integer(1), integer(2), integer(10)]),
+            named_call("sign_up", vec![integer(7), text("ada@example.org")]),
+        ];
+        let start = store_of_rows(&[balance(1, 100), balance(2, 0), user(5, "ada@example.org")]);
+
+        let executions = replayed(&bank_with_sign_up(), &calls, &start);
+
+        assert_eq!(
+            outcomes(&executions),
+            vec![
+                committed_with(10),
+                Outcome::Aborted {
+                    reason: AbortReason::UniqueViolation {
+                        constraint: email_unique(),
+                        value: text("ada@example.org"),
+                    }
+                },
+            ]
+        );
+        assert_eq!(
+            final_store(&executions),
+            &store_of_rows(&[balance(1, 90), balance(2, 10), user(5, "ada@example.org")])
+        );
     }
 }

@@ -9,8 +9,8 @@ use kiln_ir::{
 };
 use proptest::prelude::*;
 use support::{
-    call_under_test, column, insert_row, integer, program_with_schema, store_of_rows, table,
-    typed_parameter,
+    call_under_test, column, insert_row, integer, program_with_schema, replayed, store_of_rows,
+    table, typed_parameter,
 };
 
 fn echo_program() -> kiln_ir::Program {
@@ -48,10 +48,6 @@ fn insert_by_key_program() -> kiln_ir::Program {
         }],
         Terminal::Return(Expr::Literal(integer(0))),
     )
-}
-
-fn replayed(program: &kiln_ir::Program, calls: &[Call], store: &Store) -> Vec<Execution> {
-    replay(program, calls, store).expect("test schema is valid")
 }
 
 fn response_of(execution: &Execution) -> Option<&Value> {
@@ -176,8 +172,10 @@ mod kiln_ir_60 {
             Terminal::Abort(AbortName("never".to_owned())),
         );
 
-        let result = replay(&program, &[call_under_test(vec![])], &Store::empty());
+        for calls in [vec![], vec![call_under_test(vec![])]] {
+            let result = replay(&program, &calls, &Store::empty());
 
-        assert!(matches!(result, Err(SchemaError::ReversedDomain { .. })));
+            assert!(matches!(result, Err(SchemaError::ReversedDomain { .. })));
+        }
     }
 }

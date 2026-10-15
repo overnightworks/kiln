@@ -11,9 +11,9 @@
 //! the reference meaning it implements is recorded in `docs/concept.md`
 //! §2.2, the single owner of that meaning.
 //!
-//! The crate has no I/O: [`run`] is a pure function from a [`Program`], a [`Call`] and a
-//! [`Store`] to an [`Execution`], and [`replay`] chains it over a call
-//! sequence (D4). Both return a typed [`SchemaError`] if the program's own
+//! The crate has no I/O: [`run`] is a pure function from a [`Program`],
+//! a [`Call`] and a [`Store`] to an [`Execution`], and [`replay`] chains
+//! it over a call sequence (D4). Both return a typed [`SchemaError`] if the program's own
 //! schema is not internally satisfiable (D3).
 
 mod call;

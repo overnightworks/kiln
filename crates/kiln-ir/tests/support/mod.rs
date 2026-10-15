@@ -15,9 +15,9 @@
 use std::collections::BTreeMap;
 
 use kiln_ir::{
-    run, Call, Column, ColumnName, Effect, Execution, Expr, Function, FunctionName, IntegerWidth,
-    Parameter, ParameterName, ParameterType, Program, Row, Schema, Store, Table, TableName,
-    Terminal, Value,
+    replay, run, Call, Column, ColumnName, Effect, Execution, Expr, Function, FunctionName,
+    IntegerWidth, Parameter, ParameterName, ParameterType, Program, Row, Schema, Store, Table,
+    TableName, Terminal, Value,
 };
 use proptest::prelude::*;
 
@@ -282,4 +282,10 @@ pub fn constraint_entries(execution: &Execution) -> Vec<kiln_ir::AccessLogEntry>
         .filter(|entry| entry.origin == kiln_ir::AccessOrigin::ConstraintCheck)
         .cloned()
         .collect()
+}
+
+/// Replays `calls` against `program` and `store`, asserting the schema is
+/// valid so a test sees executions and not the typed rejection.
+pub fn replayed(program: &Program, calls: &[Call], store: &Store) -> Vec<Execution> {
+    replay(program, calls, store).expect("test schema is valid")
 }

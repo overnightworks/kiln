@@ -106,10 +106,11 @@ module; several tests may share it.
 
 - [KILN-IR-58] `replay` returns one execution per call, each at the position of its call; an empty sequence returns no executions.
 - [KILN-IR-59] `replay` runs each call against the store the previous call left, as `run` would: a committed call's changes are visible to the calls after it, an aborted call changes no state and does not stop the calls after it.
-- [KILN-IR-60] `replay` returns the typed schema error for an invalid schema instead of panicking.
+- [KILN-IR-60] `replay` returns the typed schema error for an invalid schema instead of panicking, whether or not the call sequence is empty.
 
 ## Example transactions
 
 - [KILN-IR-61] Ticket quota: buying a ticket raises an event's sold count by one under a check constraint that the count stay at most the quota. Replayed serially, the purchase that would pass the quota aborts with a check violation, the purchases before and after it commit, and the final store holds the counts of the committed purchases.
 - [KILN-IR-62] Unique sign-up: signing up inserts a user with an email under a unique constraint on the email. Replayed serially, a second sign-up with a taken email aborts with a unique violation naming the email, and the sign-ups before and after it commit.
 - [KILN-IR-63] Doctors on call: going off call deletes the doctor from the on-call table only when the range of the other doctors on call is not empty, and aborts with a declared reason otherwise. Replayed serially, the call that would leave nobody on call aborts, and the calls before and after it commit.
+- [KILN-IR-64] Mixed functions (concept §2.2): replaying `transfer` then a `sign_up` with a taken email in one program commits the transfer and aborts the sign-up with a unique violation, and the final store keeps the transfer's balances.
