@@ -109,6 +109,8 @@ pub enum AbortReason {
         slot: Slot,
         column: ColumnName,
     },
+    /// A comparison condition compared an integer with text.
+    ComparisonTypeMismatch,
     /// A write gave an integer to `column` of `table`, which the schema
     /// declares as text.
     NonTextValue {

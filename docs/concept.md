@@ -194,7 +194,14 @@ this meaning, one slice at a time.
   existing primary key aborts. A write (update or delete) targeting an
   absent row aborts — there is no implicit insert-on-update or
   no-op-on-delete. An absent key is itself a branchable value a
-  transaction may test and branch on, the same as any other value. Bounded
+  transaction may test and branch on, the same as any other value, and so
+  is a comparison of two expressions (equal, not equal, less, less or
+  equal, greater, greater or equal): the branch takes its first arm when
+  the comparison holds and its second otherwise. Integers compare
+  numerically and text by its bytes; an integer against text aborts with a
+  typed reason, never holds or fails silently. An operand that cannot be
+  resolved aborts with its own reason, and the comparison logs no access.
+  Bounded
   iteration proceeds in key order for a primary-key range and in index
   order for an index range. Write effects apply in program order
   within one transaction. An abort discards every effect the transaction
@@ -206,6 +213,9 @@ this meaning, one slice at a time.
   writes the debited balance, then a later read of the same key inside the
   same call sees that debit — not the balance the transaction started
   with — and the call returns the new balance as its response.
+  *Example (comparison).* `if kind = 0 then read by id else read by last
+  name` is decided by the call's argument alone; `if order.status = 1`
+  is decided by data an earlier read returned.
 - **D7 Reserved boundary.** Verification layer 4 will need a per-call
   disposition — execute it, or force an abort replayed as a no-op — and
   will wrap `replay` to add it later. This meaning's `replay` and `run`

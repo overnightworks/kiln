@@ -125,3 +125,9 @@ module; several tests may share it.
 - [KILN-IR-70] An indexed range read logs one transaction-logic entry of a distinct indexed-range kind naming the table, the index and both bounds, including for an empty or reversed range and for a call that then aborts; it logs no point read or primary-key range read.
 - [KILN-IR-71] Rows reached through an indexed range read expose only the indexed columns and their primary key, so a column outside the index cannot be projected from them (typed missing-column abort); a base row is reached by a point read at the projected key, so a call that stops at the index leaves only the indexed-range entry and one that follows it to base rows leaves that entry plus one point read per row accessed.
 - [KILN-IR-72] Every row a read binds carries its primary key, and a primary-key projection yields the key the point read used or the store key of the range or index row; projecting the key from an absent row aborts with the typed projection-source-absent reason.
+
+## Comparison conditions
+
+- [KILN-IR-73] A branch can compare two expressions (arguments, literals, projections, primary keys, arithmetic) by equal, not equal, less, less or equal, greater or greater or equal, and takes its first arm when the comparison holds and its second otherwise. Integers compare numerically and text compares by its bytes.
+- [KILN-IR-74] A comparison of an integer with a text value aborts the call with a typed reason and changes no state; it never holds or fails by accident.
+- [KILN-IR-75] An operand of a comparison that cannot be resolved (a projection from an absent row, an overflowing sum) aborts the call with that operand's own typed reason, and a comparison logs no access.

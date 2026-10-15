@@ -399,7 +399,40 @@ pub enum Expr {
     Arithmetic(ArithmeticOp, Box<Expr>, Box<Expr>),
 }
 
-/// A condition a [`Terminal::Branch`] decides on.
+/// How a [`Condition::Compare`] relates its left operand to its right one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Relation {
+    Equal,
+    NotEqual,
+    Less,
+    LessOrEqual,
+    Greater,
+    GreaterOrEqual,
+}
+
+impl Relation {
+    /// Whether `left` stands in this relation to `right`; `None` when the two
+    /// are not of one kind. Text compares by its bytes.
+    pub fn holds(self, left: &Value, right: &Value) -> Option<bool> {
+        let ordering = match (left, right) {
+            (Value::Integer(left), Value::Integer(right)) => left.cmp(right),
+            (Value::Text(left), Value::Text(right)) => left.cmp(right),
+            _ => return None,
+        };
+        Some(match self {
+            Relation::Equal => ordering.is_eq(),
+            Relation::NotEqual => ordering.is_ne(),
+            Relation::Less => ordering.is_lt(),
+            Relation::LessOrEqual => ordering.is_le(),
+            Relation::Greater => ordering.is_gt(),
+            Relation::GreaterOrEqual => ordering.is_ge(),
+        })
+    }
+}
+
+/// A condition a [`Terminal::Branch`] decides on; a branch takes its
+/// `when_present` arm when the condition holds and its `when_absent` arm
+/// otherwise.
 ///
 /// `RowPresent` tests one fact for either read kind that can bind a
 /// [`Slot`]: a point read (`docs/concept.md` §2.2 D6, "an absent key is a
@@ -407,9 +440,19 @@ pub enum Expr {
 /// (§2.2 D6, "an empty range reads as an empty sequence") is present when
 /// its matched sequence is non-empty — the same branchable-absence fact
 /// under one name, since both ultimately ask "did this read find anything".
+///
+/// `Compare` holds when `left` stands in `relation` to `right` (§2.2 D6,
+/// comparison conditions). Whether it depends on the store is visible from
+/// its operands: one without a projection or primary key is decided by the
+/// call's arguments alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Condition {
     RowPresent(Slot),
+    Compare {
+        left: Expr,
+        relation: Relation,
+        right: Expr,
+    },
 }
 
 /// One state-touching step of a function's body, executed in program order

@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::identifiers::{ColumnName, IndexName, TableName};
-use crate::ir::{Block, Effect, Expr, Row, Slot, Terminal, Value};
+use crate::ir::{Block, Condition, Effect, Expr, Row, Slot, Terminal, Value};
 use crate::store::{KeyedRow, Store};
 
 use super::resolve::{resolve, resolve_for_write, WriteOverflow};
@@ -555,13 +555,35 @@ fn execute_terminal(
             when_present,
             when_absent,
         } => {
-            let present = match condition {
-                crate::ir::Condition::RowPresent(slot) => {
-                    bindings.get(slot).is_some_and(Binding::is_present)
-                }
+            let present = match condition_holds(condition, ctx, bindings) {
+                Ok(present) => present,
+                Err(reason) => return Outcome::Aborted { reason },
             };
             let block = if present { when_present } else { when_absent };
             execute_block(block, ctx, store, bindings, access_log)
+        }
+    }
+}
+
+/// Whether `condition` holds against what this call has read so far; a
+/// comparison resolves both operands and logs no access.
+fn condition_holds(
+    condition: &Condition,
+    ctx: &CallContext,
+    bindings: &HashMap<Slot, Binding>,
+) -> Result<bool, AbortReason> {
+    match condition {
+        Condition::RowPresent(slot) => Ok(bindings.get(slot).is_some_and(Binding::is_present)),
+        Condition::Compare {
+            left,
+            relation,
+            right,
+        } => {
+            let left = resolve(left, ctx, bindings)?;
+            let right = resolve(right, ctx, bindings)?;
+            relation
+                .holds(&left, &right)
+                .ok_or(AbortReason::ComparisonTypeMismatch)
         }
     }
 }

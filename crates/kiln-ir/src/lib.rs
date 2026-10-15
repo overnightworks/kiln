@@ -32,7 +32,7 @@ pub use identifiers::{AbortName, ColumnName, FunctionName, IndexName, ParameterN
 pub use ir::{
     ArithmeticOp, Block, CheckConstraint, ClampDomain, Column, ColumnType, Comparison, Condition,
     Effect, Expr, ForeignKey, Function, Index, IntegerWidth, Parameter, ParameterType, Program,
-    Row, Schema, SchemaError, Slot, Table, Terminal, UniqueConstraint, Value,
+    Relation, Row, Schema, SchemaError, Slot, Table, Terminal, UniqueConstraint, Value,
 };
 pub use replay::replay;
 pub use store::{KeyedRow, Store};
