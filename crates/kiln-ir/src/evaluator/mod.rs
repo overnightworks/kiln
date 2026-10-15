@@ -17,11 +17,12 @@ use std::collections::HashMap;
 
 use crate::call::Call;
 use crate::identifiers::{AbortName, ColumnName, ParameterName, TableName};
-use crate::ir::{Parameter, Program, Row, SchemaError, Slot, Value};
+use crate::ir::{Parameter, Program, Row, SchemaError, Slot, UniqueConstraint, Value};
 use crate::store::Store;
 
 mod effects;
 mod resolve;
+mod unique;
 
 /// What a committed or aborted call produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +103,19 @@ pub enum AbortReason {
         slot: Slot,
         column: ColumnName,
     },
+    /// A write gave an integer to `column` of `table`, which the schema
+    /// declares as text.
+    NonTextValue {
+        table: TableName,
+        column: ColumnName,
+        key: Value,
+    },
+    /// The transaction's final state holds `value` in `constraint`'s column
+    /// on more than one row (D2).
+    UniqueViolation {
+        constraint: UniqueConstraint,
+        value: Value,
+    },
 }
 
 /// Why checked arithmetic overflowed, or a value fell outside its
@@ -157,6 +171,14 @@ pub enum AccessTarget {
     Range { start: Value, end: Value },
 }
 
+/// Who made an access: the transaction's own effects, or the end-of-
+/// transaction check of a schema constraint (D5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccessOrigin {
+    TransactionLogic,
+    ConstraintCheck,
+}
+
 /// One attempted access, recorded whether or not the call that made it
 /// went on to commit (D5: "attempted accesses are kept on abort").
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,6 +187,7 @@ pub struct AccessLogEntry {
     pub kind: AccessKind,
     pub target: AccessTarget,
     pub columns: AccessedColumns,
+    pub origin: AccessOrigin,
 }
 
 /// The result of running one [`Call`]: the store it produced, its outcome,
@@ -249,6 +272,14 @@ pub fn run(program: &Program, call: &Call, store: &Store) -> Result<Execution, S
         &mut bindings,
         &mut access_log,
     );
+
+    let outcome = match outcome {
+        Outcome::Committed { .. } => {
+            unique::first_violation(&program.schema, &working_store, &mut access_log)
+                .map_or(outcome, |reason| Outcome::Aborted { reason })
+        }
+        aborted @ Outcome::Aborted { .. } => aborted,
+    };
 
     let final_store = match &outcome {
         Outcome::Committed { .. } => working_store,

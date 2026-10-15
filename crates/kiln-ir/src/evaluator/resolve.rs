@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use crate::identifiers::ColumnName;
-use crate::ir::{ArithmeticOp, ClampDomain, Column, Expr, IntegerWidth, Slot, Value};
+use crate::ir::{ArithmeticOp, ClampDomain, Column, ColumnType, Expr, IntegerWidth, Slot, Value};
 
 use super::{AbortReason, Binding, CallContext, OverflowReason};
 
@@ -98,7 +98,8 @@ pub(super) fn resolve(
 /// Why [`resolve_for_write`] could not produce a value for its target
 /// column: [`resolve`] itself failed before the column was ever reached, or
 /// the expression's final value fell outside the column's declared width
-/// with no clamping domain to saturate into instead (D3).
+/// with no clamping domain to saturate into instead (D3), or an integer was
+/// written to a text column.
 ///
 /// [`apply_effect`](super::effects) is the only caller, and it already
 /// knows which table, column and key the write targeted — this type carries
@@ -108,6 +109,7 @@ pub(super) fn resolve(
 pub(super) enum WriteOverflow {
     Resolve(ResolveError),
     Width,
+    NonText,
 }
 
 /// Resolves `expr` for a write into a column declared as `declared_column`,
@@ -130,13 +132,18 @@ pub(super) fn resolve_for_write(
         return Ok(value);
     };
 
-    let raw = as_integer(value).map_err(WriteOverflow::Resolve)?;
-    let raw = match column.domain {
-        Some(domain) => clamp_to_domain(raw, domain),
-        None => check_width(raw, column.width).map_err(|_| WriteOverflow::Width)?,
-    };
-
-    Ok(Value::Integer(raw))
+    match (column.kind, value) {
+        (ColumnType::Text, text @ Value::Text(_)) => Ok(text),
+        (ColumnType::Text, Value::Integer(_)) => Err(WriteOverflow::NonText),
+        (ColumnType::Integer { width, domain }, value) => {
+            let raw = as_integer(value).map_err(WriteOverflow::Resolve)?;
+            let raw = match domain {
+                Some(domain) => clamp_to_domain(raw, domain),
+                None => check_width(raw, width).map_err(|_| WriteOverflow::Width)?,
+            };
+            Ok(Value::Integer(raw))
+        }
+    }
 }
 
 /// Extracts the integer an arithmetic operand, or a write's own final
