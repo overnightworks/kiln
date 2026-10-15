@@ -85,12 +85,27 @@ questions and are reported as two separate numbers, never conflated:
 The gating numerator is the percentage of frequency-weighted transaction
 instances whose category above is static or one-hop. Domain-bounded
 instances are not in the numerator; their share is reported separately and
-never gates the verdict. An application with no trace source, and the
-unweighted fallback metric (one per transaction function) where no trace
-exists, are likewise reported but non-gating.
+never gates the verdict.
 
-- **Pass** when TPC-C's coverage is at least 70% *and* the median coverage
-  over at least five traced applications is at least 70%.
+**Application-side gating metric.** #2's freeze
+(`experiments/e1-classification-coverage/inputs.md` §4) establishes, before
+any classification result exists, that no trace source exists for any
+application in the frozen corpus. The application half of the gate
+therefore does not wait on traces the corpus cannot produce: it gates on
+the median, over the frozen application corpus, of each application's own
+unweighted coverage share — one unit per enumerated transaction function
+(`inputs.md` §3), with no frequency weight, that classifies static or
+one-hop — reported and labelled **"unweighted — no trace source exists."**
+This replaces the "at least five traced applications" condition this
+section previously carried: that condition assumed a trace source would
+exist for some applications by the time a result was produced, and the
+freeze establishes the opposite before any result exists, so the condition
+is retired now rather than left to fail by construction on every run.
+TPC-C's own transaction mix is unaffected by this and stays weighted
+(`inputs.md` §1).
+
+- **Pass** when TPC-C's weighted coverage is at least 70% *and* the median
+  unweighted coverage over the frozen application corpus is at least 70%.
 - **Fail** when TPC-C's coverage is below 50% *or* that median is below 50%.
 - **Inconclusive** otherwise. A unit landing strictly between 50% and 70% is
   reported as inconclusive for that unit specifically, never rounded into a
