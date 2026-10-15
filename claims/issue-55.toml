@@ -1,8 +1,0 @@
-claim_id = "431f533f133a4c45a3aac3bba48890df"
-agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
-role = "builder"
-base = "27535cfcb237cb413ecb6cce595b32b8fc46b398"
-branch = "claude/issue-55-e1-tpcc-lowering"
-scope = ["crates/kiln-e1", "experiments/e1-classification-coverage", "specs/kiln-e1.spec.md"]
-opened_commit = "948e7c61cdc83c194ed884fd0a23b6f4b1e5d894"
-whole_reason = "one crate's TPC-C lowering, its command and output data under the experiment directory"
