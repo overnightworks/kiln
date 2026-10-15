@@ -1,10 +1,10 @@
 TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
 Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 46 and seed 276657920961831911 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 3156548] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
-Starting... (2026-10-15 23:15:36)
+Running breadth-first search Model-Checking with fp 13 and seed -5681707088857590532 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 3664250] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-10-15 23:40:04)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-15 23:15:37.
+Finished computing initial states: 1 distinct state generated at 2026-10-15 23:40:05.
 Error: Invariant HolderAbortReleasedUnreached is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
@@ -20,7 +20,7 @@ State 1: <Initial predicate>
 /\ held = [t1 |-> {}, t2 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>]
 
-State 2: <Dispatch line 328, col 3 to line 330, col 66 of module Kernel>
+State 2: <Dispatch line 330, col 3 to line 332, col 66 of module Kernel>
 /\ seq = [t1 |-> 1, t2 |-> 0]
 /\ resp = [t1 |-> <<>>, t2 |-> <<>>]
 /\ pc = [t1 |-> 0, t2 |-> 0]
@@ -33,8 +33,8 @@ State 2: <Dispatch line 328, col 3 to line 330, col 66 of module Kernel>
 /\ held = [t1 |-> {}, t2 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>]
 
-State 3: <Acquire line 340, col 3 to line 346, col 47 of module Kernel>
-/\ seq = [t1 |-> 1, t2 |-> 0]
+State 3: <Acquire line 342, col 3 to line 350, col 42 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
 /\ resp = [t1 |-> <<>>, t2 |-> <<>>]
 /\ pc = [t1 |-> 0, t2 |-> 0]
 /\ db = << [present |-> TRUE, val |-> 0, bal |-> 2, parent |-> 0],
@@ -47,8 +47,8 @@ State 3: <Acquire line 340, col 3 to line 346, col 47 of module Kernel>
   t2 |-> {} ]
 /\ wr = [t1 |-> << >>, t2 |-> << >>]
 
-State 4: <DoOp line 354, col 3 to line 376, col 26 of module Kernel>
-/\ seq = [t1 |-> 1, t2 |-> 0]
+State 4: <DoOp line 358, col 3 to line 380, col 26 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
 /\ resp = [t1 |-> <<"ok">>, t2 |-> <<>>]
 /\ pc = [t1 |-> 1, t2 |-> 0]
 /\ db = << [present |-> TRUE, val |-> 0, bal |-> 2, parent |-> 0],
@@ -61,8 +61,8 @@ State 4: <DoOp line 354, col 3 to line 376, col 26 of module Kernel>
   t2 |-> {} ]
 /\ wr = [t1 |-> << >>, t2 |-> << >>]
 
-State 5: <DoOp line 354, col 3 to line 376, col 26 of module Kernel>
-/\ seq = [t1 |-> 1, t2 |-> 0]
+State 5: <DoOp line 358, col 3 to line 380, col 26 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
 /\ resp = [t1 |-> <<"ok", "exists">>, t2 |-> <<>>]
 /\ pc = [t1 |-> 2, t2 |-> 0]
 /\ db = << [present |-> TRUE, val |-> 0, bal |-> 2, parent |-> 0],
@@ -74,8 +74,8 @@ State 5: <DoOp line 354, col 3 to line 376, col 26 of module Kernel>
 /\ held = [t1 |-> {}, t2 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>]
 
-State 6: <Dispatch line 328, col 3 to line 330, col 66 of module Kernel>
-/\ seq = [t1 |-> 1, t2 |-> 2]
+State 6: <Dispatch line 330, col 3 to line 332, col 66 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 1]
 /\ resp = [t1 |-> <<"ok", "exists">>, t2 |-> <<>>]
 /\ pc = [t1 |-> 2, t2 |-> 0]
 /\ db = << [present |-> TRUE, val |-> 0, bal |-> 2, parent |-> 0],
@@ -87,8 +87,8 @@ State 6: <Dispatch line 328, col 3 to line 330, col 66 of module Kernel>
 /\ held = [t1 |-> {}, t2 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>]
 
-State 7: <Acquire line 340, col 3 to line 346, col 47 of module Kernel>
-/\ seq = [t1 |-> 1, t2 |-> 2]
+State 7: <Acquire line 342, col 3 to line 350, col 42 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
 /\ resp = [t1 |-> <<"ok", "exists">>, t2 |-> <<>>]
 /\ pc = [t1 |-> 2, t2 |-> 0]
 /\ db = << [present |-> TRUE, val |-> 0, bal |-> 2, parent |-> 0],
@@ -103,4 +103,4 @@ State 7: <Acquire line 340, col 3 to line 346, col 47 of module Kernel>
 30 states generated, 22 distinct states found, 0 states left on queue.
 The depth of the complete state graph search is 9.
 The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 2 and the 95th percentile is 2).
-Finished in 00s at (2026-10-15 23:15:37)
+Finished in 00s at (2026-10-15 23:40:05)

@@ -1,10 +1,10 @@
 TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
 Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 72 and seed -7760773520527404312 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 3160344] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
-Starting... (2026-10-15 23:15:58)
+Running breadth-first search Model-Checking with fp 73 and seed -6739949642759316382 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 3666187] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-10-15 23:40:15)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-15 23:15:58.
+Finished computing initial states: 1 distinct state generated at 2026-10-15 23:40:15.
 Error: Invariant UnknownBudgetInsufficientUnreached is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
@@ -21,7 +21,7 @@ State 1: <Initial predicate>
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 2: <Dispatch line 328, col 3 to line 330, col 66 of module Kernel>
+State 2: <Dispatch line 330, col 3 to line 332, col 66 of module Kernel>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 1]
 /\ resp = [t1 |-> <<>>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
@@ -35,7 +35,7 @@ State 2: <Dispatch line 328, col 3 to line 330, col 66 of module Kernel>
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 3: <Dispatch line 328, col 3 to line 330, col 66 of module Kernel>
+State 3: <Dispatch line 330, col 3 to line 332, col 66 of module Kernel>
 /\ seq = [t1 |-> 2, t2 |-> 0, t3 |-> 1]
 /\ resp = [t1 |-> <<>>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
@@ -49,8 +49,8 @@ State 3: <Dispatch line 328, col 3 to line 330, col 66 of module Kernel>
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 4: <Acquire line 340, col 3 to line 346, col 47 of module Kernel>
-/\ seq = [t1 |-> 2, t2 |-> 0, t3 |-> 1]
+State 4: <Acquire line 342, col 3 to line 350, col 42 of module Kernel>
+/\ seq = [t1 |-> 1, t2 |-> 0, t3 |-> 0]
 /\ resp = [t1 |-> <<>>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ db = << [present |-> TRUE, val |-> 0, bal |-> 2, parent |-> 0],
@@ -63,8 +63,8 @@ State 4: <Acquire line 340, col 3 to line 346, col 47 of module Kernel>
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {[kind |-> "X", cov |-> {2}]}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 5: <DoOp line 354, col 3 to line 376, col 26 of module Kernel>
-/\ seq = [t1 |-> 2, t2 |-> 0, t3 |-> 1]
+State 5: <DoOp line 358, col 3 to line 380, col 26 of module Kernel>
+/\ seq = [t1 |-> 1, t2 |-> 0, t3 |-> 0]
 /\ resp = [ t1 |-> <<>>,
   t2 |-> <<>>,
   t3 |-> <<[present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0]>> ]
@@ -81,8 +81,8 @@ State 5: <DoOp line 354, col 3 to line 376, col 26 of module Kernel>
   t2 |-> << >>,
   t3 |-> (2 :> [present |-> TRUE, val |-> 3, bal |-> 0, parent |-> 0]) ]
 
-State 6: <Commit line 383, col 3 to line 390, col 32 of module Kernel>
-/\ seq = [t1 |-> 2, t2 |-> 0, t3 |-> 1]
+State 6: <Commit line 387, col 3 to line 394, col 32 of module Kernel>
+/\ seq = [t1 |-> 1, t2 |-> 0, t3 |-> 0]
 /\ resp = [ t1 |-> <<>>,
   t2 |-> <<>>,
   t3 |-> <<[present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0]>> ]
@@ -97,8 +97,8 @@ State 6: <Commit line 383, col 3 to line 390, col 32 of module Kernel>
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 7: <Acquire line 340, col 3 to line 346, col 47 of module Kernel>
-/\ seq = [t1 |-> 2, t2 |-> 0, t3 |-> 1]
+State 7: <Acquire line 342, col 3 to line 350, col 42 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ resp = [ t1 |-> <<>>,
   t2 |-> <<>>,
   t3 |-> <<[present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0]>> ]
@@ -115,8 +115,8 @@ State 7: <Acquire line 340, col 3 to line 346, col 47 of module Kernel>
   t3 |-> {} ]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 8: <DoOp line 354, col 3 to line 376, col 26 of module Kernel>
-/\ seq = [t1 |-> 2, t2 |-> 0, t3 |-> 1]
+State 8: <DoOp line 358, col 3 to line 380, col 26 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ resp = [ t1 |-> <<"insufficient">>,
   t2 |-> <<>>,
   t3 |-> <<[present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0]>> ]
@@ -131,7 +131,7 @@ State 8: <DoOp line 354, col 3 to line 376, col 26 of module Kernel>
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-252 states generated, 143 distinct states found, 13 states left on queue.
-The depth of the complete state graph search is 10.
-The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 3 and the 95th percentile is 3).
-Finished in 00s at (2026-10-15 23:15:58)
+200 states generated, 110 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 13.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 3 and the 95th percentile is 2).
+Finished in 00s at (2026-10-15 23:40:15)
