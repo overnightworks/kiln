@@ -79,6 +79,25 @@ mod kiln_e1_28 {
     }
 
     #[test]
+    fn presence_tests_inside_argument_selected_arms_are_not_compared_across_arms() {
+        let presence_in = |table_name: &str, key: &str| {
+            branch_on_presence(
+                vec![],
+                0,
+                returns(vec![read(table_name, param(key), 2)]),
+                returns(vec![read(table_name, param(key), 2)]),
+            )
+        };
+        let body = branch_on_equality(
+            vec![read("orders", param("id"), 0)],
+            (param("kind"), literal(0)),
+            presence_in("customers", "a"),
+            presence_in("orders", "b"),
+        );
+        assert_eq!(category_of(body), STATIC);
+    }
+
+    #[test]
     fn nested_argument_selected_branches_classify_each_path() {
         let inner = by_argument(by_customer_id(), by_order_id());
         let body = branch_on_equality(

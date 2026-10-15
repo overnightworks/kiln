@@ -8,7 +8,9 @@
 //! The paths are compared pairwise, never by the union of an arm's targets:
 //! two paths that agree on every selector they both test except one, and reach
 //! different targets, show that this selector changes the targets while the
-//! others stay fixed.
+//! others stay fixed. Argument-selected branches are not selectors, but the
+//! paths must agree on them too: paths taking different argument arms are
+//! different cases and are not compared.
 
 use super::evidence::distinct;
 use super::node_path::NodePath;
@@ -30,6 +32,9 @@ pub fn data_selection(paths: &[FeasiblePath]) -> Option<DataSelection> {
 }
 
 fn selection_between(first: &FeasiblePath, second: &FeasiblePath) -> Option<DataSelection> {
+    if !agree_on_arguments(first, second) {
+        return None;
+    }
     let selector = sole_differing_selector(first, second)?;
     if reach_same_targets(first, second) {
         return None;
@@ -37,6 +42,20 @@ fn selection_between(first: &FeasiblePath, second: &FeasiblePath) -> Option<Data
     let accesses = first.facts.accesses.iter().chain(&second.facts.accesses);
     let witness = distinct(std::iter::once(&selector).chain(accesses.map(|access| &access.node)));
     Some(DataSelection { selector, witness })
+}
+
+fn agree_on_arguments(first: &FeasiblePath, second: &FeasiblePath) -> bool {
+    first
+        .facts
+        .argument_decisions()
+        .iter()
+        .all(|(branch, outcome)| {
+            second
+                .facts
+                .argument_decisions()
+                .iter()
+                .all(|(other, other_outcome)| other != branch || other_outcome == outcome)
+        })
 }
 
 /// The one selector both paths test and decide differently.

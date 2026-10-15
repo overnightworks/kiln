@@ -114,7 +114,7 @@ impl Walker<'_> {
             if data_selected {
                 facts.deciding(&terminal, holds)
             } else {
-                facts.clone()
+                facts.deciding_by_argument(&terminal, holds)
             }
         };
         let mut paths = self.block(when_holds, &terminal.when_present(), arm(true))?;
