@@ -165,7 +165,10 @@ explores nothing: the log proves only that the assumption rejects that
 program. A *documented failure* is admitted and violates a property; its
 log is the counterexample and it is not part of the passing set. Every
 checked scenario passes with no violation and no deadlock; each run
-finished in under one second with 4 workers.
+finished in under one second with 4 workers. State counts are given only
+for full explorations; a run that stops at a counterexample reports how
+far 4 workers had got, which varies between runs, while the trace length
+(breadth-first, hence shortest) is stable.
 
 | Scenario | What runs | Outcome | Distinct states | Depth | Log |
 |---|---|---|---|---|---|
@@ -179,7 +182,7 @@ finished in under one second with 4 workers.
 | `OutOfOrder` | t1: `Buy(1,1)`, `Insert(2,0)`; t2: `Insert(2,0)`, `Buy(1,1)` — t2 covers key 1 after key 2; runs only under the `NoCanonicalOrder` mutant | refused by `ASSUME CanonicalOrder` | – | – | `OutOfOrder.tlc.log` |
 | `FootprintGap` | t1: `Insert(3,1)`, `Update(2,0,0)`; t2: `Update(2,1,0)`, `Delete(3)` — in order by lowest key per operation (1, 2; 2, 3), out of order over the footprint (t1 covers 2 after 3, t2 covers 1 after 2); deadlocked under the previous ordering | refused by `ASSUME CanonicalOrder` | – | – | `FootprintGap.tlc.log` |
 | `ScanUpgrade` | t1: `Scan(1,2)`, `Update(1,0,0)`; t2: `Scan(1,2)`, `Update(2,0,0)` — each wants `X` on a key it holds under `RS`; deadlocked while upgrades were excluded only in prose | refused by `ASSUME NoUpgrade` | – | – | `ScanUpgrade.tlc.log` |
-| `AllowanceCycle` | t1, t2: `Buy(1,1)`, `Buy(1,1)` against quota 2 — canonical and upgrade-free; the first draws coexist, each second draw fits its own view but not the allowance left by the other's tentative draw, and each waits on the other | documented failure: `NoWaitCycle` violated at state 3, then deadlock — concept defect, [#24](https://github.com/overnightworks/kiln/issues/24) | 9 | 5 | `AllowanceCycle.tlc.log` |
+| `AllowanceCycle` | t1, t2: `Buy(1,1)`, `Buy(1,1)` against quota 2 — canonical and upgrade-free; the first draws coexist, each second draw fits its own view but not the allowance left by the other's tentative draw, and each waits on the other | documented failure: `NoWaitCycle` violated at state 3, then deadlock — concept defect, [#24](https://github.com/overnightworks/kiln/issues/24); trace of 3 states | – | – | `AllowanceCycle.tlc.log` |
 
 **Reachability witnesses.** Each checked scenario names negated state
 predicates (`*Unreached`); TLC's counterexample is the proof that the
