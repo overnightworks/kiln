@@ -1,6 +1,6 @@
 --- Kernel.tla
 +++ Kernel.tla
-@@ -254,7 +254,11 @@
+@@ -276,7 +276,11 @@
    [row EXCEPT !.bal = @ + draws[t][k].bal, !.val = @ - draws[t][k].val]
  
  View(t) ==
@@ -11,9 +11,9 @@
 +     THEN wr[CHOOSE u \in Txns : Active(u) /\ k \in DOMAIN wr[u]][k]
 +     ELSE db[k])]
  
- (* A draw consumes the transaction's own reservation (§4, rule 1): the
-    balance a draw sees is what remains of that reservation, never the
-@@ -273,7 +277,7 @@
+ (* One rule for draws (§4, rule 1). A draw consumes the transaction's own
+    reservation: the balance it sees is what remains of that reservation,
+@@ -297,7 +301,7 @@
  (* Admission guard: every registered resource must be compatible with
     every resource a live transaction holds. *)
  Conflicting(t, R) ==

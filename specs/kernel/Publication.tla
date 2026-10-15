@@ -261,9 +261,10 @@ RecoveryPublishesInterruptedUnreached ==
   ~(Serving /\ ~recovering /\ interrupted # {}
     /\ \A t \in interrupted : CompletelyInstalled(t) /\ t \in VisibleTxns)
 
-(* A failure struck after the pointer had passed a commit and while another
-   was half installed: the reconstructed pointer keeps the published
-   prefix and stays below the interrupted commit. *)
+(* A failure struck after the pointer had passed a commit: recovery keeps
+   that published prefix and, while it installs a later interrupted commit
+   (half installed by recovery itself, not necessarily at the failure),
+   the pointer stays below it. *)
 RecoveryRebuildsPublishedPrefixUnreached ==
   ~(recovering /\ pointerAtFailure >= 1 /\ pointer >= pointerAtFailure
     /\ \E t \in interrupted : installed[t] # {} /\ ~CompletelyInstalled(t) /\ t \notin VisibleTxns)

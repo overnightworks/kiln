@@ -1,11 +1,11 @@
 --- Durable.tla
 +++ Durable.tla
-@@ -145,7 +145,7 @@
-   /\ UNCHANGED <<Vars, history>>
+@@ -190,7 +190,7 @@
+   /\ UNCHANGED <<pc, resp, widened, log, fsyncFailed, reservedAtUnknown, failuresUsed>>
  
  (* What recovery rebuilds: the committed history is the durable log. *)
--RecoveredHistory == log
-+RecoveredHistory == SubSeq(log, 1, Len(log) - 1)
+-Recover == RecoverTo(log)
++Recover == RecoverTo(SubSeq(log, 1, Len(log) - 1))
  
- (* Restart from the log alone. Every transaction with a durable record is
-    committed, whether or not its caller was told; every other live
+ DTerminating == Finished /\ Serving /\ UNCHANGED DVars
+ 

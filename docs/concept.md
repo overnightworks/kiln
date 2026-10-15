@@ -698,8 +698,9 @@ published state plus the reader's own writes. Recovery recomputes the
 pointer from the log and the installation state, never from the retained
 value, and installs every durable commit before the pointer passes it.
 `AtomicVisibility`, `ReaderConsistent` (a snapshot reader's observations
-across several steps), `PointerBelowInstalled`, `PointerMonotone` and every
-durability property hold, and `Serializable` with exact responses holds
+across several steps), `PointerBelowInstalled`, `PointerMonotone` and the
+durability properties hold (`RecoveredPrefix` as adapted into
+`HistoryIsLogPrefix` and `RecoveryOpensOnWholeLog`), and `Serializable` with exact responses holds
 over a delete's reference check and a read racing a commit still being
 installed. Mutants that advance the pointer before installation (also
 across a crash), advance it first in recovery, or release a commit's locks
@@ -756,7 +757,8 @@ is a prefix of the log's commit order (and the whole log once the engine
 serves again), an `fsync` failure is answered `unknown` and never as an
 abort, and recovered histories are serializable with exact responses,
 including responses that depend on a predecessor whose commit is durable
-but unacknowledged (`specs/README.md`, `Durable.tla`). Mutants (an `fsync`
+but unacknowledged (`specs/README.md`, `Durable.tla`; that module does not
+model the publication pointer, which `Publication.tla` checks, §9.1). Mutants (an `fsync`
 failure answered as an abort or shrinking a reservation, an acknowledgement
 before the flush, a recovery that drops a durable record, locks released
 before the flush, tentative effects shown to a dependent whose record then

@@ -1,6 +1,6 @@
 --- Durable.tla
 +++ Durable.tla
-@@ -138,14 +138,17 @@
+@@ -149,14 +149,17 @@
    /\ Serving /\ FailureBudgetLeft /\ unflushed # <<>>
    /\ \E persistedFromTail \in 0..Len(unflushed) :
         log' = Persisted(persistedFromTail)
@@ -18,5 +18,5 @@
 -  /\ UNCHANGED <<Vars, history>>
 +  /\ UNCHANGED <<seq, pc, wr, draws, resp, widened, db, history>>
  
- (* What recovery rebuilds: the committed history is the durable log. *)
- RecoveredHistory == log
+ Undispatched(t) == Pending(t) /\ seq[t] = 0
+ 

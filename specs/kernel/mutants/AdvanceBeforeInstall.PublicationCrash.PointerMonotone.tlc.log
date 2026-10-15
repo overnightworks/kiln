@@ -1,10 +1,10 @@
 TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
 Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 0 and seed 5813532544363215448 with 1 worker on 12 cores with 15518MB heap and 64MB offheap memory [pid: 1357358] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
-Starting... (2026-10-16 01:29:29)
+Running breadth-first search Model-Checking with fp 0 and seed 5232780108485572343 with 1 worker on 12 cores with 15518MB heap and 64MB offheap memory [pid: 1764926] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-10-16 01:35:55)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-16 01:29:29.
+Finished computing initial states: 1 distinct state generated at 2026-10-16 01:35:55.
 Error: Action property PointerMonotone is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
@@ -448,4 +448,4 @@ State 9: <RecoverPublication line 129, col 3 to line 132, col 67 of module Publi
 862 states generated, 420 distinct states found, 178 states left on queue.
 The depth of the complete state graph search is 9.
 The average outdegree of the complete state graph is 2 (minimum is 0, the maximum 6 and the 95th percentile is 4).
-Finished in 00s at (2026-10-16 01:29:29)
+Finished in 00s at (2026-10-16 01:35:55)

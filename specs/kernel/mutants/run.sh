@@ -14,7 +14,8 @@ specification=$(sed -n 's/^SPECIFICATION //p' "../$scenario.cfg")
 kind=INVARIANT
 grep -qx "PROPERTY $property" "../$scenario.cfg" && kind=PROPERTY
 cp ../*.tla "$work"/
-patch -s -d "$work" -p0 < "$mutant.patch"
+# -F0: a patch that only applies with fuzz has drifted from the module and must be rewritten
+patch -s -F0 --no-backup-if-mismatch -d "$work" -p0 < "$mutant.patch"
 {
   sed -n '/^CONSTANTS/,/^$/p' "../$scenario.cfg"
   printf 'SPECIFICATION %s\n' "$specification"

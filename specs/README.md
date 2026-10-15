@@ -526,7 +526,7 @@ assert membership.
 | `ReaderSeesPreCommitUnreached` (`PublicationCrash`) | a snapshot reader read a structure at its captured version while a later commit had a copy there and was incompletely installed: it observed the pre-commit state (`hidden`) | 9 |
 | `CrashMidInstallUnreached` (`PublicationCrash`) | the engine is down with t1's record durable (persisted from the tail by the crash) and none of it installed | 6 |
 | `RecoveryPublishesInterruptedUnreached` (`PublicationCrash`) | a crash left t1's record durable and uninstalled; recovery installed both structures and the pointer passed it | 11 |
-| `RecoveryRebuildsPublishedPrefixUnreached` (`PublicationCrash`) | a failure struck with the pointer past t1 and t2 half installed; the recomputed pointer keeps t1 published and stays below t2 | 16 |
+| `RecoveryRebuildsPublishedPrefixUnreached` (`PublicationCrash`) | a failure struck with the pointer past t1; during recovery the recomputed pointer keeps t1 published while t2, an interrupted commit, is half installed by recovery and stays below it | 16 |
 | `DependentWaitsOnDurableUnreached` (`PublicationDependent`) | t1's record is durable and unpublished, and t2's reference check and t3's read both wait on it | 8 |
 | `DependentReferencedUnreached` (`PublicationDependent`) | t1 published first: t2's reference check finds key 2 and is told `referenced` | 12 |
 | `DependentReadsPublishedUnreached` (`PublicationDependent`) | t1 published first: t3 reads the child row | 17 |
@@ -582,7 +582,7 @@ lengths below are the states of the committed logs.
 | `AdvanceBeforeInstall` — the pointer passes a commit without waiting for its installation | `PublicationCrash` | `PointerBelowInstalled` (the pointer passes a commit with nothing installed) | 7 |
 | `AdvanceBeforeInstall` | `PublicationCrash` | `AtomicVisibility` (one structure installed, the pointer passed: a reader sees the commit in one structure only) | 8 |
 | `AdvanceBeforeInstall` | `PublicationCrash` | `ReaderConsistent` (a snapshot reader captures the version past the commit and reads a structure its installation has not reached) | 9 |
-| `AdvanceBeforeInstall` | `PublicationCrash` | `PointerMonotone` (the pointer passed a half-installed commit, the engine crashed, and the pointer rebuilt from the log and the installation falls back below it) | 9 |
+| `AdvanceBeforeInstall` | `PublicationCrash` | `PointerMonotone` (the pointer passed a commit with nothing installed, the engine crashed, and the pointer rebuilt from the log and the installation falls back below it) | 9 |
 | `RecoveryAdvancesFirst` — recovery moves the pointer to the end of the log before it installs | `PublicationCrash` | `PointerBelowInstalled` (the pointer is past commits recovery has not installed) | 7 |
 | `RecoveryAdvancesFirst` | `PublicationCrash` | `AtomicVisibility` (a reader served during recovery sees a half-installed commit) | 8 |
 | `RecoveryAdvancesFirst` | `PublicationCrash` | `RestartIsAtomic` (the restart step exposes the half-installed commit) | 9 |

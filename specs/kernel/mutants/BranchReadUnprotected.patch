@@ -1,6 +1,11 @@
 --- Kernel.tla
 +++ Kernel.tla
-@@ -76,3 +76,3 @@
+@@ -78,7 +78,7 @@
+                            \cup (IF v[op.k].present /\ v[op.k].parent # 0
+                                  THEN {Res("PIN", {v[op.k].parent})} ELSE {})
+     [] op.op = "Buy"    -> {Res("DRAW", {op.k})}
 -    [] op.op = "BuyUnder" -> {Res("DRAW", {op.k}), Res("S", {op.k})}
 +    [] op.op = "BuyUnder" -> {Res("DRAW", {op.k})}
      [] op.op = "BuyVal" -> {Res("DRAW", {op.k}), Res("S", {op.j})}
+     [] op.op = "Follow" -> {Res("S", {op.k})}
+                            \cup (IF v[op.k].present /\ v[op.k].val \in Keys
