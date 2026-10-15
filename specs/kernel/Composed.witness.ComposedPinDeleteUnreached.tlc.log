@@ -1,10 +1,10 @@
 TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
 Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 0 and seed -1419818167071482308 with 1 worker on 12 cores with 15518MB heap and 64MB offheap memory [pid: 42515] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
-Starting... (2026-10-16 00:11:59)
+Running breadth-first search Model-Checking with fp 0 and seed -8530754450255816674 with 1 worker on 12 cores with 15518MB heap and 64MB offheap memory [pid: 621935] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-10-16 00:44:16)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-16 00:11:59.
+Finished computing initial states: 1 distinct state generated at 2026-10-16 00:44:16.
 Error: Invariant ComposedPinDeleteUnreached is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
@@ -32,7 +32,7 @@ State 1: <Initial predicate>
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 2: <Dispatch line 350, col 3 to line 352, col 75 of module Kernel>
+State 2: <Dispatch line 351, col 3 to line 353, col 75 of module Kernel>
 /\ seq = [t1 |-> 1, t2 |-> 0, t3 |-> 0]
 /\ resp = [t1 |-> <<>>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
@@ -57,7 +57,7 @@ State 2: <Dispatch line 350, col 3 to line 352, col 75 of module Kernel>
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 3: <Acquire line 363, col 3 to line 371, col 51 of module Kernel>
+State 3: <Acquire line 364, col 3 to line 372, col 51 of module Kernel>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ resp = [t1 |-> <<>>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
@@ -87,7 +87,7 @@ State 3: <Acquire line 363, col 3 to line 371, col 51 of module Kernel>
   t3 |-> {} ]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 4: <Dispatch line 350, col 3 to line 352, col 75 of module Kernel>
+State 4: <Dispatch line 351, col 3 to line 353, col 75 of module Kernel>
 /\ seq = [t1 |-> 0, t2 |-> 1, t3 |-> 0]
 /\ resp = [t1 |-> <<>>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
@@ -117,7 +117,7 @@ State 4: <Dispatch line 350, col 3 to line 352, col 75 of module Kernel>
   t3 |-> {} ]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 5: <Dispatch line 350, col 3 to line 352, col 75 of module Kernel>
+State 5: <Dispatch line 351, col 3 to line 353, col 75 of module Kernel>
 /\ seq = [t1 |-> 0, t2 |-> 1, t3 |-> 2]
 /\ resp = [t1 |-> <<>>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
@@ -150,4 +150,4 @@ State 5: <Dispatch line 350, col 3 to line 352, col 75 of module Kernel>
 39 states generated, 32 distinct states found, 16 states left on queue.
 The depth of the complete state graph search is 5.
 The average outdegree of the complete state graph is 2 (minimum is 1, the maximum 3 and the 95th percentile is 3).
-Finished in 00s at (2026-10-16 00:11:59)
+Finished in 00s at (2026-10-16 00:44:16)
