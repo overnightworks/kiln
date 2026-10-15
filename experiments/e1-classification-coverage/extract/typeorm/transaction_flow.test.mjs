@@ -142,6 +142,87 @@ async function closed(first, second, flag) {
     [],
   ],
   [
+    "a transaction one arm leaves open is unmatched even though the other arm commits",
+    `\
+async function partial(first, second, flag) {
+  await qr.startTransaction();
+  await qr.manager.save(first);
+  if (flag) await qr.commitTransaction();
+  else await qr.manager.insert(second);
+}
+`,
+    [["S3", 3, ["first"], [3]], ["S3", 5, ["second"], [5]]],
+    [2],
+  ],
+  [
+    "a start whose commit lies under a condition of its own arm is unmatched",
+    `\
+async function guarded(first, second, flag) {
+  if (flag) {
+    await qr.startTransaction();
+    await qr.manager.save(first);
+    if (second) await qr.commitTransaction();
+  }
+}
+`,
+    [["S3", 4, ["first"], [4]]],
+    [3],
+  ],
+  [
+    "a transaction every arm commits is one unit absorbing the sites before and inside the arms",
+    `\
+async function bothCommit(first, second, flag) {
+  await qr.startTransaction();
+  await qr.manager.save(first);
+  if (flag) {
+    await qr.manager.insert(second);
+    await qr.commitTransaction();
+  } else {
+    await qr.manager.save(second);
+    await qr.commitTransaction();
+  }
+}
+`,
+    [["S2", 2, PARAMETERS, [3, 5, 8]]],
+    [],
+  ],
+  [
+    "an arm that rolls back and returns does not stop the later commit from closing the transaction",
+    `\
+async function earlyReturn(first, second, flag) {
+  await qr.startTransaction();
+  if (flag) {
+    await qr.rollbackTransaction();
+    return;
+  }
+  await qr.manager.save(first);
+  await qr.commitTransaction();
+}
+`,
+    [["S2", 2, PARAMETERS, [7]]],
+    [],
+  ],
+  [
+    "a catch that rolls back and rethrows leaves the code after the try reachable",
+    `\
+async function rethrow(first, second, flag) {
+  try {
+    await qr.startTransaction();
+    await qr.manager.save(first);
+    await qr.commitTransaction();
+  } catch (error) {
+    await qr.rollbackTransaction();
+    throw error;
+  }
+  await qr.startTransaction();
+  await qr.manager.insert(second);
+  await qr.commitTransaction();
+}
+`,
+    [["S2", 3, PARAMETERS, [4]], ["S2", 10, PARAMETERS, [11]]],
+    [],
+  ],
+  [
     "a start in a loop whose commit lies after the loop is unmatched",
     `\
 async function loopStart(first, second, flag) {

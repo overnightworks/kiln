@@ -660,22 +660,26 @@ it is applied to TypeScript.
   holds a builder, or inside an argument of a chain method, is not in the
   chain. A chain holding several `createQueryBuilder()` calls belongs to the
   first one written.
-- **S2 forms.** `X.startTransaction()` ends at the last
-  `X.commitTransaction()` or `X.rollbackTransaction()` with the same receiver
-  text written directly in the same function before the next
-  `X.startTransaction()` that does not nest in it; a start without one opens
-  no unit. Boundaries follow the syntax tree's control flow, per function,
-  statements in order. The arms of an `if` (an absent `else` is the arm that
-  skips it), of a ternary and of a `switch` (the skipping arm too when it has
-  no `default`) each run from a copy of the transactions open before the
-  conditional; `switch` clauses are separate arms only when they end in
-  `break`, `continue`, `return` or `throw`, clauses that fall through run in
-  sequence, and `try`, `catch` and `finally` run in sequence. At the join,
-  a transaction open before the conditional stays open while any arm leaves it
-  open; a start made inside the arms that every arm leaves open at the same
-  depth is one alternative opening, not a nesting, and continues; a start left
-  open in only some arms is an unmatched marker and its sites stay S3, and a
-  transaction closed in every arm stays closed. A start written while a
+- **S2 forms.** `X.startTransaction()` is matched when every control-flow path
+  from it to the end of its function closes it, by a `X.commitTransaction()`
+  or `X.rollbackTransaction()` with the same receiver text written directly in
+  the same function; the transaction ends at the last such terminator that
+  closes it on any path, before the next `X.startTransaction()` that does not
+  nest in it. A start that some path leaves open opens no unit. Boundaries
+  follow the syntax tree's control flow, per function, statements in order.
+  The arms of an `if` (an absent `else` is the arm that skips it), of a
+  ternary and of a `switch` (the skipping arm too when it has no `default`)
+  each run from a copy of the transactions open before the conditional;
+  `switch` clauses are separate arms only when they end in `break`,
+  `continue`, `return` or `throw`, clauses that fall through run in sequence,
+  and `try`, `catch` and `finally` run in sequence. A path that ends in
+  `return` or `throw` does not continue into the join. At the join, a
+  transaction open before the conditional stays open if every continuing arm
+  leaves it open and is closed if every one closes it; open in some arms and
+  closed in others, it is an unmatched marker. A start made inside the arms
+  that every arm leaves open at the same depth is one alternative opening, not
+  a nesting, and continues; a start left open in only some arms is an
+  unmatched marker, and its sites stay S3. A start written while a
   transaction is open on the same path nests in it, and the outermost owns the
   nested one's sites; a commit or rollback closes the innermost open
   transaction of its receiver, and one that follows the last close extends the
