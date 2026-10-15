@@ -33,7 +33,9 @@ fn preflight_reports_a_present_non_utf8_libsqlite3_flags_as_an_offending_build_e
             .lines()
             .any(|line| line.starts_with("FAIL  build environment")
                 && line.contains("LIBSQLITE3_FLAGS")),
-        "expected a FAIL build environment line naming LIBSQLITE3_FLAGS, got:\n{stdout}"
+        "expected a FAIL build environment line naming LIBSQLITE3_FLAGS, got:\nstdout:\n{stdout}\nstderr:\n{}\nstatus: {:?}",
+        String::from_utf8_lossy(&output.stderr),
+        output.status,
     );
 }
 
@@ -51,6 +53,8 @@ fn preflight_passes_build_env_when_none_of_the_watched_variables_are_set() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.lines().any(|line| line == "PASS  build environment"),
-        "expected a PASS build environment line, got:\n{stdout}"
+        "expected a PASS build environment line, got:\nstdout:\n{stdout}\nstderr:\n{}\nstatus: {:?}",
+        String::from_utf8_lossy(&output.stderr),
+        output.status,
     );
 }

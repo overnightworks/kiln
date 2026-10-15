@@ -15,13 +15,7 @@ fn main() {
 }
 
 fn run_preflight() {
-    let report = match preflight::run_real() {
-        Ok(report) => report,
-        Err(err) => {
-            eprintln!("preflight could not run: {err}");
-            std::process::exit(1);
-        }
-    };
+    let report = preflight::run_real();
 
     for (name, check) in [
         ("rustc version", &report.rustc_version),

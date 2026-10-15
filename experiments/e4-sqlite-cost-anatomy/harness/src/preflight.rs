@@ -130,6 +130,37 @@ pub fn check_cpu_siblings(thread_siblings_list: &str) -> CheckResult {
     }
 }
 
+/// Reads the CPU topology fact via an injectable reader and checks it, so a
+/// host that cannot produce the fact (missing `/sys` path, smaller runner)
+/// yields a `Fail` instead of aborting every other check (protocol §12 fails
+/// closed per check, not per preflight run).
+pub fn cpu_siblings_check(read_siblings_list: impl FnOnce() -> io::Result<String>) -> CheckResult {
+    match read_siblings_list() {
+        Ok(list) => check_cpu_siblings(&list),
+        Err(err) => CheckResult::Fail(format!("could not read CPU topology: {err}")),
+    }
+}
+
+/// Reads `rustc --version` and the pinned toolchain channel via injectable
+/// readers and checks them, so either read failing yields a `Fail` instead
+/// of aborting every other check.
+pub fn rustc_version_check(
+    read_rustc_version_output: impl FnOnce() -> io::Result<String>,
+    read_pinned_channel: impl FnOnce() -> io::Result<String>,
+) -> CheckResult {
+    let rustc_version_output = match read_rustc_version_output() {
+        Ok(output) => output,
+        Err(err) => return CheckResult::Fail(format!("could not run rustc --version: {err}")),
+    };
+    let pinned_channel = match read_pinned_channel() {
+        Ok(channel) => channel,
+        Err(err) => {
+            return CheckResult::Fail(format!("could not read pinned toolchain channel: {err}"));
+        }
+    };
+    check_rustc_version(&rustc_version_output, &pinned_channel)
+}
+
 /// The shim VFS must register and `sqlite3_vfs_find` must see it under
 /// its name (protocol §12).
 pub fn check_shim_vfs(install_result: Result<(), String>, is_registered: bool) -> CheckResult {
@@ -188,21 +219,28 @@ fn crate_dir() -> &'static Path {
 
 /// Runs every check against the real environment, filesystem, and
 /// `rustc`/`sqlite3` the process is actually running under. This is the
-/// thin adapter: each check it calls is independently unit-tested
-/// against injected evidence instead.
-pub fn run_real() -> io::Result<PreflightReport> {
-    let rustc_output = Command::new("rustc").arg("--version").output()?;
-    let rustc_version_output = String::from_utf8_lossy(&rustc_output.stdout).into_owned();
-    // harness/ -> e4-sqlite-cost-anatomy/ -> experiments/ -> repo root.
-    let repo_root = crate_dir()
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "repo root not found above crate")
-        })?;
-    let pinned_channel = pinned_toolchain_channel(repo_root)?;
-    let rustc_version = check_rustc_version(&rustc_version_output, &pinned_channel);
+/// thin adapter: each check it calls is independently unit-tested against
+/// injected evidence instead. Every check runs and reports regardless of
+/// whether another check's evidence could be collected (protocol §12: each
+/// check fails closed on its own, never by aborting the whole report).
+pub fn run_real() -> PreflightReport {
+    let rustc_version = rustc_version_check(
+        || {
+            let output = Command::new("rustc").arg("--version").output()?;
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        },
+        || {
+            // harness/ -> e4-sqlite-cost-anatomy/ -> experiments/ -> repo root.
+            let repo_root = crate_dir()
+                .parent()
+                .and_then(Path::parent)
+                .and_then(Path::parent)
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::NotFound, "repo root not found above crate")
+                })?;
+            pinned_toolchain_channel(repo_root)
+        },
+    );
 
     let sqlite_version_actual = unsafe {
         CStr::from_ptr(ffi::sqlite3_libversion())
@@ -215,23 +253,24 @@ pub fn run_real() -> io::Result<PreflightReport> {
     let offenders = build_env_offenders(|name| std::env::var_os(name));
     let build_env = check_build_env(&offenders);
 
-    let siblings_path = format!(
-        "/sys/devices/system/cpu/cpu{}/topology/thread_siblings_list",
-        machine::PINNED_CPU
-    );
-    let siblings_list = fs::read_to_string(siblings_path)?;
-    let cpu_siblings = check_cpu_siblings(&siblings_list);
+    let cpu_siblings = cpu_siblings_check(|| {
+        let siblings_path = format!(
+            "/sys/devices/system/cpu/cpu{}/topology/thread_siblings_list",
+            machine::PINNED_CPU
+        );
+        fs::read_to_string(siblings_path)
+    });
 
     let install_result = crate::vfs::install();
     let shim_vfs = check_shim_vfs(install_result, crate::vfs::is_registered());
 
-    Ok(PreflightReport {
+    PreflightReport {
         rustc_version,
         sqlite_version,
         build_env,
         cpu_siblings,
         shim_vfs,
-    })
+    }
 }
 
 #[cfg(test)]
@@ -350,6 +389,62 @@ mod tests {
             shim_vfs: CheckResult::Fail("not registered".into()),
         };
         assert!(!report.all_passed());
+    }
+
+    #[test]
+    fn rustc_version_check_fails_closed_when_rustc_cannot_be_run() {
+        let result = rustc_version_check(
+            || Err(io::Error::new(io::ErrorKind::NotFound, "rustc not found")),
+            || Ok("1.99.1".to_string()),
+        );
+        assert!(!result.is_pass());
+    }
+
+    #[test]
+    fn rustc_version_check_fails_closed_when_the_pinned_channel_cannot_be_read() {
+        let result = rustc_version_check(
+            || Ok("rustc 1.99.1 (58cf8f9c3 2026-10-13)".to_string()),
+            || {
+                Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "rust-toolchain.toml missing",
+                ))
+            },
+        );
+        assert!(!result.is_pass());
+    }
+
+    #[test]
+    fn cpu_siblings_check_fails_closed_when_the_topology_fact_is_unreadable() {
+        // A host without the pinned CPU's /sys topology path (a smaller CI
+        // runner, for instance) must still yield a FAIL line for this one
+        // check — not abort collecting the rest of the report (this is the
+        // GitHub Actions preflight regression: a bare `?` inside `run_real`
+        // on this read used to skip the whole report).
+        let result =
+            cpu_siblings_check(|| Err(io::Error::new(io::ErrorKind::NotFound, "no such path")));
+        assert!(!result.is_pass());
+    }
+
+    #[test]
+    fn an_unreadable_host_fact_does_not_suppress_the_other_checks() {
+        let report = PreflightReport {
+            rustc_version: rustc_version_check(
+                || Err(io::Error::new(io::ErrorKind::NotFound, "rustc not found")),
+                || Ok("1.99.1".to_string()),
+            ),
+            sqlite_version: check_sqlite_version(machine::PINNED_SQLITE_VERSION),
+            build_env: check_build_env(&[]),
+            cpu_siblings: cpu_siblings_check(|| {
+                Err(io::Error::new(io::ErrorKind::NotFound, "no such path"))
+            }),
+            shim_vfs: check_shim_vfs(Ok(()), true),
+        };
+        assert!(!report.rustc_version.is_pass());
+        assert!(!report.cpu_siblings.is_pass());
+        assert!(report.sqlite_version.is_pass());
+        assert!(report.build_env.is_pass());
+        assert!(report.shim_vfs.is_pass());
     }
 
     #[test]
