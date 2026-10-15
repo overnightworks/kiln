@@ -763,23 +763,25 @@ never waits, and waits between queued requests point from the younger to
 the older, so the wait graph has no cycle by construction; the kernel
 model checks this, and deadlock freedom with it, on every scenario.
 
-The second half, that every waiter eventually proceeds, rests on a
-fairness assumption this document states and the model has not yet
-proven: **weak fairness of dispatch, admission, execution and completion
-for every transaction** — no step of a live transaction that stays
-enabled is withheld forever — together with finite programs. Under it
-every holder resolves (its program is finite and its steps are taken), a
-queued request has finitely many older requests on each resource it
-shares and none younger can bypass it, so by induction over dispatch
-order every queued request is admitted and then completes. Fairness
-cannot manufacture missing funds: completion may be a justified rejection
-(§5). It fails if an unbounded stream of younger requests could be
-admitted ahead of an older queued one — exactly what the dispatch-order
-rule forbids. **Status: safety checked, liveness stated** — the
-reachability of a terminal outcome for every request
-(`Requested ~> Terminal`) under this fairness condition, and a mutant
-that drops the dispatch-order rule and must fail it, are the liveness
-slice of [issue #6](https://github.com/overnightworks/kiln/issues/6).
+The second half, that every waiter eventually proceeds, rests on one
+fairness assumption: **weak fairness of admission, execution and
+completion for every transaction** — a step of a transaction that stays
+enabled is eventually taken — together with finite programs. Dispatch is
+the caller's request, not a step the protocol owes. Under it every holder
+resolves (its program is finite and its steps are taken), a queued request
+has finitely many older requests on each resource it shares and none
+younger can bypass it, so by induction over dispatch order every queued
+request is admitted and then completes. Fairness cannot manufacture
+missing funds: completion may be a justified rejection (§5). It fails if
+an unbounded stream of younger requests could be admitted ahead of an
+older queued one — exactly what the dispatch-order rule forbids.
+**Status: checked within bounds** — TLC proves `Requested ~> Terminal` for
+every request of the kernel model's scenarios (2-3 transactions, programs
+of 1-2 operations) under this fairness condition, including a scenario
+where finished transactions request again, and refutes a model without the
+dispatch-order rule with a starvation lasso (`specs/README.md`). That is a
+bounded check of the model, not a proof for arbitrary programs or an
+implementation.
 
 ## 10. Exit door (operator ruling 15.10.2026)
 

@@ -1,10 +1,10 @@
 TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
 Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 3 and seed -4466006148098934796 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 3161596] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
-Starting... (2026-10-15 23:16:06)
+Running breadth-first search Model-Checking with fp 0 and seed 5146967095159989023 with 1 worker on 12 cores with 15518MB heap and 64MB offheap memory [pid: 3950387] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-10-15 23:47:06)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-15 23:16:06.
+Finished computing initial states: 1 distinct state generated at 2026-10-15 23:47:07.
 Error: Invariant Serializable is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
@@ -18,8 +18,8 @@ State 1: <Initial predicate>
 /\ held = [t1 |-> {}, t2 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>]
 
-State 2: <Dispatch line 328, col 3 to line 330, col 66 of module Kernel>
-/\ seq = [t1 |-> 0, t2 |-> 1]
+State 2: <Dispatch line 330, col 3 to line 332, col 66 of module Kernel>
+/\ seq = [t1 |-> 1, t2 |-> 0]
 /\ resp = [t1 |-> <<>>, t2 |-> <<>>]
 /\ pc = [t1 |-> 0, t2 |-> 0]
 /\ db = <<[present |-> TRUE, val |-> 0, bal |-> 2, parent |-> 0]>>
@@ -29,53 +29,53 @@ State 2: <Dispatch line 328, col 3 to line 330, col 66 of module Kernel>
 /\ held = [t1 |-> {}, t2 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>]
 
-State 3: <Acquire line 340, col 3 to line 346, col 47 of module Kernel>
-/\ seq = [t1 |-> 0, t2 |-> 1]
+State 3: <Acquire line 342, col 3 to line 350, col 42 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
 /\ resp = [t1 |-> <<>>, t2 |-> <<>>]
 /\ pc = [t1 |-> 0, t2 |-> 0]
 /\ db = <<[present |-> TRUE, val |-> 0, bal |-> 2, parent |-> 0]>>
-/\ reserved = [t1 |-> <<0>>, t2 |-> <<1>>]
+/\ reserved = [t1 |-> <<1>>, t2 |-> <<0>>]
 /\ draws = [t1 |-> <<[val |-> 0, bal |-> 0]>>, t2 |-> <<[val |-> 0, bal |-> 0]>>]
-/\ status = [t1 |-> "pending", t2 |-> "active"]
-/\ held = [t1 |-> {}, t2 |-> {[kind |-> "DRAW", cov |-> {1}]}]
+/\ status = [t1 |-> "active", t2 |-> "pending"]
+/\ held = [t1 |-> {[kind |-> "DRAW", cov |-> {1}]}, t2 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>]
 
-State 4: <DoOp line 354, col 3 to line 376, col 26 of module Kernel>
+State 4: <DoOp line 358, col 3 to line 380, col 26 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
+/\ resp = [t1 |-> <<"ok">>, t2 |-> <<>>]
+/\ pc = [t1 |-> 1, t2 |-> 0]
+/\ db = <<[present |-> TRUE, val |-> 0, bal |-> 2, parent |-> 0]>>
+/\ reserved = [t1 |-> <<1>>, t2 |-> <<0>>]
+/\ draws = [t1 |-> <<[val |-> 1, bal |-> 1]>>, t2 |-> <<[val |-> 0, bal |-> 0]>>]
+/\ status = [t1 |-> "active", t2 |-> "pending"]
+/\ held = [t1 |-> {[kind |-> "DRAW", cov |-> {1}]}, t2 |-> {}]
+/\ wr = [t1 |-> << >>, t2 |-> << >>]
+
+State 5: <Dispatch line 330, col 3 to line 332, col 66 of module Kernel>
 /\ seq = [t1 |-> 0, t2 |-> 1]
-/\ resp = [t1 |-> <<>>, t2 |-> <<"ok">>]
-/\ pc = [t1 |-> 0, t2 |-> 1]
+/\ resp = [t1 |-> <<"ok">>, t2 |-> <<>>]
+/\ pc = [t1 |-> 1, t2 |-> 0]
 /\ db = <<[present |-> TRUE, val |-> 0, bal |-> 2, parent |-> 0]>>
-/\ reserved = [t1 |-> <<0>>, t2 |-> <<1>>]
-/\ draws = [t1 |-> <<[val |-> 0, bal |-> 0]>>, t2 |-> <<[val |-> 1, bal |-> 1]>>]
-/\ status = [t1 |-> "pending", t2 |-> "active"]
-/\ held = [t1 |-> {}, t2 |-> {[kind |-> "DRAW", cov |-> {1}]}]
+/\ reserved = [t1 |-> <<1>>, t2 |-> <<0>>]
+/\ draws = [t1 |-> <<[val |-> 1, bal |-> 1]>>, t2 |-> <<[val |-> 0, bal |-> 0]>>]
+/\ status = [t1 |-> "active", t2 |-> "pending"]
+/\ held = [t1 |-> {[kind |-> "DRAW", cov |-> {1}]}, t2 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>]
 
-State 5: <Dispatch line 328, col 3 to line 330, col 66 of module Kernel>
-/\ seq = [t1 |-> 2, t2 |-> 1]
-/\ resp = [t1 |-> <<>>, t2 |-> <<"ok">>]
-/\ pc = [t1 |-> 0, t2 |-> 1]
-/\ db = <<[present |-> TRUE, val |-> 0, bal |-> 2, parent |-> 0]>>
-/\ reserved = [t1 |-> <<0>>, t2 |-> <<1>>]
-/\ draws = [t1 |-> <<[val |-> 0, bal |-> 0]>>, t2 |-> <<[val |-> 1, bal |-> 1]>>]
-/\ status = [t1 |-> "pending", t2 |-> "active"]
-/\ held = [t1 |-> {}, t2 |-> {[kind |-> "DRAW", cov |-> {1}]}]
-/\ wr = [t1 |-> << >>, t2 |-> << >>]
-
-State 6: <Acquire line 340, col 3 to line 346, col 47 of module Kernel>
-/\ seq = [t1 |-> 2, t2 |-> 1]
-/\ resp = [t1 |-> <<>>, t2 |-> <<"ok">>]
-/\ pc = [t1 |-> 0, t2 |-> 1]
+State 6: <Acquire line 342, col 3 to line 350, col 42 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
+/\ resp = [t1 |-> <<"ok">>, t2 |-> <<>>]
+/\ pc = [t1 |-> 1, t2 |-> 0]
 /\ db = <<[present |-> TRUE, val |-> 0, bal |-> 2, parent |-> 0]>>
 /\ reserved = [t1 |-> <<1>>, t2 |-> <<1>>]
-/\ draws = [t1 |-> <<[val |-> 0, bal |-> 0]>>, t2 |-> <<[val |-> 1, bal |-> 1]>>]
+/\ draws = [t1 |-> <<[val |-> 1, bal |-> 1]>>, t2 |-> <<[val |-> 0, bal |-> 0]>>]
 /\ status = [t1 |-> "active", t2 |-> "active"]
 /\ held = [ t1 |-> {[kind |-> "DRAW", cov |-> {1}]},
   t2 |-> {[kind |-> "DRAW", cov |-> {1}]} ]
 /\ wr = [t1 |-> << >>, t2 |-> << >>]
 
-State 7: <DoOp line 354, col 3 to line 376, col 26 of module Kernel>
-/\ seq = [t1 |-> 2, t2 |-> 1]
+State 7: <DoOp line 358, col 3 to line 380, col 26 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
 /\ resp = [t1 |-> <<"ok">>, t2 |-> <<"ok">>]
 /\ pc = [t1 |-> 1, t2 |-> 1]
 /\ db = <<[present |-> TRUE, val |-> 0, bal |-> 2, parent |-> 0]>>
@@ -86,8 +86,8 @@ State 7: <DoOp line 354, col 3 to line 376, col 26 of module Kernel>
   t2 |-> {[kind |-> "DRAW", cov |-> {1}]} ]
 /\ wr = [t1 |-> << >>, t2 |-> << >>]
 
-State 8: <Commit line 383, col 3 to line 390, col 32 of module Kernel>
-/\ seq = [t1 |-> 2, t2 |-> 1]
+State 8: <Commit line 387, col 3 to line 394, col 32 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
 /\ resp = [t1 |-> <<"ok">>, t2 |-> <<"ok">>]
 /\ pc = [t1 |-> 1, t2 |-> 1]
 /\ db = <<[present |-> TRUE, val |-> 1, bal |-> 1, parent |-> 0]>>
@@ -97,8 +97,8 @@ State 8: <Commit line 383, col 3 to line 390, col 32 of module Kernel>
 /\ held = [t1 |-> {}, t2 |-> {[kind |-> "DRAW", cov |-> {1}]}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>]
 
-State 9: <Commit line 383, col 3 to line 390, col 32 of module Kernel>
-/\ seq = [t1 |-> 2, t2 |-> 1]
+State 9: <Commit line 387, col 3 to line 394, col 32 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
 /\ resp = [t1 |-> <<"ok">>, t2 |-> <<"ok">>]
 /\ pc = [t1 |-> 1, t2 |-> 1]
 /\ db = <<[present |-> TRUE, val |-> 2, bal |-> 0, parent |-> 0]>>
@@ -108,7 +108,7 @@ State 9: <Commit line 383, col 3 to line 390, col 32 of module Kernel>
 /\ held = [t1 |-> {}, t2 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>]
 
-61 states generated, 43 distinct states found, 0 states left on queue.
+41 states generated, 29 distinct states found, 3 states left on queue.
 The depth of the complete state graph search is 9.
 The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 2 and the 95th percentile is 2).
-Finished in 00s at (2026-10-15 23:16:06)
+Finished in 00s at (2026-10-15 23:47:07)
