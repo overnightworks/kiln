@@ -62,6 +62,7 @@ make_fake_binary "$passthrough" 0
 
 lock_file="$work_dir/probe-stack.lock"
 output_root="$work_dir/pilot-output"
+failing_output_root="$work_dir/failing-pilot-output"
 
 # --- argument handling -------------------------------------------------
 
@@ -99,7 +100,7 @@ fi
 KILN_E4_PROBE_LOCK="$lock_file" "$night_script" \
   --instrumented-binary "$instrumented_failing_preflight" \
   --passthrough-binary "$passthrough" \
-  --output-root "$output_root" \
+  --output-root "$failing_output_root" \
   >"$work_dir/stdout-preflight-fail" 2>"$work_dir/stderr-preflight-fail" \
   && preflight_fail_exit=0 || preflight_fail_exit=$?
 
@@ -138,17 +139,54 @@ else
 fi
 
 pilot_call="$(cat "$work_dir/calls"/pilot-* 2>/dev/null || true)"
-if [[ "$pilot_call" == *"--output-dir"* && "$pilot_call" == *"--passthrough-binary $passthrough"* ]]; then
-  pass "the pilot is called with --output-dir and --passthrough-binary"
-else
-  fail "the pilot was not called with the expected arguments: $pilot_call"
-fi
-
 run_dirs=("$output_root"/*/)
 if [[ ${#run_dirs[@]} -eq 1 && -d "${run_dirs[0]}" ]]; then
   pass "exactly one timestamped output directory was created"
 else
   fail "expected exactly one timestamped output directory under $output_root, found: ${run_dirs[*]:-none}"
+fi
+
+run_dir="${run_dirs[0]%/}"
+if [[ "$pilot_call" == *"--output-dir $run_dir"* \
+    && "$pilot_call" == *"--passthrough-binary $passthrough"* \
+    && "$pilot_call" == *"--manifest $run_dir/manifest.txt"* ]]; then
+  pass "the pilot is called with its output directory, passthrough binary and preflight manifest"
+else
+  fail "the pilot was not called with the expected arguments: $pilot_call"
+fi
+
+# --- a run never reuses an earlier run's directory ---------------------
+
+# A `date` stub makes every run in this block share one timestamp, the
+# case a second-resolution name would collide on.
+mkdir -p "$work_dir/fixed-clock"
+printf '#!/usr/bin/env bash\necho 20260101T000000Z\n' >"$work_dir/fixed-clock/date"
+chmod +x "$work_dir/fixed-clock/date"
+same_second_root="$work_dir/same-second-output"
+
+for _ in 1 2; do
+  PATH="$work_dir/fixed-clock:$PATH" KILN_E4_PROBE_LOCK="$lock_file" "$night_script" \
+    --instrumented-binary "$instrumented_ok" \
+    --passthrough-binary "$passthrough" \
+    --output-root "$same_second_root" \
+    >/dev/null 2>&1
+  if [[ -z "${first_run_dir:-}" ]]; then
+    first_run_dir="$(echo "$same_second_root"/*/)"
+    echo "completed evidence" >"${first_run_dir}pilot-report.txt"
+  fi
+done
+
+same_second_dirs=("$same_second_root"/*/)
+if [[ ${#same_second_dirs[@]} -eq 2 ]]; then
+  pass "two runs with the same timestamp get two separate directories"
+else
+  fail "expected two directories for two same-second runs, found: ${same_second_dirs[*]:-none}"
+fi
+
+if [[ "$(cat "${first_run_dir}pilot-report.txt")" == "completed evidence" ]]; then
+  pass "an earlier run's completed evidence is left untouched"
+else
+  fail "the earlier run's evidence was changed"
 fi
 
 if [[ $failures -eq 0 ]]; then

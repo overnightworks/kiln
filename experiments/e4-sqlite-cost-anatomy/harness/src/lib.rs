@@ -3,12 +3,14 @@
 //! shim, the four workloads and their frozen generators, pristine-state
 //! restore, the interference monitor, CPU affinity pinning, the
 //! preflight checks, the run driver (cells, repetitions, warm-up,
-//! interleaved order, retry budget, rejected-attempt log) and the
-//! feasibility pilot (§13, mechanics only) that drives it.
+//! interleaved order, retry budget, rejected-attempt log), the admission
+//! checks the pilot passes before it measures, and the feasibility pilot
+//! (§13, mechanics only) that drives it.
 //!
 //! The result-bearing run and its verdict (protocol §10's thresholds,
 //! shares, and §11's output tables) do not live here yet.
 
+pub mod admission;
 pub mod affinity;
 pub mod comparison;
 pub mod driver;

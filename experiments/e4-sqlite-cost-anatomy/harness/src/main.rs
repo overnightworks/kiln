@@ -1,15 +1,15 @@
-//! The harness binary: `preflight`; `measure-cell` and `monitor-sample`,
-//! the pilot's per-build, per-sample measurement primitives; and `pilot`
+//! The harness binary: `preflight`; `measure-cell`, `monitor-sample` and
+//! `build-role`, the pilot's per-build, per-sample primitives; and `pilot`
 //! (the feasibility pilot, protocol.md §13), wired to the real run driver
 //! for its repeated comparisons.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
-use kiln_e4_harness::comparison;
+use kiln_e4_harness::comparison::{self, Build};
 use kiln_e4_harness::pilot::{self, MonitorCoverageRow, PerfStatus, PilotReport};
 use kiln_e4_harness::preflight::{self, CheckResult};
-use kiln_e4_harness::{affinity, interference, machine, monitor};
+use kiln_e4_harness::{admission, affinity, driver, interference, machine, monitor};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -17,10 +17,14 @@ fn main() {
         Some("preflight") => run_preflight(&args[2..]),
         Some("measure-cell") => run_measure_cell(&args[2..]),
         Some("monitor-sample") => run_monitor_sample(),
+        Some("build-role") => println!(
+            "{}",
+            admission::render_build_role_line(Build::of_this_binary())
+        ),
         Some("pilot") => run_pilot(&args[2..]),
         _ => {
             eprintln!(
-                "usage: kiln-e4-harness <preflight|measure-cell|monitor-sample|pilot> [args]"
+                "usage: kiln-e4-harness <preflight|measure-cell|monitor-sample|build-role|pilot> [args]"
             );
             std::process::exit(2);
         }
@@ -150,16 +154,14 @@ fn pin_or_exit(cpus: &[usize]) {
 struct PilotArgs {
     output_dir: PathBuf,
     passthrough_binary: PathBuf,
-    warmup: usize,
-    operations: usize,
+    manifest: PathBuf,
     monitor_interval: Duration,
 }
 
 fn parse_pilot_args(args: &[String]) -> PilotArgs {
     let mut output_dir = None;
     let mut passthrough_binary = None;
-    let mut warmup = machine::WARMUP_OPERATIONS;
-    let mut operations = machine::OPERATION_COUNT_AB_D;
+    let mut manifest = None;
     let mut monitor_interval_ms = machine::SAMPLE_INTERVAL.as_millis() as u64;
 
     let mut iter = args.iter();
@@ -173,10 +175,19 @@ fn parse_pilot_args(args: &[String]) -> PilotArgs {
         match flag.as_str() {
             "--output-dir" => output_dir = Some(PathBuf::from(next())),
             "--passthrough-binary" => passthrough_binary = Some(PathBuf::from(next())),
-            "--warmup" => warmup = next().parse().unwrap_or_else(|_| invalid_value(flag)),
-            "--operations" => operations = next().parse().unwrap_or_else(|_| invalid_value(flag)),
+            "--manifest" => manifest = Some(PathBuf::from(next())),
             "--monitor-interval-ms" => {
-                monitor_interval_ms = next().parse().unwrap_or_else(|_| invalid_value(flag));
+                monitor_interval_ms = next().parse().unwrap_or_else(|_| {
+                    eprintln!("{flag}'s value must be a non-negative integer");
+                    std::process::exit(2);
+                });
+            }
+            "--warmup" | "--operations" => {
+                eprintln!(
+                    "{flag} is refused: the pilot's warm-up and operation counts are frozen \
+                     by protocol §13 and cannot be set"
+                );
+                std::process::exit(2);
             }
             other => {
                 eprintln!("unknown pilot argument {other:?}");
@@ -185,27 +196,21 @@ fn parse_pilot_args(args: &[String]) -> PilotArgs {
         }
     }
 
-    let Some(output_dir) = output_dir else {
-        eprintln!("pilot needs --output-dir <dir>");
-        std::process::exit(2);
-    };
-    let Some(passthrough_binary) = passthrough_binary else {
-        eprintln!("pilot needs --passthrough-binary <path>");
+    let (Some(output_dir), Some(passthrough_binary), Some(manifest)) =
+        (output_dir, passthrough_binary, manifest)
+    else {
+        eprintln!(
+            "pilot needs --output-dir <dir>, --passthrough-binary <path> and --manifest <path>"
+        );
         std::process::exit(2);
     };
 
     PilotArgs {
         output_dir,
         passthrough_binary,
-        warmup,
-        operations,
+        manifest,
         monitor_interval: Duration::from_millis(monitor_interval_ms),
     }
-}
-
-fn invalid_value(flag: &str) -> ! {
-    eprintln!("{flag}'s value must be a non-negative integer");
-    std::process::exit(2);
 }
 
 /// Runs the feasibility pilot (protocol.md §13): the nine counterbalanced
@@ -213,51 +218,42 @@ fn invalid_value(flag: &str) -> ! {
 /// workload ([`pilot::PilotWorkload::is_gated`]) at the small size,
 /// every attempt gated by the real interference monitor and run in
 /// isolated, CPU-pinned child processes (protocol §9) via
-/// [`comparison::run_pilot_comparisons`]; read-only workloads are
-/// reported as not gated. Writes the mechanics-only report to
-/// `<output-dir>/pilot-report.txt` and every rejection, immediately, to
-/// `<output-dir>/rejected.log`.
+/// [`comparison::run_pilot_comparisons`], at the protocol's frozen operation
+/// counts; read-only workloads are reported as not gated. It starts only
+/// from vetted builds ([`admission::admit_builds`]) and into evidence files
+/// it creates exclusively ([`admission::reserve_evidence_files`]), and writes
+/// the mechanics-only report to `<output-dir>/pilot-report.txt` and every
+/// rejection, immediately, to `<output-dir>/rejected.log`.
 fn run_pilot(args: &[String]) {
     let pilot_args = parse_pilot_args(args);
-
-    if let Err(err) = std::fs::create_dir_all(&pilot_args.output_dir) {
-        eprintln!(
-            "could not create output directory {}: {err}",
-            pilot_args.output_dir.display()
-        );
-        std::process::exit(1);
-    }
-
-    let instrumented_binary_sha256 = preflight::hash_current_binary().unwrap_or_else(|err| {
-        eprintln!("could not hash the running binary: {err}");
-        std::process::exit(1);
-    });
-    let passthrough_binary_sha256 = preflight::hash_file(&pilot_args.passthrough_binary)
-        .unwrap_or_else(|err| {
-            eprintln!(
-                "could not hash the passthrough binary at {}: {err}",
-                pilot_args.passthrough_binary.display()
-            );
-            std::process::exit(1);
-        });
 
     let self_binary = std::env::current_exe().unwrap_or_else(|err| {
         eprintln!("could not resolve the current binary's own path: {err}");
         std::process::exit(1);
     });
+    let admitted = admission::admit_builds(
+        &self_binary,
+        &pilot_args.passthrough_binary,
+        &pilot_args.manifest,
+    )
+    .unwrap_or_else(|refusal| {
+        eprintln!("the pilot refused to start: {refusal}");
+        std::process::exit(1);
+    });
+    let evidence =
+        admission::reserve_evidence_files(&pilot_args.output_dir).unwrap_or_else(|err| {
+            eprintln!("the pilot refused to start: {err}");
+            std::process::exit(1);
+        });
 
     let sampler = pilot::MonitorSampler::start(pilot_args.monitor_interval);
     let run_start = std::time::Instant::now();
 
-    let rejected_log_path = pilot_args.output_dir.join("rejected.log");
     let (cells, rejected_attempts) = comparison::run_pilot_comparisons(
         &self_binary,
         &pilot_args.passthrough_binary,
-        |_| kiln_e4_harness::driver::OperationPlan {
-            warmup: pilot_args.warmup,
-            timed: pilot_args.operations,
-        },
-        &rejected_log_path,
+        |workload| driver::operation_plan(workload.as_workload()),
+        &evidence.rejected_log,
     )
     .unwrap_or_else(|err| {
         eprintln!("the pilot's comparisons failed: {err}");
@@ -270,8 +266,8 @@ fn run_pilot(args: &[String]) {
     let expected_samples = pilot::expected_sample_count(run_duration, pilot_args.monitor_interval);
 
     let report = PilotReport {
-        instrumented_binary_sha256,
-        passthrough_binary_sha256,
+        instrumented_binary_sha256: admitted.instrumented_sha256,
+        passthrough_binary_sha256: admitted.passthrough_sha256,
         cells,
         run_duration,
         monitor: MonitorCoverageRow {
@@ -288,11 +284,10 @@ fn run_pilot(args: &[String]) {
 
     let rendered = report.render();
     print!("{rendered}");
-    let report_path = pilot_args.output_dir.join("pilot-report.txt");
-    if let Err(err) = std::fs::write(&report_path, &rendered) {
+    if let Err(err) = std::fs::write(&evidence.report, &rendered) {
         eprintln!(
             "could not write pilot report to {}: {err}",
-            report_path.display()
+            evidence.report.display()
         );
         std::process::exit(1);
     }

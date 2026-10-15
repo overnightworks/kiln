@@ -40,6 +40,23 @@ impl Build {
         }
     }
 
+    pub fn parse(label: &str) -> Option<Build> {
+        [Build::Instrumented, Build::Passthrough]
+            .into_iter()
+            .find(|build| build.label() == label)
+    }
+
+    /// The role this very binary was compiled for: the `passthrough_shim`
+    /// feature (see `Cargo.toml`) selects the build protocol §5's overhead
+    /// bound compares against.
+    pub fn of_this_binary() -> Build {
+        if cfg!(feature = "passthrough_shim") {
+            Build::Passthrough
+        } else {
+            Build::Instrumented
+        }
+    }
+
     fn other(self) -> Build {
         match self {
             Build::Instrumented => Build::Passthrough,

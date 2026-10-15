@@ -5,9 +5,11 @@
 # probe-stack lock (waiting for it, never skipping the proof), runs
 # preflight against the instrumented binary, and then runs the pilot
 # (which gates every comparison attempt against the interference monitor
-# itself, see harness/src/pilot.rs). Outputs land under
-# experiments/e4-sqlite-cost-anatomy/pilot/<UTC timestamp>/, one
-# directory per run so a night never overwrites the last one's record.
+# itself, see harness/src/comparison.rs) against the manifest preflight
+# just wrote. Outputs land under
+# experiments/e4-sqlite-cost-anatomy/pilot/<UTC timestamp>.<unique suffix>/,
+# a directory created for this run alone so a night never overwrites or
+# reuses the last one's record.
 #
 # Usage:
 #   run-pilot-night.sh --instrumented-binary PATH --passthrough-binary PATH
@@ -78,8 +80,8 @@ exec 9>"$lock_file"
 flock 9
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-output_dir="$output_root/$timestamp"
-mkdir -p "$output_dir"
+mkdir -p "$output_root"
+output_dir="$(mktemp -d "$output_root/$timestamp.XXXXXX")"
 
 manifest_path="$output_dir/manifest.txt"
 if ! "$instrumented_binary" preflight "$manifest_path"; then
@@ -87,4 +89,5 @@ if ! "$instrumented_binary" preflight "$manifest_path"; then
   exit 1
 fi
 
-exec "$instrumented_binary" pilot --output-dir "$output_dir" --passthrough-binary "$passthrough_binary"
+exec "$instrumented_binary" pilot --output-dir "$output_dir" \
+  --passthrough-binary "$passthrough_binary" --manifest "$manifest_path"

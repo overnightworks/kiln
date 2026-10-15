@@ -24,8 +24,9 @@ in its check names. One criterion per module; several tests may share it.
 
 ## Preflight and passthrough build
 
-- [KILN-E4-09] The preflight manifest records the binary's SHA-256, the `rustc` version and the SQLite version; a later run compares its own binary hash with the manifest and fails closed on a mismatch or an unreadable manifest (§12, §13).
+- [KILN-E4-09] The preflight manifest records the binary's SHA-256, the `rustc` version and the SQLite version; a later run compares its own binary hash with the manifest and fails closed on a mismatch or an unreadable manifest, and the pilot is such a run: it starts only when its instrumented binary's hash is the manifest's (§12, §13).
 - [KILN-E4-10] The passthrough build commits through the same shim path as the instrumented build but records no `xWrite` or `xSync` time, while the instrumented build records both (§5).
+- [KILN-E4-20] Each binary reports which build it is through `build-role`; the pilot starts only when the instrumented binary reports the instrumented build and the passthrough binary reports the passthrough build, so the same build given twice, the two swapped, or a binary that cannot report its role is refused (§5).
 
 ## Feasibility pilot
 
@@ -36,7 +37,9 @@ in its check names. One criterion per module; several tests may share it.
 - [KILN-E4-15] The pilot report carries the two binary hashes, run duration, rejected-attempt count, monitor coverage and why `perf` was skipped, and never any `xsync`, `xwrite` or `remainder` figure, including in an error message (§13).
 - [KILN-E4-16] The pilot succeeds only if every gated cell passed; a failing, inconclusive or insufficient gated cell makes it fail, and a not-gated cell does not vote (§5, §13).
 - [KILN-E4-17] The pilot reports how many 200 ms monitor samples were written against how many the window should hold, rounded down, and a window shorter than one interval expects none (§13).
+- [KILN-E4-21] The pilot runs the protocol's frozen warm-up and operation counts only; it has no option to change them and refuses `--warmup` and `--operations` (§13).
+- [KILN-E4-22] The pilot creates its report and its rejected-attempt log exclusively: a directory that already holds either is refused and its evidence stays untouched (§9, §11).
 
 ## Night script
 
-- [KILN-E4-19] `run-pilot-night.sh` refuses to start without both binaries, takes the shared probe-stack lock, runs preflight before the pilot and starts no pilot when preflight fails, and writes each run to its own UTC-timestamped directory (§12, §13).
+- [KILN-E4-19] `run-pilot-night.sh` refuses to start without both binaries, takes the shared probe-stack lock, runs preflight before the pilot and starts no pilot when preflight fails, passes the pilot the manifest preflight wrote, and writes each run to a newly created UTC-timestamped directory that no earlier run's directory can be (§12, §13).
