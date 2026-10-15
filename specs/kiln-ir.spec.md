@@ -114,3 +114,13 @@ module; several tests may share it.
 - [KILN-IR-62] Unique sign-up: signing up inserts a user with an email under a unique constraint on the email. Replayed serially, a second sign-up with a taken email aborts with a unique violation naming the email, and the sign-ups before and after it commit.
 - [KILN-IR-63] Doctors on call: going off call deletes the doctor from the on-call table only when the range of the other doctors on call is not empty, and aborts with a declared reason otherwise. Replayed serially, the call that would leave nobody on call aborts, and the calls before and after it commit.
 - [KILN-IR-64] Mixed functions (concept §2.2): replaying `transfer` then a `sign_up` with a taken email in one program commits the transfer and aborts the sign-up with a unique violation, and the final store keeps the transfer's balances.
+
+## Secondary indexes
+
+- [KILN-IR-65] A secondary index is declared in the schema by a name, one table, one or more columns of that table (integer or text) and whether it is unique. An index on an undeclared table or column, with no column, or sharing its name with another index is rejected with a typed schema error.
+- [KILN-IR-66] An indexed range read returns the rows whose indexed columns, taken in the index's column order, lie within its inclusive bounds, ordered by those values and, among rows holding equal values, by primary key. A non-unique index returns every row holding a value; a row lacking an indexed column is not in the index.
+- [KILN-IR-67] An indexed range read whose start sorts after its end, or that matches no row, reads as an empty sequence, branchable as an absence, and iterating it runs the body zero times.
+- [KILN-IR-68] An indexed range read sees the transaction's own earlier writes, and a bounded iteration over it visits its rows in index order.
+- [KILN-IR-69] An indexed range read matching more rows than its bound aborts with the typed bound-exceeded reason and binds nothing.
+- [KILN-IR-70] An indexed range read logs one transaction-logic entry of a distinct indexed-range kind naming the table, the index and both bounds, including for an empty or reversed range and for a call that then aborts; it logs no point read or primary-key range read.
+- [KILN-IR-71] Rows reached through an indexed range read are accessed by ordinary point reads, so a call that stops at the index leaves only the indexed-range entry and one that follows it to base rows leaves that entry plus one point read per row accessed.
