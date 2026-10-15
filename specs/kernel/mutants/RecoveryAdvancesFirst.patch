@@ -1,12 +1,11 @@
 --- Publication.tla
 +++ Publication.tla
-@@ -65,7 +65,8 @@
- RecoverPublication ==
-   /\ Recover
-   /\ recovering' = TRUE
--  /\ UNCHANGED <<installed, pointer, interrupted>>
-+  /\ pointer' = Len(log)
-+  /\ UNCHANGED <<installed, interrupted>>
+@@ -124,7 +124,7 @@
+    alone, the end of the longest prefix of fully installed commits. *)
+ FullyInstalledPrefixes == {n \in 0..Len(log) : \A i \in 1..n : CompletelyInstalled(log[i].txn)}
  
- Open ==
-   /\ recovering /\ pointer = Len(log)
+-Reconstructed == CHOOSE n \in FullyInstalledPrefixes : \A m \in FullyInstalledPrefixes : m <= n
++Reconstructed == Len(log)
+ 
+ RecoverPublication ==
+   /\ RecoverTo(SubSeq(log, 1, Reconstructed))

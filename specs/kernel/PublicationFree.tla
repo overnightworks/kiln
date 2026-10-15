@@ -1,7 +1,7 @@
 --------------------------- MODULE PublicationFree ---------------------------
 (* Scenario (#59): the PublicationCrash programs with no failure. Installation
-   still stops between a commit's two structures while readers observe the
-   pointer, and the pointer passes each commit only when it is whole. *)
+   still stops between a commit's two structures while a snapshot reader reads
+   at the pointer, and the pointer passes each commit only when it is whole. *)
 
 EXTENDS Publication
 
