@@ -660,38 +660,36 @@ it is applied to TypeScript.
   holds a builder, or inside an argument of a chain method, is not in the
   chain. A chain holding several `createQueryBuilder()` calls belongs to the
   first one written.
-- **S2 forms.** `X.startTransaction()` is matched when every control-flow path
-  from it to the end of its function closes it, by a `X.commitTransaction()`
-  or `X.rollbackTransaction()` with the same receiver text written directly in
-  the same function; the transaction ends at the last such terminator that
-  closes it on any path, before the next `X.startTransaction()` that does not
-  nest in it. A start that some path leaves open opens no unit. Boundaries
-  follow the syntax tree's control flow, per function, statements in order.
-  The arms of an `if` (an absent `else` is the arm that skips it), of a
-  ternary and of a `switch` (the skipping arm too when it has no `default`)
-  each run from a copy of the transactions open before the conditional;
-  `switch` clauses are separate arms only when they end in `break`,
-  `continue`, `return` or `throw`, clauses that fall through run in sequence,
-  and `try`, `catch` and `finally` run in sequence. A path that ends in
-  `return` does not continue into the join, but is checked at its exit: a
-  transaction still open there is an unmatched marker (`start; if (c) {
-  rollback; return; } ...; commit` is matched, `start; if (c) return; ...;
-  commit` is not). A path that ends in `throw` does not continue either and
-  is not checked, because judging it needs a model of which `catch` or
-  `finally` receives the exception, which this walk does not carry. At the join, a
-  transaction open before the conditional stays open if every continuing arm
-  leaves it open and is closed if every one closes it; open in some arms and
-  closed in others, it is an unmatched marker. A start made inside the arms
-  that every arm leaves open at the same depth is one alternative opening, not
-  a nesting, and continues; a start left open in only some arms is an
-  unmatched marker, and its sites stay S3. A start written while a
-  transaction is open on the same path nests in it, and the outermost owns the
-  nested one's sites; a commit or rollback closes the innermost open
-  transaction of its receiver, and one that follows the last close extends the
-  closed transaction up to the next start. A loop body is walked once and a
-  commit or rollback in it closes only a transaction started in that loop; a
-  start whose commit or rollback lies across the loop boundary, in either
-  direction, is unmatched.
+- **S2 forms.** `X.startTransaction()` is matched by enumerating the control-flow
+  paths of its function (the file body is one more function), statements in
+  order, and running a stack of open starts per receiver text on each path:
+  a start pushes, a `X.commitTransaction()` or `X.rollbackTransaction()` with
+  the same receiver text written directly in the same function pops the
+  innermost open start (one with nothing open is stray and changes nothing),
+  and a `return`, or the end of the function, ends the path. A start is
+  matched when every path that reaches it pops it, and its transaction ends
+  at the last terminator that pops it on any path. A start that some path
+  leaves open, or that no path pops, is unmatched and opens no unit. The arms
+  of an `if` (an absent `else` is the arm that skips it), of a ternary and of
+  a `switch` (the skipping arm too when it has no `default`) are separate
+  paths; `switch` clauses are separate arms only when they end in `break`,
+  `continue`, `return` or `throw`, clauses that fall through run in sequence.
+  `try`, `catch` and `finally` run in sequence: after a body that completes,
+  the code goes on either without the catch or through it, and `finally`
+  runs after every path that did not throw. A path that ends in `throw` is
+  dropped and decides nothing, a stated limitation: judging it needs a model
+  of which `catch` or `finally` receives the exception, which this walk does
+  not carry. A start made while another is open on the same path nests in it
+  and the outermost owns the nested one's sites; starts in mutually exclusive
+  arms are on different paths and so are one alternative opening, not a
+  nesting. A loop body is walked once, as a path that may also skip the loop:
+  a commit or rollback in it pops only a start made in that loop, and a start
+  whose commit or rollback lies across the loop boundary, in either
+  direction, is unmatched; a jump to a label ends its path like a `return`.
+  The paths are enumerated explicitly; paths that did the same to every
+  transaction count once, and a function with more than 4096 distinct paths
+  is not enumerated: every start in it is an unmatched marker with the reason
+  "path cap exceeded", recorded in the side output.
   `X.transaction(...)` opens a unit when `X` is, or ends in a property named,
   `dataSource`, `manager` or `connection`, and its body is the last function
   or arrow function argument. A method decorated `@Transaction` or

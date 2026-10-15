@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import ts from "typescript";
+
+import { MAX_PATHS_PER_FUNCTION, PATH_CAP_EXCEEDED, closingsOfStartedTransactions } from "./transaction_flow.mjs";
 import { enumerationOf, marker, shape, site } from "./unit_fixtures.mjs";
 
 const START = "qr.startTransaction()";
@@ -100,7 +103,7 @@ async function braces(first, second, flag) {
     [],
   ],
   [
-    "a start under a condition without an else is open on only some paths and unmatched",
+    "a start under a condition without an else is matched when every path that reaches it closes it",
     `\
 async function maybe(first, second, flag) {
   if (flag) await qr.startTransaction();
@@ -108,11 +111,22 @@ async function maybe(first, second, flag) {
   await qr.commitTransaction();
 }
 `,
+    [["S2", 2, PARAMETERS, [3]]],
+    [],
+  ],
+  [
+    "a start under a condition without an else and without a commit is unmatched",
+    `\
+async function leaks(first, second, flag) {
+  if (flag) await qr.startTransaction();
+  await qr.manager.save(first);
+}
+`,
     [["S3", 3, ["first"], [3]]],
     [2],
   ],
   [
-    "a switch without default leaves a start open on only some paths unmatched",
+    "a start in a switch without default is matched when every path that reaches it closes it",
     `\
 async function cases(first, second, flag) {
   switch (flag) {
@@ -124,8 +138,8 @@ async function cases(first, second, flag) {
   await qr.commitTransaction();
 }
 `,
-    [["S3", 7, ["first"], [7]]],
-    [4],
+    [["S2", 4, PARAMETERS, [7]]],
+    [],
   ],
   [
     "a transaction closed in every arm stays closed for what follows",
@@ -277,6 +291,115 @@ async function loopBoth(first, second, flag) {
     [["S2", 3, PARAMETERS, [4]]],
     [],
   ],
+  [
+    "a discarded inner opening does not let a later commit close the outer transaction: the outer start is unmatched and the inner one, popped on every path, owns what follows it",
+    `\
+async function innerGuarded(first, second, flag) {
+  await qr.startTransaction();
+  await qr.manager.save(first);
+  await qr.startTransaction();
+  if (flag) await qr.commitTransaction();
+  await qr.manager.insert(second);
+  await qr.commitTransaction();
+}
+`,
+    [["S3", 3, ["first"], [3]], ["S2", 4, PARAMETERS, [6]]],
+    [2],
+  ],
+  [
+    "a start made on only one path inside an open transaction leaves the outer start unmatched",
+    `\
+async function innerConditional(first, second, flag) {
+  await qr.startTransaction();
+  await qr.manager.save(first);
+  if (flag) await qr.startTransaction();
+  await qr.manager.insert(second);
+  await qr.commitTransaction();
+}
+`,
+    [["S3", 3, ["first"], [3]], ["S2", 4, PARAMETERS, [5]]],
+    [2],
+  ],
+  [
+    "a thrown arm that continues past the join does not decide the start",
+    `\
+async function throwsThenCommits(first, second, flag) {
+  await qr.startTransaction();
+  await qr.manager.save(first);
+  if (flag) throw first;
+  await qr.commitTransaction();
+  return;
+}
+`,
+    [["S2", 2, PARAMETERS, [3]]],
+    [],
+  ],
+  [
+    "a thrown arm beside an arm that commits and returns does not decide the start either",
+    `\
+async function throwsOrCommitsAndReturns(first, second, flag) {
+  await qr.startTransaction();
+  await qr.manager.save(first);
+  if (flag) throw first;
+  else {
+    await qr.commitTransaction();
+    return;
+  }
+}
+`,
+    [["S2", 2, PARAMETERS, [3]]],
+    [],
+  ],
+  [
+    "a finally that commits closes the transaction of a try body that returns",
+    `\
+async function finallyCommits(first, second, flag) {
+  await qr.startTransaction();
+  try {
+    await qr.manager.save(first);
+    return;
+  } finally {
+    await qr.commitTransaction();
+  }
+}
+`,
+    [["S2", 2, PARAMETERS, [4]]],
+    [],
+  ],
+  [
+    "a break out of a loop body before the commit leaves the start made in the body unmatched",
+    `\
+async function loopBreak(first, second, flag) {
+  for (const item of [first]) {
+    await qr.startTransaction();
+    await qr.manager.save(item);
+    if (flag) break;
+    await qr.commitTransaction();
+  }
+}
+`,
+    [["S3", 4, ["item"], [4]]],
+    [3],
+  ],
+  [
+    "a continue in a switch clause leaves the loop iteration, so the start before it is unmatched",
+    `\
+async function switchContinue(first, second, flag) {
+  for (const item of [first]) {
+    await qr.startTransaction();
+    switch (flag) {
+      case 1:
+        continue;
+      default:
+        await qr.manager.save(item);
+    }
+    await qr.commitTransaction();
+  }
+}
+`,
+    [["S3", 8, ["item"], [8]]],
+    [3],
+  ],
 ];
 
 for (const [name, source, units, unmatchedLines] of FLOWS) {
@@ -286,3 +409,24 @@ for (const [name, source, units, unmatchedLines] of FLOWS) {
     assert.deepEqual(enumeration.unmatchedMarkers.map(({ line }) => line), unmatchedLines);
   });
 }
+
+/** A function with `count` independent conditional starts has 2^count distinct paths. */
+const conditionalStarts = (count) =>
+  `async function many(first, flag) {\n${"  if (flag) await qr.startTransaction();\n".repeat(count)}  await qr.manager.save(first);\n}\n\nasync function few(first) {\n  await qr.startTransaction();\n  await qr.manager.insert(first);\n  await qr.commitTransaction();\n}\n`;
+
+test("KILN-E1TO-10 a function with more distinct paths than the cap leaves every start in it unmatched with the reason, and other functions are unaffected", () => {
+  const starts = Math.log2(MAX_PATHS_PER_FUNCTION) + 1;
+  const source = conditionalStarts(starts);
+  const enumeration = enumerationOfFlow(source);
+  const lines = Array.from({ length: starts }, (_, index) => index + 2);
+  assert.deepEqual(enumeration.unmatchedMarkers.map(({ line }) => line), lines);
+  assert.deepEqual([...new Set(enumeration.unmatchedMarkers.map(({ reason }) => reason))], [PATH_CAP_EXCEEDED]);
+  assert.deepEqual(enumeration.units.map(shape).map(([rule, line]) => `${rule}${line}`), [`S3${starts + 2}`, `S2${starts + 6}`]);
+});
+
+test("KILN-E1TO-10 a function at the cap is enumerated and one path more is not", () => {
+  const sourceFile = ts.createSourceFile("cap.ts", conditionalStarts(3), ts.ScriptTarget.Latest, true);
+  const reasonsAt = (maxPaths) => [...closingsOfStartedTransactions(sourceFile, { maxPaths }).values()].filter((closing) => closing.unmatched === PATH_CAP_EXCEEDED).length;
+  assert.equal(reasonsAt(8), 0);
+  assert.equal(reasonsAt(7), 3);
+});

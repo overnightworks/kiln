@@ -52,7 +52,7 @@ test("KILN-E1TO-22 units are ordered by position and rule and a rerun is byte-id
 
 test("KILN-E1TO-09 the side outputs are one JSON line per record", () => {
   const enumeration = enumerationOf(SOURCE, [site(SOURCE, "repo.find(a)", "find")]);
-  assert.equal(renderUnmatchedMarkers([{ file: FILE, line: 3, column: 4 }]), `{"file":"${FILE}","line":3,"column":4}\n`);
+  assert.equal(renderUnmatchedMarkers([{ file: FILE, line: 3, column: 4, reason: "path cap exceeded" }]), `{"file":"${FILE}","line":3,"column":4,"reason":"path cap exceeded"}\n`);
   assert.equal(renderReceiverEvidence(enumeration.receiverEvidence).split("\n").length, 2);
   assert.equal(renderUnits([]), "");
 });

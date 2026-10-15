@@ -19,7 +19,7 @@ export function renderUnits(units) {
 export const renderReceiverEvidence = lines;
 
 export function renderUnmatchedMarkers(markers) {
-  return lines(markers.map(locationOf));
+  return lines(markers.map((marker) => ({ ...locationOf(marker), reason: marker.reason })));
 }
 
 export const renderInstallScripts = lines;

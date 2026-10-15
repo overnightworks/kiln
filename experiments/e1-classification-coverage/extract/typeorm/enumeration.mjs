@@ -33,7 +33,7 @@ export function enumerateUnits(application, report, sources) {
     const sites = report.sites.filter((site) => site.file === file).map((site) => locatedSite(site, sourceText));
     const { blocks, unmatched } = readTransactionBlocks(sourceText, report.markers.filter((marker) => marker.file === file));
     entries.push(...unitsOfFile(application, sourceText, sites, blocks));
-    unmatchedMarkers.push(...unmatched.map(({ file: markerFile, start }) => ({ file: markerFile, ...start })));
+    unmatchedMarkers.push(...unmatched.map(({ marker, reason }) => ({ file: marker.file, ...marker.start, reason })));
   }
   entries.sort(compareEntries);
   return {

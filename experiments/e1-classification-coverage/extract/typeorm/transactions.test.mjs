@@ -136,8 +136,8 @@ class Pay {
     ["S3", 9, ["b"], [9]],
   ]);
   assert.deepEqual(enumeration.unmatchedMarkers, [
-    { file: "src/db.ts", line: 2, column: 2 },
-    { file: "src/db.ts", line: 8, column: 10 },
+    { file: "src/db.ts", line: 2, column: 2, reason: "form opens no unit" },
+    { file: "src/db.ts", line: 8, column: 10, reason: "not closed on every path" },
   ]);
 });
 
@@ -318,15 +318,16 @@ async function either(a, shared) {
   ]);
 });
 
-test("KILN-E1TO-10 a commit and a rollback after a closed transaction still belong to it, up to the next start", () => {
+test("KILN-E1TO-10 a rollback in a catch after the commit has closed nothing, so the transaction ends at the commit", () => {
+  const source = START_COMMIT.replace("await queryRunner.rollbackTransaction();", "await audit.save(err);\n    await queryRunner.rollbackTransaction();");
   const messages = [
-    marker(START_COMMIT, "queryRunner.startTransaction()", "startTransaction"),
-    site(START_COMMIT, "queryRunner.manager.insert(Rec, item)", "insert", { methodType: "write" }),
-    site(START_COMMIT, "audit.save(items)", "save", { methodType: "write" }),
+    marker(source, "queryRunner.startTransaction()", "startTransaction"),
+    site(source, "queryRunner.manager.insert(Rec, item)", "insert", { methodType: "write" }),
+    site(source, "audit.save(err)", "save", { methodType: "write" }),
   ];
-  assert.deepEqual(unitsOf(START_COMMIT, messages).map(shape), [
+  assert.deepEqual(unitsOf(source, messages).map(shape), [
     ["S2", 3, ["items"], [7]],
-    ["S3", 13, ["items"], [13]],
+    ["S3", 11, ["err"], [11]],
   ]);
 });
 
@@ -352,7 +353,7 @@ test("KILN-E1TO-19 a method decorated @Transaction or @LazyTransaction is a legi
   const afterDecorator = { ...atDecorator, fromLine: 2, fromColumn: 2 };
   for (const report of [atDecorator, afterDecorator]) {
     const { unmatchedMarkers } = enumerationOf(DECORATED, [report]);
-    assert.deepEqual(unmatchedMarkers, [{ file: "src/db.ts", line: report.fromLine + 1, column: report.fromColumn }]);
+    assert.deepEqual(unmatchedMarkers, [{ file: "src/db.ts", line: report.fromLine + 1, column: report.fromColumn, reason: "form opens no unit" }]);
   }
 });
 
