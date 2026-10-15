@@ -1,0 +1,12 @@
+--- Durable.tla
++++ Durable.tla
+@@ -91,7 +91,8 @@
+   /\ Serving /\ Active(t) /\ pc[t] = Len(Prog[t])
+   /\ t \notin TxnsOf(unflushed)
+   /\ unflushed' = Append(unflushed, Record(t))
+-  /\ UNCHANGED <<Vars, log, history, engine, answer, fsyncFailed, unresolved, failuresUsed>>
++  /\ answer' = [answer EXCEPT ![t] = "committed"]
++  /\ UNCHANGED <<Vars, log, history, engine, fsyncFailed, unresolved, failuresUsed>>
+ 
+ (* The flush of the oldest record succeeds: the commit is durable and takes
+    effect, releasing everything the transaction held (strict two-phase
