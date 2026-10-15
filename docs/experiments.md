@@ -136,14 +136,20 @@ against for any of the 110 applications.
   every transaction "static" with no analysis) and confirms the evaluation
   harness rejects that stub's output for lacking evidence.
 - **Lowering audit.** A classifier can raise its coverage number by
-  weakening what "static" or "one-hop" require. Before the first result
-  counts, and again on every change that reclassifies transactions, a
-  sample of the classified transactions is re-checked: that the IR the
-  front end produced for each one is equivalent to the function's actual
-  source behavior, judged against the IR's reference meaning
-  (`docs/concept.md` §2.1) through the reference interpreter — not merely
-  that the classifier's own logic about its own IR is internally
-  consistent.
+  weakening what "static" or "one-hop" require, or by excluding a real
+  database operation from the denominator as a false "not a database
+  operation" under S4 (`experiments/e1-classification-coverage/inputs.md`
+  §3). Before the first result counts, and again on every change that
+  reclassifies transactions, a sample is re-checked that draws from both
+  the included, classified transactions and the candidates S4 excluded as
+  non-database operations: for an included transaction, that the IR the
+  front end produced for it is equivalent to the function's actual source
+  behavior, judged against the IR's reference meaning (`docs/concept.md`
+  §2.1) through the reference interpreter; for an S4-excluded candidate,
+  that its receiver genuinely resolves to a non-ORM object rather than
+  having been wrongly dropped from the denominator — not merely that the
+  classifier's own logic about its own IR, or its own exclusion, is
+  internally consistent.
 - **Containment audit.** Independently of the lowering audit, and on the
   same before-first-result-and-every-reclassification schedule, confirm
   that the resources a classified transaction actually touched while

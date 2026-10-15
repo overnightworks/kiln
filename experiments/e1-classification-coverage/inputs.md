@@ -160,10 +160,15 @@ actually turns out to be — static, one-hop, or unknown — is the classifier's
 own later job, checked against the source by the lowering audit
 (`docs/experiments.md`, "Audits"); this rule only has to say, unambiguously,
 what counts as a unit, never what that unit's footprint is. It is stated as
-three rules, S1-S3, applied in that order. S1 (below) is mediated through a
+five rules, S1-S5, applied in that order. S1-S3 decide what counts as a unit,
+over the source text; S4 decides which of S1's reported candidates are not
+database operations at all — a classification question answered later by
+the lowering, never by this enumeration rule; S5 fixes a structural gap in
+the TypeORM analyzer's own candidate set. S1 (below) is mediated through a
 pinned external analyzer rather than hand-matched against a list this
-document maintains — S2 and S3 stay directly syntactic over the source text,
-unchanged by that.
+document maintains — S2, S3, and S5 stay directly syntactic over the source
+text, unchanged by that; S4 is resolved by the classifier's lowering, not by
+this document.
 
 **S1 — unit sites.** A unit site is an ORM operation reported by the
 111-application study's own published analyzers (`splinter-mypy` for Django,
@@ -237,6 +242,38 @@ comprehension, a loop body) count once per site, exactly as written in the
 source, independent of whether, or how many times, that branch runs at
 runtime: enumeration is structural, over the source text, never a runtime
 trace.
+
+**S4 — non-database candidates.** The analyzers (S1) define the candidate
+set, not the final denominator. A candidate S1 reports whose lowering into
+the IR shows it performs no database access — its receiver resolves to a
+non-ORM object, for example an unannotated Django `request` parameter that
+mypy infers as `Any` rather than as a manager or queryset — is classified
+"not a database operation" and leaves the denominator. This is a
+classification outcome decided by the lowering (`docs/concept.md` §2.1),
+never a second hand-maintained name list applied on top of S1's output:
+`request.POST.get(...)` and `request.GET.get(...)` (§3.1 below) are exactly
+this case, reported by `splinter-mypy` only because an unannotated `request`
+resolves to `Any`, not because `QueryDict.get` touches a database. Each
+application's report states the count of such exclusions next to its
+coverage percentage, so a dropped non-database candidate never silently
+shrinks the denominator unreported. The lowering audit's sample
+(`docs/experiments.md`, "Audits") draws from excluded candidates as well as
+from included units, so an exclusion is itself checked against the source,
+never merely asserted.
+
+**S5 — TypeORM QueryBuilder chains.** A TypeORM `QueryBuilder` chain —
+`repository.createQueryBuilder()` followed by any sequence of builder
+methods and ending in a terminal execution call (`getOne`, `getMany`,
+`getCount`, `getRawOne`, `getRawMany`, `stream`, `execute`, or no terminal
+at all) — is one unit, represented by its `createQueryBuilder()` site (S1,
+"other"), whatever terminal methods follow. This closes the structural gap
+the pinned analyzer otherwise leaves: no terminal method is in any of its
+four lists (§3.1's `CloudDBService.data`, the `getMany`/`getCount` pair), so
+without S5 a chain's terminal call would be invisible to enumeration
+entirely, rather than represented once by the chain's own
+`createQueryBuilder()` site. S5 does not add a second unit for the
+terminal — it confirms that the one site S1 already reports for the chain
+is the whole chain's unit, not merely its construction step.
 
 **Django analyzer: `splinter-mypy`.**
 `github.com/umd-dslam/splinter-mypy` @
@@ -359,7 +396,7 @@ the front end cannot map to the IR's node kinds at all (arbitrary external
 I/O, unbounded recursion, a construct it has no translation for) is refused
 for *translation*, per `docs/concept.md` §2.1's unsupported-source rule —
 it is never compiled into the running program. Refusal is independent of
-*enumeration*: S1-S3 above identify the unit from the source's own
+*enumeration*: S1-S3 and S5 above identify the unit from the source's own
 transaction/call structure alone, before translation is attempted, so a
 refused unit is enumerated like any other and stays in the denominator. It
 classifies **Unknown** (`docs/experiments.md`, "Footprint categories": "an
@@ -570,6 +607,18 @@ document's previous draft claimed (which missed the two `request.GET`/
 eight (which credited the `super().get()` call as a site; the pinned
 analyzer does not and cannot see it, for the structural reason given above).
 
+**S4 applies to two of these seven candidates.** Sites 2 and 7 —
+`request.POST.get(...)` and `request.GET.get(...)` — are reported only
+because mypy infers the unannotated `request` parameter as `Any` (above),
+not because Django's `QueryDict` (what `HttpRequest.GET`/`.POST` actually
+is) is an ORM manager or queryset: reading a submitted form value performs
+no database access. Whether sites 2 and 7 are in fact classified "not a
+database operation" under S4 is decided by the lowering, audited — not
+asserted here. This document only identifies them as S4 candidates: of the
+7 analyzer-reported candidates, sites 1, 3, 4, 5, and 6 are database
+operations; sites 2 and 7 are S4 candidates, to be decided by the lowering,
+audited.
+
 **TypeORM — `cool-team-official/cool-admin-midway` @
 `edc13838439a0d6469abfe6263f51f2c987284bf`,
 `src/modules/cloud/service/db.ts`, `CloudDBService.data` (confirmed with
@@ -644,6 +693,16 @@ the fix is not "both calls count" or "one call per statement" — it is that
 the published tool recognizes neither call by that name, while it does
 recognize `createQueryBuilder()`, which the previous manual rule had
 specifically excluded.
+
+**S5 applies to this chain.** `createQueryBuilder()` (site 5) opens a
+chain — `.offset(...).limit(...).orderBy(...)`, terminating in
+`.getMany()` and `.getCount()` — that S5 represents as one unit by its
+`createQueryBuilder()` site, whatever terminal methods follow. `getMany()`
+and `getCount()` are not separate units omitted from the count, and not a
+second site waiting to be added: they are this same chain's terminals,
+already represented by site 5. Under S5, the count below is the chain's
+correct unit count by rule, not merely an artifact of the analyzer's
+silence on two names.
 
 `this.getRepository(db?.className)` (line 34) is not itself a site:
 `getRepository` is not a name in any of the four lists, confirmed by its
