@@ -5,9 +5,9 @@
 use std::collections::BTreeMap;
 
 use kiln_ir::{
-    run, AbortReason, AccessKind, AccessedColumns, Call, ColumnName, Condition, Effect, Expr,
-    Function, FunctionName, Outcome, ParameterName, Program, Row, Slot, Store, TableName, Terminal,
-    Value,
+    run, AbortReason, AccessKind, AccessedColumns, ArithmeticOp, Call, ClampDomain, Column,
+    ColumnName, Condition, Effect, Expr, Function, FunctionName, IntegerWidth, Outcome,
+    ParameterName, Program, Row, Schema, Slot, Store, Table, TableName, Terminal, Value,
 };
 use proptest::prelude::*;
 
@@ -51,6 +51,30 @@ fn call_under_test(args: Vec<Value>) -> Call {
     Call {
         function: FunctionName("under_test".to_owned()),
         args,
+    }
+}
+
+/// A program whose schema declares table "t" with exactly one column,
+/// `declared_column`, plus the given function body — the shape every D3
+/// test below writes into.
+fn program_with_column(
+    declared_column: Column,
+    parameters: Vec<ParameterName>,
+    effects: Vec<Effect>,
+    terminal: Terminal,
+) -> Program {
+    Program {
+        schema: Schema {
+            tables: vec![Table {
+                name: table("t"),
+                columns: vec![declared_column],
+            }],
+        },
+        functions: vec![Function {
+            name: FunctionName("under_test".to_owned()),
+            parameters,
+            body: kiln_ir::Block { effects, terminal },
+        }],
     }
 }
 
@@ -471,4 +495,308 @@ fn update_preserves_untouched_columns() {
         .expect("row still exists after the update");
     assert_eq!(row.columns.get(&column("a")), Some(&Value::Integer(99)));
     assert_eq!(row.columns.get(&column("b")), Some(&Value::Integer(2)));
+}
+
+// --- D3: arithmetic runs at a column's declared width; overflow aborts unless the column
+// clamps (docs/concept.md §2.2) ---
+
+proptest! {
+    #[test]
+    fn computed_value_outside_declared_width_aborts_without_a_domain(
+        lhs in -128i64..=127i64,
+        rhs in -128i64..=127i64,
+    ) {
+        let declared_column = Column { name: column("c"), width: IntegerWidth::I8, domain: None };
+        let program = program_with_column(
+            declared_column,
+            vec![],
+            vec![Effect::Insert {
+                table: table("t"),
+                key: Expr::Literal(Value::Integer(1)),
+                columns: columns_of([(
+                    "c",
+                    Expr::Arithmetic(
+                        ArithmeticOp::Add,
+                        Box::new(Expr::Literal(Value::Integer(lhs))),
+                        Box::new(Expr::Literal(Value::Integer(rhs))),
+                    ),
+                )]),
+            }],
+            Terminal::Return(Expr::Literal(Value::Integer(0))),
+        );
+        let store = Store::empty();
+
+        let execution = run(&program, &call_under_test(vec![]), &store);
+
+        let sum = lhs + rhs;
+        if (i8::MIN as i64..=i8::MAX as i64).contains(&sum) {
+            let row = execution
+                .store
+                .row(&table("t"), &Value::Integer(1))
+                .expect("a sum within the declared width commits");
+            prop_assert_eq!(row.columns.get(&column("c")), Some(&Value::Integer(sum)));
+        } else {
+            match execution.outcome {
+                Outcome::Aborted {
+                    reason: AbortReason::Overflow { table: t, column: c, key },
+                } => {
+                    prop_assert_eq!(t, table("t"));
+                    prop_assert_eq!(c, column("c"));
+                    prop_assert_eq!(key, Value::Integer(1));
+                }
+                other => prop_assert!(false, "expected an Overflow abort, got {other:?}"),
+            }
+            // Overflow aborts like any other abort: every effect of this call is discarded.
+            prop_assert_eq!(&execution.store, &store);
+        }
+    }
+}
+
+#[test]
+fn literal_write_outside_declared_width_aborts_without_a_domain() {
+    let declared_column = Column {
+        name: column("c"),
+        width: IntegerWidth::I8,
+        domain: None,
+    };
+    let program = program_with_column(
+        declared_column,
+        vec![],
+        vec![Effect::Insert {
+            table: table("t"),
+            key: Expr::Literal(Value::Integer(1)),
+            // 200 is outside i8's -128..=127, with no arithmetic involved at all.
+            columns: columns_of([("c", Expr::Literal(Value::Integer(200)))]),
+        }],
+        Terminal::Return(Expr::Literal(Value::Integer(0))),
+    );
+    let store = Store::empty();
+
+    let execution = run(&program, &call_under_test(vec![]), &store);
+
+    assert!(matches!(
+        execution.outcome,
+        Outcome::Aborted {
+            reason: AbortReason::Overflow { .. }
+        }
+    ));
+    assert_eq!(&execution.store, &store);
+}
+
+#[test]
+fn overflow_abort_discards_every_effect_from_earlier_in_the_same_call() {
+    let declared_column = Column {
+        name: column("c"),
+        width: IntegerWidth::I8,
+        domain: None,
+    };
+    let program = program_with_column(
+        declared_column,
+        vec![],
+        vec![
+            Effect::Insert {
+                table: table("t"),
+                key: Expr::Literal(Value::Integer(1)),
+                columns: columns_of([("c", Expr::Literal(Value::Integer(10)))]),
+            },
+            Effect::Insert {
+                table: table("t"),
+                key: Expr::Literal(Value::Integer(2)),
+                columns: columns_of([(
+                    "c",
+                    Expr::Arithmetic(
+                        ArithmeticOp::Add,
+                        Box::new(Expr::Literal(Value::Integer(100))),
+                        Box::new(Expr::Literal(Value::Integer(100))),
+                    ),
+                )]),
+            },
+        ],
+        Terminal::Return(Expr::Literal(Value::Integer(0))),
+    );
+    let store = Store::empty();
+
+    let execution = run(&program, &call_under_test(vec![]), &store);
+
+    assert!(matches!(
+        execution.outcome,
+        Outcome::Aborted {
+            reason: AbortReason::Overflow { .. }
+        }
+    ));
+    // The first insert succeeded locally but is discarded along with the one that overflowed.
+    assert_eq!(&execution.store, &store);
+}
+
+// --- D3: a clamping domain saturates computed and literal writes alike, across the whole
+// domain, instead of aborting (docs/concept.md §2.2) ---
+
+proptest! {
+    #[test]
+    fn computed_and_literal_writes_clamp_to_their_columns_domain_alike(
+        operand_a in -200i64..=200i64,
+        operand_b in -200i64..=200i64,
+        domain_bound_a in -128i64..=127i64,
+        domain_bound_b in -128i64..=127i64,
+        via_arithmetic in any::<bool>(),
+    ) {
+        let domain_min = domain_bound_a.min(domain_bound_b);
+        let domain_max = domain_bound_a.max(domain_bound_b);
+        let raw_value = operand_a + operand_b;
+
+        let declared_column = Column {
+            name: column("c"),
+            width: IntegerWidth::I32,
+            domain: Some(ClampDomain { min: domain_min, max: domain_max }),
+        };
+        let write_expr = if via_arithmetic {
+            Expr::Arithmetic(
+                ArithmeticOp::Add,
+                Box::new(Expr::Literal(Value::Integer(operand_a))),
+                Box::new(Expr::Literal(Value::Integer(operand_b))),
+            )
+        } else {
+            Expr::Literal(Value::Integer(raw_value))
+        };
+        let program = program_with_column(
+            declared_column,
+            vec![],
+            vec![Effect::Insert {
+                table: table("t"),
+                key: Expr::Literal(Value::Integer(1)),
+                columns: columns_of([("c", write_expr)]),
+            }],
+            Terminal::Return(Expr::Literal(Value::Integer(0))),
+        );
+        let store = Store::empty();
+
+        let execution = run(&program, &call_under_test(vec![]), &store);
+
+        let committed = matches!(execution.outcome, Outcome::Committed { .. });
+        prop_assert!(committed);
+        let row = execution
+            .store
+            .row(&table("t"), &Value::Integer(1))
+            .expect("a clamped write always commits");
+        let expected = raw_value.clamp(domain_min, domain_max);
+        prop_assert_eq!(row.columns.get(&column("c")), Some(&Value::Integer(expected)));
+    }
+}
+
+#[test]
+fn value_already_inside_the_domain_is_left_unchanged() {
+    let declared_column = Column {
+        name: column("c"),
+        width: IntegerWidth::I32,
+        domain: Some(ClampDomain { min: 0, max: 100 }),
+    };
+    let program = program_with_column(
+        declared_column,
+        vec![],
+        vec![Effect::Insert {
+            table: table("t"),
+            key: Expr::Literal(Value::Integer(1)),
+            columns: columns_of([("c", Expr::Literal(Value::Integer(42)))]),
+        }],
+        Terminal::Return(Expr::Literal(Value::Integer(0))),
+    );
+    let store = Store::empty();
+
+    let execution = run(&program, &call_under_test(vec![]), &store);
+
+    assert!(matches!(execution.outcome, Outcome::Committed { .. }));
+    let row = execution
+        .store
+        .row(&table("t"), &Value::Integer(1))
+        .expect("row committed");
+    assert_eq!(row.columns.get(&column("c")), Some(&Value::Integer(42)));
+}
+
+// --- D1: a column the schema does not declare carries no width or domain, so a write to it
+// resolves exactly as it always has (docs/concept.md §2.2) ---
+
+#[test]
+fn write_to_a_column_the_schema_does_not_declare_is_never_clamped_or_aborted() {
+    let program = single_function_program(
+        vec![],
+        vec![Effect::Insert {
+            table: table("t"),
+            key: Expr::Literal(Value::Integer(1)),
+            columns: columns_of([("c", Expr::Literal(Value::Integer(i64::MAX)))]),
+        }],
+        Terminal::Return(Expr::Literal(Value::Integer(0))),
+    );
+    let store = Store::empty();
+
+    let execution = run(&program, &call_under_test(vec![]), &store);
+
+    assert!(matches!(execution.outcome, Outcome::Committed { .. }));
+    let row = execution
+        .store
+        .row(&table("t"), &Value::Integer(1))
+        .expect("row committed");
+    assert_eq!(
+        row.columns.get(&column("c")),
+        Some(&Value::Integer(i64::MAX))
+    );
+}
+
+// --- D1: expressions may project a column from a row an earlier read bound, and use it as an
+// arithmetic operand (docs/concept.md §2.2) ---
+
+#[test]
+fn arithmetic_can_use_a_value_projected_from_an_earlier_read() {
+    let key = Value::Integer(1);
+    let store = Store::containing([(
+        table("t"),
+        key.clone(),
+        Row {
+            columns: columns_of_values([("balance", Value::Integer(50))]),
+        },
+    )]);
+
+    let declared_column = Column {
+        name: column("balance"),
+        width: IntegerWidth::I32,
+        domain: None,
+    };
+    let program = program_with_column(
+        declared_column,
+        vec![parameter("amount")],
+        vec![
+            Effect::Read {
+                table: table("t"),
+                key: Expr::Literal(key.clone()),
+                into: Slot(0),
+            },
+            Effect::Update {
+                table: table("t"),
+                key: Expr::Literal(key.clone()),
+                columns: columns_of([(
+                    "balance",
+                    Expr::Arithmetic(
+                        ArithmeticOp::Add,
+                        Box::new(Expr::Projection {
+                            slot: Slot(0),
+                            column: column("balance"),
+                        }),
+                        Box::new(Expr::Parameter(parameter("amount"))),
+                    ),
+                )]),
+            },
+        ],
+        Terminal::Return(Expr::Literal(Value::Integer(0))),
+    );
+
+    let execution = run(&program, &call_under_test(vec![Value::Integer(25)]), &store);
+
+    assert!(matches!(execution.outcome, Outcome::Committed { .. }));
+    let row = execution
+        .store
+        .row(&table("t"), &key)
+        .expect("row still exists after the update");
+    assert_eq!(
+        row.columns.get(&column("balance")),
+        Some(&Value::Integer(75))
+    );
 }

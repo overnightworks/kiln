@@ -5,9 +5,11 @@
 //! executable interpreter of the IR to compare against
 //! (`docs/experiments.md`, "Shared dependency"). This crate is that
 //! interpreter. It covers this slice's node kinds only — key read, insert,
-//! update, delete, branch, abort and response — with read-your-writes
-//! inside a transaction; the reference meaning it implements is recorded in
-//! `docs/concept.md` §2.2, the single owner of that meaning.
+//! update, delete, branch, abort, response, and checked arithmetic over a
+//! column's declared width and optional clamping domain — with
+//! read-your-writes inside a transaction; the reference meaning it
+//! implements is recorded in `docs/concept.md` §2.2, the single owner of
+//! that meaning.
 //!
 //! The crate has no I/O: [`run`] is a pure function from a [`Program`], a
 //! [`Call`] and a [`Store`] to an [`Execution`].
@@ -24,6 +26,7 @@ pub use evaluator::{
 };
 pub use identifiers::{AbortName, ColumnName, FunctionName, ParameterName, TableName};
 pub use ir::{
-    Block, Condition, Effect, Expr, Function, Program, Row, Schema, Slot, Table, Terminal, Value,
+    ArithmeticOp, Block, ClampDomain, Column, Condition, Effect, Expr, Function, IntegerWidth,
+    Program, Row, Schema, Slot, Table, Terminal, Value,
 };
 pub use store::Store;

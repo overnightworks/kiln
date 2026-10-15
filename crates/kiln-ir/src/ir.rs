@@ -4,20 +4,16 @@
 //! function either returns or aborts — there is no "fell off the end"
 //! state to represent.
 //!
-//! This slice covers key read, insert, update, delete, branch, abort and
-//! response. Range read, dependent read, bounded iteration, constraint and
-//! arithmetic nodes (`docs/concept.md` §2.1) belong to later slices and have
-//! no types here yet.
+//! This slice covers key read, insert, update, delete, branch, abort,
+//! response, checked arithmetic and clamping domains (D3). Range read,
+//! dependent read, bounded iteration and constraint nodes (`docs/concept.md`
+//! §2.1) belong to later slices and have no types here yet.
 
 use std::collections::BTreeMap;
 
 use crate::identifiers::{AbortName, ColumnName, FunctionName, ParameterName, TableName};
 
 /// A literal value a row's column, a call's argument, or a response can hold.
-///
-/// Arithmetic and declared numeric domains (D3) are a later slice; this
-/// slice only ever compares, stores and returns values, never computes with
-/// them.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Value {
     Integer(i64),
@@ -32,21 +28,88 @@ pub struct Row {
     pub columns: BTreeMap<ColumnName, Value>,
 }
 
+/// The declared width of a column's checked-integer domain (D1). Arithmetic
+/// and literal writes targeting the column are checked against this width's
+/// representable range (D3): a declared value outside it overflows, and
+/// overflow aborts unless the column also declares a [`ClampDomain`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntegerWidth {
+    I8,
+    I16,
+    I32,
+    I64,
+}
+
+impl IntegerWidth {
+    /// The inclusive range this width can represent.
+    pub fn range(self) -> (i64, i64) {
+        match self {
+            IntegerWidth::I8 => (i8::MIN as i64, i8::MAX as i64),
+            IntegerWidth::I16 => (i16::MIN as i64, i16::MAX as i64),
+            IntegerWidth::I32 => (i32::MIN as i64, i32::MAX as i64),
+            IntegerWidth::I64 => (i64::MIN, i64::MAX),
+        }
+    }
+}
+
+/// A column's optional clamping domain (D1, D3): a computed or literal write
+/// targeting the column saturates to `[min, max]` instead of overflowing.
+///
+/// Distinct from a check constraint (a later slice): a check judges a
+/// transaction's end state and aborts on violation, where a clamp bounds
+/// every write's own value as it is made and never aborts
+/// (`docs/concept.md` §2.2, D3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClampDomain {
+    pub min: i64,
+    pub max: i64,
+}
+
+/// A table's column declaration: its name, declared integer width, and
+/// optional clamping domain (D1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Column {
+    pub name: ColumnName,
+    pub width: IntegerWidth,
+    pub domain: Option<ClampDomain>,
+}
+
 /// A table declaration: its name and the columns rows in it may carry.
 ///
-/// Column width, numeric domains, uniqueness, foreign keys and check
-/// constraints (D1's full schema shape) are later slices' work; this slice
-/// only needs a table's name and column vocabulary to exist.
+/// Uniqueness, foreign keys and check constraints (D1's full schema shape)
+/// are later slices' work; this slice only needs a table's name and its
+/// columns' integer widths and clamping domains.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Table {
     pub name: TableName,
-    pub columns: Vec<ColumnName>,
+    pub columns: Vec<Column>,
 }
 
 /// The declared tables of a [`Program`] (D1).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Schema {
     pub tables: Vec<Table>,
+}
+
+impl Schema {
+    /// The declared column `column` of `table`, or `None` if either the
+    /// table or the column is not declared.
+    ///
+    /// An undeclared column carries no declared width or domain, so a write
+    /// to it resolves exactly as it always has outside this slice's reach —
+    /// schema declaration is additive, not a precondition every table or
+    /// column must meet yet.
+    pub fn column(&self, table: &TableName, column: &ColumnName) -> Option<&Column> {
+        self.tables
+            .iter()
+            .find(|candidate| &candidate.name == table)
+            .and_then(|table| {
+                table
+                    .columns
+                    .iter()
+                    .find(|candidate| &candidate.name == column)
+            })
+    }
 }
 
 /// A position in a function's body that a later [`Condition`] or [`Expr`]
@@ -58,16 +121,27 @@ pub struct Schema {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Slot(pub u32);
 
+/// A numeric operator over two checked-integer operands (D3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArithmeticOp {
+    Add,
+    Subtract,
+}
+
 /// A value computable without touching the store: one of the call's own
-/// arguments, or a constant written into the program.
+/// arguments, a constant written into the program, a column projected from
+/// an earlier read's row, or an arithmetic operation over two such values.
 ///
-/// Projecting a column out of an earlier read's row (a limited dependent
-/// read) is not here: D1's dependent read is a later slice, and no node in
-/// this slice's set needs it.
+/// [`Expr::Projection`] is a limited dependent read: it projects a column
+/// out of a row an earlier [`Effect::Read`] already bound to a [`Slot`] in
+/// this same call, but it cannot itself choose *which* row to read next
+/// from a projected value — that full dependent read is a later slice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Literal(Value),
     Parameter(ParameterName),
+    Projection { slot: Slot, column: ColumnName },
+    Arithmetic(ArithmeticOp, Box<Expr>, Box<Expr>),
 }
 
 /// A condition a [`Terminal::Branch`] decides on.

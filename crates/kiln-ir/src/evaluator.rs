@@ -7,11 +7,14 @@
 //! on abort, it returns a fresh clone of the original instead, discarding
 //! every effect the aborted call produced (`docs/concept.md` §2.2).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::call::Call;
 use crate::identifiers::{AbortName, ColumnName, ParameterName, TableName};
-use crate::ir::{Block, Condition, Effect, Expr, Program, Row, Slot, Terminal, Value};
+use crate::ir::{
+    ArithmeticOp, Block, ClampDomain, Column, Condition, Effect, Expr, IntegerWidth, Program, Row,
+    Schema, Slot, Terminal, Value,
+};
 use crate::store::Store;
 
 /// What a committed or aborted call produced.
@@ -23,14 +26,28 @@ pub enum Outcome {
 
 /// Why a call aborted.
 ///
-/// `MissingRow` and `DuplicateKey` are the evaluator's own structural rules
-/// for update/delete and insert (`docs/concept.md` §2.2); `Declared` is a
-/// transaction body's own explicit, named rejection.
+/// `MissingRow`, `DuplicateKey` and `Overflow` are the evaluator's own
+/// structural rules for update/delete, insert and checked arithmetic
+/// (`docs/concept.md` §2.2, D3); `Declared` is a transaction body's own
+/// explicit, named rejection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AbortReason {
     Declared(AbortName),
-    MissingRow { table: TableName, key: Value },
-    DuplicateKey { table: TableName, key: Value },
+    MissingRow {
+        table: TableName,
+        key: Value,
+    },
+    DuplicateKey {
+        table: TableName,
+        key: Value,
+    },
+    /// A write's value fell outside `column`'s declared width, and `column`
+    /// declares no clamping domain to saturate into instead (D3).
+    Overflow {
+        table: TableName,
+        column: ColumnName,
+        key: Value,
+    },
 }
 
 /// Which columns an access touched: every column of the row, or exactly the
@@ -88,6 +105,7 @@ pub fn run(program: &Program, call: &Call, store: &Store) -> Execution {
 
     let outcome = execute_block(
         &function.body,
+        &program.schema,
         &function.parameters,
         &call.args,
         &mut working_store,
@@ -111,6 +129,7 @@ pub fn run(program: &Program, call: &Call, store: &Store) -> Execution {
 /// as soon as an effect aborts, before any later effect runs.
 fn execute_block(
     block: &Block,
+    schema: &Schema,
     parameters: &[ParameterName],
     args: &[Value],
     store: &mut Store,
@@ -118,17 +137,28 @@ fn execute_block(
     access_log: &mut Vec<AccessLogEntry>,
 ) -> Outcome {
     for effect in &block.effects {
-        if let Some(outcome) = apply_effect(effect, parameters, args, store, reads, access_log) {
+        if let Some(outcome) =
+            apply_effect(effect, schema, parameters, args, store, reads, access_log)
+        {
             return outcome;
         }
     }
-    execute_terminal(&block.terminal, parameters, args, store, reads, access_log)
+    execute_terminal(
+        &block.terminal,
+        schema,
+        parameters,
+        args,
+        store,
+        reads,
+        access_log,
+    )
 }
 
 /// Applies one effect. Returns `Some(outcome)` if the effect itself aborted
 /// the call, `None` if execution should continue with the next effect.
 fn apply_effect(
     effect: &Effect,
+    schema: &Schema,
     parameters: &[ParameterName],
     args: &[Value],
     store: &mut Store,
@@ -137,7 +167,7 @@ fn apply_effect(
 ) -> Option<Outcome> {
     match effect {
         Effect::Read { table, key, into } => {
-            let key = resolve(key, parameters, args);
+            let key = resolve(key, parameters, args, reads);
             let row = store.row(table, &key).cloned();
             access_log.push(AccessLogEntry {
                 table: table.clone(),
@@ -153,7 +183,7 @@ fn apply_effect(
             key,
             columns,
         } => {
-            let key = resolve(key, parameters, args);
+            let key = resolve(key, parameters, args, reads);
             access_log.push(AccessLogEntry {
                 table: table.clone(),
                 kind: AccessKind::Insert,
@@ -168,11 +198,26 @@ fn apply_effect(
                     },
                 });
             }
+            let mut resolved_columns = BTreeMap::new();
+            for (column, expr) in columns {
+                let declared = schema.column(table, column);
+                match resolve_for_write(expr, parameters, args, reads, declared) {
+                    Ok(value) => {
+                        resolved_columns.insert(column.clone(), value);
+                    }
+                    Err(Overflow) => {
+                        return Some(Outcome::Aborted {
+                            reason: AbortReason::Overflow {
+                                table: table.clone(),
+                                column: column.clone(),
+                                key,
+                            },
+                        });
+                    }
+                }
+            }
             let row = Row {
-                columns: columns
-                    .iter()
-                    .map(|(column, expr)| (column.clone(), resolve(expr, parameters, args)))
-                    .collect(),
+                columns: resolved_columns,
             };
             store.put_row(table.clone(), key, row);
             None
@@ -182,7 +227,7 @@ fn apply_effect(
             key,
             columns,
         } => {
-            let key = resolve(key, parameters, args);
+            let key = resolve(key, parameters, args, reads);
             access_log.push(AccessLogEntry {
                 table: table.clone(),
                 kind: AccessKind::Update,
@@ -198,14 +243,27 @@ fn apply_effect(
                 });
             };
             for (column, expr) in columns {
-                row.columns
-                    .insert(column.clone(), resolve(expr, parameters, args));
+                let declared = schema.column(table, column);
+                match resolve_for_write(expr, parameters, args, reads, declared) {
+                    Ok(value) => {
+                        row.columns.insert(column.clone(), value);
+                    }
+                    Err(Overflow) => {
+                        return Some(Outcome::Aborted {
+                            reason: AbortReason::Overflow {
+                                table: table.clone(),
+                                column: column.clone(),
+                                key,
+                            },
+                        });
+                    }
+                }
             }
             store.put_row(table.clone(), key, row);
             None
         }
         Effect::Delete { table, key } => {
-            let key = resolve(key, parameters, args);
+            let key = resolve(key, parameters, args, reads);
             access_log.push(AccessLogEntry {
                 table: table.clone(),
                 kind: AccessKind::Delete,
@@ -231,6 +289,7 @@ fn apply_effect(
 /// a row.
 fn execute_terminal(
     terminal: &Terminal,
+    schema: &Schema,
     parameters: &[ParameterName],
     args: &[Value],
     store: &mut Store,
@@ -239,7 +298,7 @@ fn execute_terminal(
 ) -> Outcome {
     match terminal {
         Terminal::Return(expr) => Outcome::Committed {
-            response: resolve(expr, parameters, args),
+            response: resolve(expr, parameters, args, reads),
         },
         Terminal::Abort(name) => Outcome::Aborted {
             reason: AbortReason::Declared(name.clone()),
@@ -258,14 +317,27 @@ fn execute_terminal(
                     .is_some(),
             };
             let block = if present { when_present } else { when_absent };
-            execute_block(block, parameters, args, store, reads, access_log)
+            execute_block(block, schema, parameters, args, store, reads, access_log)
         }
     }
 }
 
-/// Resolves an expression to a concrete value: a constant, or the argument
-/// bound to a declared parameter.
-fn resolve(expr: &Expr, parameters: &[ParameterName], args: &[Value]) -> Value {
+/// Resolves an expression to a concrete value: a constant, the argument
+/// bound to a declared parameter, a column projected from an earlier read's
+/// row, or an arithmetic operation over two such values.
+///
+/// Arithmetic here runs over plain `i64` and panics on overflow: a write's
+/// own overflow-or-clamp decision against its target column's declared
+/// width (D3) is [`resolve_for_write`]'s job, not this general resolver's —
+/// an expression that overflows before ever reaching a column write is a
+/// contract violation by whatever built it, the same class of trusted-input
+/// assumption as an unbound parameter or slot elsewhere in this module.
+fn resolve(
+    expr: &Expr,
+    parameters: &[ParameterName],
+    args: &[Value],
+    reads: &HashMap<Slot, Option<Row>>,
+) -> Value {
     match expr {
         Expr::Literal(value) => value.clone(),
         Expr::Parameter(name) => {
@@ -275,5 +347,123 @@ fn resolve(expr: &Expr, parameters: &[ParameterName], args: &[Value]) -> Value {
                 .unwrap_or_else(|| panic!("function has no declared parameter named {name:?}"));
             args[index].clone()
         }
+        Expr::Projection { slot, column } => reads
+            .get(slot)
+            .unwrap_or_else(|| panic!("projection reads slot {slot:?} before any read bound it"))
+            .as_ref()
+            .unwrap_or_else(|| {
+                panic!("projection reads column {column:?} from slot {slot:?}, whose read found no row")
+            })
+            .columns
+            .get(column)
+            .unwrap_or_else(|| panic!("row bound to slot {slot:?} has no column named {column:?}"))
+            .clone(),
+        Expr::Arithmetic(op, lhs, rhs) => {
+            let lhs = as_integer(resolve(lhs, parameters, args, reads));
+            let rhs = as_integer(resolve(rhs, parameters, args, reads));
+            let result = checked_apply(*op, lhs, rhs).unwrap_or_else(|| {
+                panic!(
+                    "arithmetic {op:?}({lhs}, {rhs}) overflowed i64 outside any column write — \
+                     only a write's target column may absorb overflow (D3)"
+                )
+            });
+            Value::Integer(result)
+        }
     }
+}
+
+/// A write's value fell outside its target column's declared width, with no
+/// clamping domain to saturate into instead (D3).
+struct Overflow;
+
+/// Resolves `expr` for a write into a column declared as `declared_column`,
+/// applying D3's overflow-or-clamp decision when the schema declares that
+/// column.
+///
+/// An undeclared column (`declared_column` is `None`) carries no width or
+/// domain, so its write resolves exactly as [`resolve`] would on its own —
+/// the behavior this evaluator has always had outside this slice's reach.
+fn resolve_for_write(
+    expr: &Expr,
+    parameters: &[ParameterName],
+    args: &[Value],
+    reads: &HashMap<Slot, Option<Row>>,
+    declared_column: Option<&Column>,
+) -> Result<Value, Overflow> {
+    let Some(column) = declared_column else {
+        return Ok(resolve(expr, parameters, args, reads));
+    };
+
+    let raw = match expr {
+        Expr::Arithmetic(op, lhs, rhs) => {
+            let lhs = as_integer(resolve(lhs, parameters, args, reads));
+            let rhs = as_integer(resolve(rhs, parameters, args, reads));
+            match column.domain {
+                Some(domain) => clamp_to_domain(saturating_apply(*op, lhs, rhs), domain),
+                None => {
+                    let sum = checked_apply(*op, lhs, rhs).ok_or(Overflow)?;
+                    check_width(sum, column.width)?
+                }
+            }
+        }
+        _ => {
+            let value = as_integer(resolve(expr, parameters, args, reads));
+            match column.domain {
+                Some(domain) => clamp_to_domain(value, domain),
+                None => check_width(value, column.width)?,
+            }
+        }
+    };
+
+    Ok(Value::Integer(raw))
+}
+
+/// Extracts the integer an arithmetic operand must resolve to.
+///
+/// Panics on a text value: D3's arithmetic runs only over checked integers,
+/// so a non-integer operand is a contract violation by whatever built the
+/// expression, not a semantic outcome this evaluator reports.
+fn as_integer(value: Value) -> i64 {
+    match value {
+        Value::Integer(value) => value,
+        Value::Text(text) => {
+            panic!("arithmetic operand resolved to the non-integer value {text:?} (D3)")
+        }
+    }
+}
+
+/// `lhs op rhs`, checked at `i64`'s own width: `None` on true `i64` overflow.
+fn checked_apply(op: ArithmeticOp, lhs: i64, rhs: i64) -> Option<i64> {
+    match op {
+        ArithmeticOp::Add => lhs.checked_add(rhs),
+        ArithmeticOp::Subtract => lhs.checked_sub(rhs),
+    }
+}
+
+/// `lhs op rhs`, saturating at `i64`'s own width — used only when a
+/// clamping domain will immediately narrow the result further, so an
+/// `i64`-level overflow still saturates toward the domain bound its
+/// direction implies.
+fn saturating_apply(op: ArithmeticOp, lhs: i64, rhs: i64) -> i64 {
+    match op {
+        ArithmeticOp::Add => lhs.saturating_add(rhs),
+        ArithmeticOp::Subtract => lhs.saturating_sub(rhs),
+    }
+}
+
+/// `value` if it lies within `width`'s representable range, `Err(Overflow)`
+/// otherwise (D3).
+fn check_width(value: i64, width: IntegerWidth) -> Result<i64, Overflow> {
+    let (min, max) = width.range();
+    if (min..=max).contains(&value) {
+        Ok(value)
+    } else {
+        Err(Overflow)
+    }
+}
+
+/// Saturates `value` into `domain`'s inclusive bound (D3): a value already
+/// inside the domain is left unchanged.
+fn clamp_to_domain(value: i64, domain: ClampDomain) -> i64 {
+    value.clamp(domain.min, domain.max)
 }
