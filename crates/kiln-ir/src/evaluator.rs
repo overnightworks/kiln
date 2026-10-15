@@ -13,7 +13,7 @@ use crate::call::Call;
 use crate::identifiers::{AbortName, ColumnName, ParameterName, TableName};
 use crate::ir::{
     ArithmeticOp, Block, ClampDomain, Column, Condition, Effect, Expr, Function, IntegerWidth,
-    Parameter, Program, Row, Schema, SchemaError, Slot, Terminal, Value,
+    Parameter, ParameterType, Program, Row, Schema, SchemaError, Slot, Terminal, Value,
 };
 use crate::store::Store;
 
@@ -29,7 +29,12 @@ pub enum Outcome {
 /// `MissingRow`, `DuplicateKey`, `Overflow` and `BoundExceeded` are the
 /// evaluator's own structural rules for update/delete, insert, checked
 /// arithmetic and bounded range iteration (`docs/concept.md` §2.2, D3, D6);
-/// `Declared` is a transaction body's own explicit, named rejection.
+/// `Declared` is a transaction body's own explicit, named rejection. The
+/// remaining variants are every other way a compiled program's own
+/// expressions can fail to resolve against the data a call actually ran
+/// against — never a panic, since whether an argument, a range bound, or a
+/// projection resolves is a fact about that data, not something `run` can
+/// rule out ahead of time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AbortReason {
     Declared(AbortName),
@@ -49,6 +54,35 @@ pub enum AbortReason {
         table: TableName,
         bound: i64,
         matched: usize,
+    },
+    /// A range read on `table` resolved its `bound` expression to a value
+    /// that was not an integer — a bound counts rows, so only an integer
+    /// can satisfy it (§2.1, "never an open-ended loop").
+    NonIntegerBound {
+        table: TableName,
+    },
+    /// The argument bound to `parameter` is not the kind its declared
+    /// [`ParameterType`] requires (an integer where text was declared, or
+    /// text where an integer was declared).
+    ArgumentTypeMismatch {
+        parameter: ParameterName,
+    },
+    /// The call supplied no argument at the position `parameter` declares.
+    MissingArgument {
+        parameter: ParameterName,
+    },
+    /// A projection has no single current row to read from: the slot it
+    /// names was bound by a point read that found no row, or by a range
+    /// read, whose slot never holds one current row on its own (a range's
+    /// current row is only available inside an [`Effect::Iterate`] body).
+    ProjectionSourceAbsent {
+        slot: Slot,
+    },
+    /// A projection named `column`, but the row bound to `slot` carries no
+    /// column by that name.
+    MissingColumn {
+        slot: Slot,
+        column: ColumnName,
     },
 }
 
@@ -175,7 +209,7 @@ pub fn run(program: &Program, call: &Call, store: &Store) -> Result<Execution, S
         args: &call.args,
     };
 
-    if let Some(reason) = check_argument_widths(function, &call.args) {
+    if let Some(reason) = check_argument_types(function, &call.args) {
         return Ok(Execution {
             store: store.clone(),
             outcome: Outcome::Aborted { reason },
@@ -207,26 +241,38 @@ pub fn run(program: &Program, call: &Call, store: &Store) -> Result<Execution, S
     })
 }
 
-/// Checks every argument in `args` against the declared width of the
+/// Checks every argument in `args` against the declared type of the
 /// parameter at the same position, exactly as a write checks its value
 /// against its target column's declared width (D3, `docs/concept.md` §2.2:
 /// "the column's or argument's declared width"). Returns the typed abort
-/// reason for the first argument that does not fit, or `None` once every
+/// reason for the first argument that does not match, or `None` once every
 /// argument has been checked.
 ///
-/// A parameter with no declared width ([`Parameter::width`] is `None`)
-/// resolves unchecked, exactly as an undeclared column's write does. A
-/// parameter declares no clamping domain, so an out-of-width argument
-/// always aborts — unlike a column, which may clamp instead.
-fn check_argument_widths(function: &Function, args: &[Value]) -> Option<AbortReason> {
+/// A parameter declares no clamping domain, so an out-of-width or
+/// wrong-kind argument always aborts — unlike a column, which may clamp an
+/// out-of-width write instead.
+///
+/// An `args` shorter than `function.parameters` is not checked here: `zip`
+/// simply stops at the shorter side, and a later position's own
+/// [`Expr::Parameter`] reference reports the typed
+/// [`AbortReason::MissingArgument`] once the body actually resolves it.
+fn check_argument_types(function: &Function, args: &[Value]) -> Option<AbortReason> {
     for (parameter, arg) in function.parameters.iter().zip(args) {
-        let Some(width) = parameter.width else {
-            continue;
-        };
-        if check_width(as_integer(arg.clone()), width).is_err() {
-            return Some(AbortReason::Overflow(OverflowReason::Argument {
-                parameter: parameter.name.clone(),
-            }));
+        match (parameter.kind, arg) {
+            (ParameterType::Integer(width), Value::Integer(value)) => {
+                if check_width(*value, width).is_err() {
+                    return Some(AbortReason::Overflow(OverflowReason::Argument {
+                        parameter: parameter.name.clone(),
+                    }));
+                }
+            }
+            (ParameterType::Text, Value::Text(_)) => {}
+            (ParameterType::Integer(_), Value::Text(_))
+            | (ParameterType::Text, Value::Integer(_)) => {
+                return Some(AbortReason::ArgumentTypeMismatch {
+                    parameter: parameter.name.clone(),
+                });
+            }
         }
     }
     None
@@ -293,21 +339,23 @@ fn apply_effect(
             bindings,
             access_log,
         ),
+        Effect::Iterate { source, row, body } => {
+            apply_iterate(*source, *row, body, ctx, store, bindings, access_log)
+        }
     }
 }
 
-/// Resolves an effect's expression, turning an `i64`-overflow failure into
+/// Resolves an effect's expression, turning any failure to resolve it into
 /// the aborted [`Outcome`] every `apply_*` function below returns on error —
-/// shared so every effect kind reports its own arithmetic overflow the same
-/// way (D3), whether the expression is a key or a range's start, end, or
-/// bound.
+/// shared so every effect kind reports a failed key, a range's start, end,
+/// or bound, or any other expression the same way.
 fn resolve_or_abort(
     expr: &Expr,
     ctx: &CallContext,
     bindings: &HashMap<Slot, Binding>,
 ) -> Result<Value, Outcome> {
-    resolve(expr, ctx, bindings).map_err(|reason| Outcome::Aborted {
-        reason: AbortReason::Overflow(reason),
+    resolve(expr, ctx, bindings).map_err(|error| Outcome::Aborted {
+        reason: error.into(),
     })
 }
 
@@ -373,7 +421,14 @@ fn apply_read_range(
         Err(outcome) => return Some(outcome),
     };
     let bound = match resolve_or_abort(range.bound, ctx, bindings) {
-        Ok(bound) => as_integer(bound),
+        Ok(Value::Integer(bound)) => bound,
+        Ok(Value::Text(_)) => {
+            return Some(Outcome::Aborted {
+                reason: AbortReason::NonIntegerBound {
+                    table: range.table.clone(),
+                },
+            });
+        }
         Err(outcome) => return Some(outcome),
     };
     access_log.push(AccessLogEntry {
@@ -396,6 +451,44 @@ fn apply_read_range(
         });
     }
     bindings.insert(range.into, Binding::Range(rows));
+    None
+}
+
+/// Runs `body` once for each row `source` bound, in key order, binding the
+/// current row to `row` so the body's own effects and expressions can use
+/// it (`Effect::Iterate`, `docs/concept.md` §2.1 "bounded iteration", §2.2
+/// D6: "bounded iteration proceeds in key order").
+///
+/// `source` must already be bound by an [`Effect::ReadRange`] in the same
+/// body: that read already resolved and bound-checked its range, so
+/// `Iterate` re-reads nothing and checks no bound of its own. Panics if
+/// `source` is unbound or was bound by a point read instead — a contract
+/// violation by whatever built the effect, not a semantic outcome `run`
+/// reports.
+fn apply_iterate(
+    source: Slot,
+    row: Slot,
+    body: &[Effect],
+    ctx: &CallContext,
+    store: &mut Store,
+    bindings: &mut HashMap<Slot, Binding>,
+    access_log: &mut Vec<AccessLogEntry>,
+) -> Option<Outcome> {
+    let rows = match bindings.get(&source) {
+        Some(Binding::Range(rows)) => rows.clone(),
+        Some(Binding::Row(_)) => {
+            panic!("iteration reads slot {source:?} as its range, but a point read bound it")
+        }
+        None => panic!("iteration reads slot {source:?} before any range read bound it"),
+    };
+    for current in rows {
+        bindings.insert(row, Binding::Row(Some(current)));
+        for effect in body {
+            if let Some(outcome) = apply_effect(effect, ctx, store, bindings, access_log) {
+                return Some(outcome);
+            }
+        }
+    }
     None
 }
 
@@ -532,8 +625,8 @@ fn resolve_write_columns(
         let declared = ctx.schema.column(table, column);
         let value =
             resolve_for_write(expr, ctx, bindings, declared).map_err(|error| match error {
-                WriteOverflow::Arithmetic => Outcome::Aborted {
-                    reason: AbortReason::Overflow(OverflowReason::Arithmetic),
+                WriteOverflow::Resolve(error) => Outcome::Aborted {
+                    reason: error.into(),
                 },
                 WriteOverflow::Width => Outcome::Aborted {
                     reason: AbortReason::Overflow(OverflowReason::Width {
@@ -561,8 +654,8 @@ fn execute_terminal(
     match terminal {
         Terminal::Return(expr) => match resolve(expr, ctx, bindings) {
             Ok(response) => Outcome::Committed { response },
-            Err(reason) => Outcome::Aborted {
-                reason: AbortReason::Overflow(reason),
+            Err(error) => Outcome::Aborted {
+                reason: error.into(),
             },
         },
         Terminal::Abort(name) => Outcome::Aborted {
@@ -587,21 +680,57 @@ fn execute_terminal(
     }
 }
 
+/// Why [`resolve`] could not produce a value for an expression: `i64`
+/// arithmetic overflowed before any column or argument was reached (D3), or
+/// a parameter or projection expression could not find the value it names
+/// in the data this call actually ran against. Every variant maps to a
+/// typed [`AbortReason`] through [`resolve_or_abort`] or
+/// [`resolve_for_write`]'s own caller — never a panic, since each is a fact
+/// about that data, not a malformed expression.
+enum ResolveError {
+    Overflow(OverflowReason),
+    MissingArgument { parameter: ParameterName },
+    ProjectionSourceAbsent { slot: Slot },
+    MissingColumn { slot: Slot, column: ColumnName },
+}
+
+impl From<ResolveError> for AbortReason {
+    fn from(error: ResolveError) -> Self {
+        match error {
+            ResolveError::Overflow(reason) => AbortReason::Overflow(reason),
+            ResolveError::MissingArgument { parameter } => {
+                AbortReason::MissingArgument { parameter }
+            }
+            ResolveError::ProjectionSourceAbsent { slot } => {
+                AbortReason::ProjectionSourceAbsent { slot }
+            }
+            ResolveError::MissingColumn { slot, column } => {
+                AbortReason::MissingColumn { slot, column }
+            }
+        }
+    }
+}
+
 /// Resolves an expression to a concrete value: a constant, the argument
 /// bound to a declared parameter, a column projected from an earlier read's
 /// row, or an arithmetic operation over two such values.
 ///
 /// Arithmetic here is checked at `i64`'s own width and returns
-/// [`OverflowReason::Arithmetic`] if it overflows — true outside any column
+/// [`ResolveError::Overflow`] if it overflows — true outside any column
 /// write (a response, a key expression) and inside a nested sub-expression
 /// alike, so every intermediate step of a write's own expression is checked
 /// the same way before [`resolve_for_write`] ever judges the expression's
 /// one final value against its target column (D3).
+///
+/// Panics if `expr` refers to a parameter `ctx.parameters` does not
+/// declare, or a [`Slot`] no read in scope has bound — a contract violation
+/// by whatever built the expression, not a semantic outcome this evaluator
+/// reports.
 fn resolve(
     expr: &Expr,
     ctx: &CallContext,
     bindings: &HashMap<Slot, Binding>,
-) -> Result<Value, OverflowReason> {
+) -> Result<Value, ResolveError> {
     match expr {
         Expr::Literal(value) => Ok(value.clone()),
         Expr::Parameter(name) => {
@@ -610,50 +739,52 @@ fn resolve(
                 .iter()
                 .position(|parameter| &parameter.name == name)
                 .unwrap_or_else(|| panic!("function has no declared parameter named {name:?}"));
-            Ok(ctx.args[index].clone())
+            ctx.args
+                .get(index)
+                .cloned()
+                .ok_or_else(|| ResolveError::MissingArgument {
+                    parameter: name.clone(),
+                })
         }
         Expr::Projection { slot, column } => {
             let binding = bindings.get(slot).unwrap_or_else(|| {
                 panic!("projection reads slot {slot:?} before any read bound it")
             });
             let row = match binding {
-                Binding::Row(row) => row.as_ref().unwrap_or_else(|| {
-                    panic!(
-                        "projection reads column {column:?} from slot {slot:?}, whose read found no row"
-                    )
-                }),
-                Binding::Range(_) => panic!(
-                    "projection reads column {column:?} from slot {slot:?}, which a range read bound to a sequence of rows, not one row"
-                ),
+                Binding::Row(Some(row)) => row,
+                Binding::Row(None) | Binding::Range(_) => {
+                    return Err(ResolveError::ProjectionSourceAbsent { slot: *slot });
+                }
             };
-            Ok(row
-                .columns
+            row.columns
                 .get(column)
-                .unwrap_or_else(|| {
-                    panic!("row bound to slot {slot:?} has no column named {column:?}")
+                .cloned()
+                .ok_or_else(|| ResolveError::MissingColumn {
+                    slot: *slot,
+                    column: column.clone(),
                 })
-                .clone())
         }
         Expr::Arithmetic(op, lhs, rhs) => {
             let lhs = as_integer(resolve(lhs, ctx, bindings)?);
             let rhs = as_integer(resolve(rhs, ctx, bindings)?);
-            let result = checked_apply(*op, lhs, rhs).ok_or(OverflowReason::Arithmetic)?;
+            let result = checked_apply(*op, lhs, rhs)
+                .ok_or(ResolveError::Overflow(OverflowReason::Arithmetic))?;
             Ok(Value::Integer(result))
         }
     }
 }
 
 /// Why [`resolve_for_write`] could not produce a value for its target
-/// column: `i64` arithmetic overflowed before the column was ever reached,
-/// or the expression's final value fell outside the column's declared
-/// width with no clamping domain to saturate into instead (D3).
+/// column: [`resolve`] itself failed before the column was ever reached, or
+/// the expression's final value fell outside the column's declared width
+/// with no clamping domain to saturate into instead (D3).
 ///
 /// [`apply_effect`] is the only caller, and it already knows which table,
 /// column and key the write targeted — this type carries just enough to
-/// tell its two D3 outcomes apart, leaving that context to the caller that
-/// already has it.
+/// tell its D3 width outcome apart from every other resolution failure,
+/// leaving that context to the caller that already has it.
 enum WriteOverflow {
-    Arithmetic,
+    Resolve(ResolveError),
     Width,
 }
 
@@ -672,7 +803,7 @@ fn resolve_for_write(
     bindings: &HashMap<Slot, Binding>,
     declared_column: Option<&Column>,
 ) -> Result<Value, WriteOverflow> {
-    let value = resolve(expr, ctx, bindings).map_err(|_| WriteOverflow::Arithmetic)?;
+    let value = resolve(expr, ctx, bindings).map_err(WriteOverflow::Resolve)?;
     let Some(column) = declared_column else {
         return Ok(value);
     };

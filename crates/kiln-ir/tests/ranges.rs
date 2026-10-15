@@ -18,7 +18,7 @@ use kiln_ir::{
 use proptest::prelude::*;
 use support::{
     call_under_test, column, columns_of_values, committed_response, parameter, run_ok,
-    single_function_program, table, typed_parameter, untyped_parameter,
+    single_function_program, table, text_parameter, typed_parameter,
 };
 
 fn branch_on_slot_zero_present() -> Terminal {
@@ -262,19 +262,245 @@ fn argument_inside_its_parameters_declared_width_commits() {
 }
 
 #[test]
-fn a_parameter_with_no_declared_width_never_aborts_on_its_argument() {
+fn a_text_argument_matching_its_parameters_declared_type_commits() {
     let program = single_function_program(
-        vec![untyped_parameter("amount")],
+        vec![text_parameter("name")],
         vec![],
-        Terminal::Return(Expr::Parameter(parameter("amount"))),
+        Terminal::Return(Expr::Parameter(parameter("name"))),
     );
     let store = Store::empty();
 
     let execution = run_ok(
         &program,
-        &call_under_test(vec![Value::Integer(i64::MAX)]),
+        &call_under_test(vec![Value::Text("alice".to_owned())]),
         &store,
     );
 
-    assert_eq!(committed_response(&execution), &Value::Integer(i64::MAX));
+    assert_eq!(
+        committed_response(&execution),
+        &Value::Text("alice".to_owned())
+    );
+}
+
+// --- every parameter declares a mandatory type (Integer(width) or Text); an argument of the
+// other kind aborts with a typed mismatch instead of resolving unchecked or panicking
+// (docs/concept.md §2.2, D3) ---
+
+#[test]
+fn a_text_argument_against_an_integer_parameter_aborts_with_a_typed_mismatch() {
+    let program = single_function_program(
+        vec![typed_parameter("amount", IntegerWidth::I8)],
+        vec![],
+        Terminal::Return(Expr::Literal(Value::Integer(0))),
+    );
+    let store = Store::empty();
+
+    let execution = run_ok(
+        &program,
+        &call_under_test(vec![Value::Text("x".to_owned())]),
+        &store,
+    );
+
+    assert_eq!(
+        execution.outcome,
+        Outcome::Aborted {
+            reason: AbortReason::ArgumentTypeMismatch {
+                parameter: parameter("amount"),
+            },
+        }
+    );
+    assert!(execution.access_log.is_empty());
+    assert_eq!(&execution.store, &store);
+}
+
+#[test]
+fn an_integer_argument_against_a_text_parameter_aborts_with_a_typed_mismatch() {
+    let program = single_function_program(
+        vec![text_parameter("name")],
+        vec![],
+        Terminal::Return(Expr::Literal(Value::Integer(0))),
+    );
+    let store = Store::empty();
+
+    let execution = run_ok(&program, &call_under_test(vec![Value::Integer(1)]), &store);
+
+    assert_eq!(
+        execution.outcome,
+        Outcome::Aborted {
+            reason: AbortReason::ArgumentTypeMismatch {
+                parameter: parameter("name"),
+            },
+        }
+    );
+}
+
+// --- a range read's bound expression must resolve to an integer — it counts rows — and a
+// non-integer bound aborts with a typed reason instead of panicking (finding 3) ---
+
+#[test]
+fn range_read_bound_resolving_to_a_non_integer_value_aborts_with_a_typed_reason() {
+    let program = single_function_program(
+        vec![],
+        vec![Effect::ReadRange {
+            table: table("t"),
+            start: Expr::Literal(Value::Integer(0)),
+            end: Expr::Literal(Value::Integer(10)),
+            bound: Expr::Literal(Value::Text("not a number".to_owned())),
+            into: Slot(0),
+        }],
+        Terminal::Return(Expr::Literal(Value::Integer(0))),
+    );
+    let store = Store::empty();
+
+    let execution = run_ok(&program, &call_under_test(vec![]), &store);
+
+    assert_eq!(
+        execution.outcome,
+        Outcome::Aborted {
+            reason: AbortReason::NonIntegerBound { table: table("t") },
+        }
+    );
+    assert_eq!(&execution.store, &store);
+}
+
+// --- projecting a column from a slot a range read bound has no single current row to read from,
+// outside any iteration over it; this is a typed abort, not a panic (finding 1) ---
+
+#[test]
+fn projecting_from_a_range_bound_slot_outside_iteration_aborts_with_a_typed_reason() {
+    let store = Store::containing([(table("t"), Value::Integer(5), Row::default())]);
+    let program = single_function_program(
+        vec![],
+        vec![Effect::ReadRange {
+            table: table("t"),
+            start: Expr::Literal(Value::Integer(0)),
+            end: Expr::Literal(Value::Integer(10)),
+            bound: Expr::Literal(Value::Integer(10)),
+            into: Slot(0),
+        }],
+        Terminal::Return(Expr::Projection {
+            slot: Slot(0),
+            column: column("c"),
+        }),
+    );
+
+    let execution = run_ok(&program, &call_under_test(vec![]), &store);
+
+    assert_eq!(
+        execution.outcome,
+        Outcome::Aborted {
+            reason: AbortReason::ProjectionSourceAbsent { slot: Slot(0) },
+        }
+    );
+    assert_eq!(&execution.store, &store);
+}
+
+// --- bounded iteration runs its body once per row a range read matched, in key order, with the
+// current row bound to a slot so the body's own dependent reads and writes can use it
+// (docs/concept.md §2.1 "bounded iteration", §2.2 D6: "bounded iteration proceeds in key order")
+// ---
+
+#[test]
+fn bounded_iteration_runs_its_body_once_per_row_in_key_order_with_dependent_reads_and_writes() {
+    let orders = [(1, 10), (2, 20), (3, 30)]; // (order id, customer id)
+    let store = Store::containing(
+        orders
+            .into_iter()
+            .map(|(id, customer)| {
+                (
+                    table("orders"),
+                    Value::Integer(id),
+                    Row {
+                        columns: columns_of_values([
+                            ("id", Value::Integer(id)),
+                            ("customer", Value::Integer(customer)),
+                        ]),
+                    },
+                )
+            })
+            .chain(orders.into_iter().map(|(_, customer)| {
+                (table("customers"), Value::Integer(customer), Row::default())
+            })),
+    );
+
+    let program = single_function_program(
+        vec![],
+        vec![
+            Effect::ReadRange {
+                table: table("orders"),
+                start: Expr::Literal(Value::Integer(1)),
+                end: Expr::Literal(Value::Integer(3)),
+                bound: Expr::Literal(Value::Integer(10)),
+                into: Slot(0),
+            },
+            Effect::Iterate {
+                source: Slot(0),
+                row: Slot(1),
+                body: vec![
+                    Effect::Read {
+                        table: table("customers"),
+                        key: Expr::Projection {
+                            slot: Slot(1),
+                            column: column("customer"),
+                        },
+                        into: Slot(2),
+                    },
+                    Effect::Insert {
+                        table: table("visited"),
+                        key: Expr::Projection {
+                            slot: Slot(1),
+                            column: column("id"),
+                        },
+                        columns: BTreeMap::new(),
+                    },
+                ],
+            },
+        ],
+        Terminal::Return(Expr::Literal(Value::Integer(0))),
+    );
+
+    let execution = run_ok(&program, &call_under_test(vec![]), &store);
+
+    assert!(matches!(execution.outcome, Outcome::Committed { .. }));
+
+    // Every matched order was visited exactly once: a "visited" row now exists for each.
+    for (id, _) in orders {
+        assert!(
+            execution
+                .store
+                .row(&table("visited"), &Value::Integer(id))
+                .is_some(),
+            "order {id} was not visited"
+        );
+    }
+
+    // The dependent read on "customers" and the insert into "visited" each ran once per row, in
+    // key order — the same order `rows_in_range` returns its matches in.
+    let point_reads_on_customers: Vec<Value> = execution
+        .access_log
+        .iter()
+        .filter(|entry| entry.table == table("customers") && entry.kind == AccessKind::PointRead)
+        .map(|entry| match &entry.target {
+            AccessTarget::Point(key) => key.clone(),
+            other => panic!("expected a point read target, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        point_reads_on_customers,
+        vec![Value::Integer(10), Value::Integer(20), Value::Integer(30)]
+    );
+
+    let visited_inserts: Vec<Value> = execution
+        .access_log
+        .iter()
+        .filter(|entry| entry.table == table("visited") && entry.kind == AccessKind::Insert)
+        .map(|entry| match &entry.target {
+            AccessTarget::Point(key) => key.clone(),
+            other => panic!("expected a point read target, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        visited_inserts,
+        vec![Value::Integer(1), Value::Integer(2), Value::Integer(3)]
+    );
 }

@@ -16,7 +16,8 @@ use std::collections::BTreeMap;
 
 use kiln_ir::{
     run, Call, Column, ColumnName, Effect, Execution, Expr, Function, FunctionName, IntegerWidth,
-    Parameter, ParameterName, Program, Row, Schema, Store, Table, TableName, Terminal, Value,
+    Parameter, ParameterName, ParameterType, Program, Row, Schema, Store, Table, TableName,
+    Terminal, Value,
 };
 use proptest::prelude::*;
 
@@ -32,23 +33,21 @@ pub fn parameter(name: &str) -> ParameterName {
     ParameterName(name.to_owned())
 }
 
-/// A declared parameter named `name` with no declared width, so its
-/// argument resolves unchecked — the shape every test that does not itself
-/// exercise the argument-width check builds its parameters with.
-pub fn untyped_parameter(name: &str) -> Parameter {
-    Parameter {
-        name: parameter(name),
-        width: None,
-    }
-}
-
 /// A declared parameter named `name` whose argument is checked against
 /// `width`, exactly as a write is checked against its target column's
 /// declared width (D3).
 pub fn typed_parameter(name: &str, width: IntegerWidth) -> Parameter {
     Parameter {
         name: parameter(name),
-        width: Some(width),
+        kind: ParameterType::Integer(width),
+    }
+}
+
+/// A declared parameter named `name` whose argument must be text.
+pub fn text_parameter(name: &str) -> Parameter {
+    Parameter {
+        name: parameter(name),
+        kind: ParameterType::Text,
     }
 }
 

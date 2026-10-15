@@ -14,7 +14,7 @@ use kiln_ir::{
 use proptest::prelude::*;
 use support::{
     call_under_test, column, columns_of, program_with_column, run_ok, run_write, table,
-    untyped_parameter, WriteVia,
+    typed_parameter, WriteVia,
 };
 
 fn add(lhs: i64, rhs: i64) -> Expr {
@@ -364,7 +364,7 @@ fn arithmetic_can_use_a_value_projected_from_an_earlier_read() {
     };
     let program = program_with_column(
         declared_column,
-        vec![untyped_parameter("amount")],
+        vec![typed_parameter("amount", IntegerWidth::I32)],
         vec![
             Effect::Read {
                 table: table("t"),

@@ -10,8 +10,12 @@
 //! has no type of its own: it is an [`Effect::Read`] whose `key` is an
 //! [`Expr::Projection`] into a row an earlier read bound, so "which row to
 //! read next" is itself a value the call computed, not a literal or
-//! argument. Constraint nodes (`docs/concept.md` §2.1) belong to a later
-//! slice and have no types here yet.
+//! argument. Bounded iteration is two cooperating nodes: [`Effect::ReadRange`]
+//! binds the key-ordered rows a range matched, and [`Effect::Iterate`] runs a
+//! body once per row of a slot a range read bound, with the current row
+//! itself bound to a slot the body's own reads, writes, and projections can
+//! use (§2.1, "bounded iteration"). Constraint nodes (`docs/concept.md`
+//! §2.1) belong to a later slice and have no types here yet.
 
 use std::collections::BTreeMap;
 
@@ -188,14 +192,19 @@ pub enum ArithmeticOp {
 /// an earlier read's row, or an arithmetic operation over two such values.
 ///
 /// [`Expr::Projection`] projects a column out of a row an earlier
-/// [`Effect::Read`] already bound to a [`Slot`] in this same call. Used as
-/// another [`Effect::Read`]'s `key`, it makes that read a dependent read:
-/// which row to read next is itself a value the call computed, not a
-/// literal or argument (`docs/concept.md` §2.1, §2.2 D6). A projection out
-/// of a [`Slot`] a range read bound has no single row to read, so it is
-/// rejected the same way a projection out of an absent row is — a contract
-/// violation by whatever built the expression, not a semantic outcome `run`
-/// reports.
+/// [`Effect::Read`] or [`Effect::Iterate`] already bound to a [`Slot`] in
+/// this same call. Used as another [`Effect::Read`]'s `key`, it makes that
+/// read a dependent read: which row to read next is itself a value the
+/// call computed, not a literal or argument (`docs/concept.md` §2.1, §2.2
+/// D6). A projection out of a [`Slot`] an [`Effect::ReadRange`] bound has no
+/// single current row to read — whether because that range matched no row
+/// or because the slot holds the whole matched sequence rather than one row
+/// — and a projection out of an absent point-read row has none either;
+/// `run` reports both the same way, as the typed
+/// [`AbortReason::ProjectionSourceAbsent`](crate::evaluator::AbortReason::ProjectionSourceAbsent),
+/// since which row a compiled program ends up projecting from is a fact
+/// about the data it ran against, not something `run` can rule out ahead of
+/// time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Literal(Value),
@@ -259,6 +268,23 @@ pub enum Effect {
         bound: Expr,
         into: Slot,
     },
+    /// Run `body` once for each row `source` bound, in key order, binding
+    /// the current row to `row` so the body's own reads, writes, and
+    /// projections can use it (§2.1, "bounded iteration"; `docs/concept.md`
+    /// §2.2 D6, "bounded iteration proceeds in key order").
+    ///
+    /// `source` must be a [`Slot`] an earlier [`Effect::ReadRange`] in this
+    /// same body bound: that read already resolved the bound and checked it
+    /// against the matched row count (`docs/concept.md` §2.1, "never an
+    /// open-ended loop"), so `Iterate` re-reads nothing and checks no bound
+    /// of its own. An abort raised by any effect in `body` aborts the whole
+    /// call, discarding every effect applied so far, in this row's part of
+    /// the iteration or an earlier one (`docs/concept.md` §2.2).
+    Iterate {
+        source: Slot,
+        row: Slot,
+        body: Vec<Effect>,
+    },
 }
 
 /// How a block of [`Effect`]s ends: every path through a function's body
@@ -287,24 +313,31 @@ pub struct Block {
     pub terminal: Terminal,
 }
 
-/// A function's declared parameter: its name and, if declared, its integer
-/// width.
+/// A function parameter's declared type: an integer at a mandatory width,
+/// or text. Every parameter declares one of the two — there is no
+/// undeclared or optionally-typed parameter, so an argument's kind is
+/// always known ahead of checking its value (D3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParameterType {
+    Integer(IntegerWidth),
+    Text,
+}
+
+/// A function's declared parameter: its name and declared type.
 ///
-/// An argument bound to `name` is checked against `width` exactly as a
+/// An argument bound to `name` is checked against `kind` exactly as a
 /// write is checked against its target column's declared width (D3,
 /// `docs/concept.md` §2.2: "Arithmetic runs over checked integers at the
-/// column's or argument's declared width"). `width` is `None` for a
-/// parameter whose declared type is not yet representable here — text
-/// arrives with columns in a later slice (D3: "Text-typed column
-/// declarations arrive with slice 4") — exactly as an undeclared
-/// [`Column`] carries no width either; such a parameter's argument resolves
-/// unchecked. Unlike `Column`, a declared parameter carries no clamping
-/// domain: D3 clamps a column's own write, never a call's argument, so an
-/// out-of-width argument always aborts.
+/// column's or argument's declared width"): an argument whose own kind does
+/// not match `kind` aborts, and an [`IntegerWidth`]-declared argument
+/// outside that width's representable range aborts too. Unlike `Column`, a
+/// declared parameter carries no clamping domain: D3 clamps a column's own
+/// write, never a call's argument, so an out-of-width argument always
+/// aborts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Parameter {
     pub name: ParameterName,
-    pub width: Option<IntegerWidth>,
+    pub kind: ParameterType,
 }
 
 /// A named transaction function: its parameters and its body.

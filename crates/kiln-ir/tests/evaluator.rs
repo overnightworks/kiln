@@ -15,8 +15,96 @@ use kiln_ir::{
 use proptest::prelude::*;
 use support::{
     arbitrary_value, call_under_test, column, columns_of, columns_of_values, committed_response,
-    parameter, run_ok, single_function_program, table, untyped_parameter,
+    parameter, run_ok, single_function_program, table, typed_parameter,
 };
+
+// --- a projection has no single current row to read from when its source read found none; this
+// is a typed abort, not a panic (finding 4) ---
+
+#[test]
+fn projecting_from_a_slot_whose_read_found_no_row_aborts_with_a_typed_reason() {
+    let store = Store::empty();
+    let program = single_function_program(
+        vec![],
+        vec![Effect::Read {
+            table: table("t"),
+            key: Expr::Literal(Value::Integer(1)),
+            into: Slot(0),
+        }],
+        Terminal::Return(Expr::Projection {
+            slot: Slot(0),
+            column: column("c"),
+        }),
+    );
+
+    let execution = run_ok(&program, &call_under_test(vec![]), &store);
+
+    assert_eq!(
+        execution.outcome,
+        Outcome::Aborted {
+            reason: AbortReason::ProjectionSourceAbsent { slot: Slot(0) },
+        }
+    );
+    assert_eq!(&execution.store, &store);
+}
+
+// --- projecting a column the bound row does not carry is a typed abort, not a panic
+// (finding 4) ---
+
+#[test]
+fn projecting_a_column_absent_from_the_bound_row_aborts_with_a_typed_reason() {
+    let store = Store::containing([(table("t"), Value::Integer(1), Row::default())]);
+    let program = single_function_program(
+        vec![],
+        vec![Effect::Read {
+            table: table("t"),
+            key: Expr::Literal(Value::Integer(1)),
+            into: Slot(0),
+        }],
+        Terminal::Return(Expr::Projection {
+            slot: Slot(0),
+            column: column("missing"),
+        }),
+    );
+
+    let execution = run_ok(&program, &call_under_test(vec![]), &store);
+
+    assert_eq!(
+        execution.outcome,
+        Outcome::Aborted {
+            reason: AbortReason::MissingColumn {
+                slot: Slot(0),
+                column: column("missing"),
+            },
+        }
+    );
+    assert_eq!(&execution.store, &store);
+}
+
+// --- a call supplying fewer arguments than a function declares parameters aborts with a typed
+// reason once the body actually resolves the missing one, instead of panicking (finding 4) ---
+
+#[test]
+fn resolving_a_parameter_with_no_matching_argument_aborts_with_a_typed_reason() {
+    let store = Store::empty();
+    let program = single_function_program(
+        vec![typed_parameter("amount", kiln_ir::IntegerWidth::I8)],
+        vec![],
+        Terminal::Return(Expr::Parameter(parameter("amount"))),
+    );
+
+    let execution = run_ok(&program, &call_under_test(vec![]), &store);
+
+    assert_eq!(
+        execution.outcome,
+        Outcome::Aborted {
+            reason: AbortReason::MissingArgument {
+                parameter: parameter("amount"),
+            },
+        }
+    );
+    assert_eq!(&execution.store, &store);
+}
 
 // --- an absent key is a branchable value (docs/concept.md §2.2) ---
 
@@ -113,16 +201,16 @@ proptest! {
         )]);
 
         let program = single_function_program(
-            vec![untyped_parameter("arg")],
+            vec![],
             vec![Effect::Insert {
                 table: table("t"),
                 key: Expr::Literal(key.clone()),
-                columns: columns_of([("c", Expr::Parameter(parameter("arg")))]),
+                columns: columns_of([("c", Expr::Literal(new_value))]),
             }],
             Terminal::Return(Expr::Literal(Value::Integer(0))),
         );
 
-        let execution = run_ok(&program, &call_under_test(vec![new_value]), &store);
+        let execution = run_ok(&program, &call_under_test(vec![]), &store);
 
         match execution.outcome {
             Outcome::Aborted { reason: AbortReason::DuplicateKey { table: t, key: k } } => {

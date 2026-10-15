@@ -29,6 +29,6 @@ pub use evaluator::{
 pub use identifiers::{AbortName, ColumnName, FunctionName, ParameterName, TableName};
 pub use ir::{
     ArithmeticOp, Block, ClampDomain, Column, Condition, Effect, Expr, Function, IntegerWidth,
-    Parameter, Program, Row, Schema, SchemaError, Slot, Table, Terminal, Value,
+    Parameter, ParameterType, Program, Row, Schema, SchemaError, Slot, Table, Terminal, Value,
 };
 pub use store::Store;
