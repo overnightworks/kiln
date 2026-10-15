@@ -15,8 +15,9 @@
 use std::collections::BTreeMap;
 
 use kiln_ir::{
-    run, Call, Column, ColumnName, Effect, Execution, Expr, Function, FunctionName, ParameterName,
-    Program, Row, Schema, Store, Table, TableName, Terminal, Value,
+    run, Call, Column, ColumnName, Effect, Execution, Expr, Function, FunctionName, IntegerWidth,
+    Parameter, ParameterName, ParameterType, Program, Row, Schema, Store, Table, TableName,
+    Terminal, Value,
 };
 use proptest::prelude::*;
 
@@ -30,6 +31,24 @@ pub fn column(name: &str) -> ColumnName {
 
 pub fn parameter(name: &str) -> ParameterName {
     ParameterName(name.to_owned())
+}
+
+/// A declared parameter named `name` whose argument is checked against
+/// `width`, exactly as a write is checked against its target column's
+/// declared width (D3).
+pub fn typed_parameter(name: &str, width: IntegerWidth) -> Parameter {
+    Parameter {
+        name: parameter(name),
+        kind: ParameterType::Integer(width),
+    }
+}
+
+/// A declared parameter named `name` whose argument must be text.
+pub fn text_parameter(name: &str) -> Parameter {
+    Parameter {
+        name: parameter(name),
+        kind: ParameterType::Text,
+    }
 }
 
 pub fn columns_of(
@@ -51,7 +70,7 @@ pub fn columns_of_values(
 }
 
 pub fn single_function_program(
-    parameters: Vec<ParameterName>,
+    parameters: Vec<Parameter>,
     effects: Vec<Effect>,
     terminal: Terminal,
 ) -> Program {
@@ -77,7 +96,7 @@ pub fn call_under_test(args: Vec<Value>) -> Call {
 /// test writes into.
 pub fn program_with_column(
     declared_column: Column,
-    parameters: Vec<ParameterName>,
+    parameters: Vec<Parameter>,
     effects: Vec<Effect>,
     terminal: Terminal,
 ) -> Program {
