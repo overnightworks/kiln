@@ -91,6 +91,23 @@ pub fn call_under_test(args: Vec<Value>) -> Call {
     }
 }
 
+/// A program over `schema` with one function, `under_test`.
+pub fn program_with_schema(
+    schema: Schema,
+    parameters: Vec<Parameter>,
+    effects: Vec<Effect>,
+    terminal: Terminal,
+) -> Program {
+    Program {
+        schema,
+        functions: vec![Function {
+            name: FunctionName("under_test".to_owned()),
+            parameters,
+            body: kiln_ir::Block { effects, terminal },
+        }],
+    }
+}
+
 /// A program whose schema declares table "t" with exactly one column,
 /// `declared_column`, plus the given function body — the shape every D3
 /// test writes into.
@@ -100,19 +117,14 @@ pub fn program_with_column(
     effects: Vec<Effect>,
     terminal: Terminal,
 ) -> Program {
-    Program {
-        schema: Schema {
-            tables: vec![Table {
-                name: table("t"),
-                columns: vec![declared_column],
-            }],
-        },
-        functions: vec![Function {
-            name: FunctionName("under_test".to_owned()),
-            parameters,
-            body: kiln_ir::Block { effects, terminal },
+    let schema = Schema {
+        tables: vec![Table {
+            name: table("t"),
+            columns: vec![declared_column],
         }],
-    }
+        ..Default::default()
+    };
+    program_with_schema(schema, parameters, effects, terminal)
 }
 
 pub fn arbitrary_value() -> impl Strategy<Value = Value> {

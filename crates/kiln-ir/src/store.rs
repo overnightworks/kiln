@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::identifiers::TableName;
+use crate::identifiers::{ColumnName, TableName};
 use crate::ir::{Row, Value};
 
 /// A snapshot of every table's rows. [`crate::evaluator::run`] never mutates
@@ -59,6 +59,21 @@ impl Store {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Whether a row of `table` other than the one at `except_key` holds
+    /// `value` in `column`.
+    pub(crate) fn value_held_by_another_row(
+        &self,
+        table: &TableName,
+        column: &ColumnName,
+        value: &Value,
+        except_key: &Value,
+    ) -> bool {
+        self.tables.get(table).is_some_and(|rows| {
+            rows.iter()
+                .any(|(key, row)| key != except_key && row.columns.get(column) == Some(value))
+        })
     }
 
     /// Writes `row` at `key` in `table`, overwriting whatever was there.

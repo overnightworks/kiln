@@ -8,8 +8,8 @@
 mod support;
 
 use kiln_ir::{
-    AbortReason, AccessTarget, ArithmeticOp, ClampDomain, Column, Effect, Expr, IntegerWidth,
-    Outcome, OverflowReason, Row, Store, Terminal, Value,
+    AbortReason, AccessTarget, ArithmeticOp, ClampDomain, Column, ColumnType, Effect, Expr,
+    IntegerWidth, Outcome, OverflowReason, Row, Store, Terminal, Value,
 };
 use proptest::prelude::*;
 use support::{
@@ -37,7 +37,7 @@ mod kiln_ir_24 {
             lhs in -128i64..=127i64,
             rhs in -128i64..=127i64,
         ) {
-            let declared_column = Column { name: column("c"), width: IntegerWidth::I8, domain: None };
+            let declared_column = Column { name: column("c"), kind: ColumnType::Integer { width: IntegerWidth::I8, domain: None } };
             let execution = run_write(declared_column, add(lhs, rhs), WriteVia::Insert);
 
             let sum = lhs + rhs;
@@ -72,8 +72,10 @@ mod kiln_ir_25 {
     fn literal_write_outside_declared_width_aborts_without_a_domain() {
         let declared_column = Column {
             name: column("c"),
-            width: IntegerWidth::I8,
-            domain: None,
+            kind: ColumnType::Integer {
+                width: IntegerWidth::I8,
+                domain: None,
+            },
         };
         // 200 is outside i8's -128..=127, with no arithmetic involved at all.
         let execution = run_write(
@@ -104,8 +106,10 @@ mod kiln_ir_26 {
         for via in [WriteVia::Insert, WriteVia::Update] {
             let declared_column = Column {
                 name: column("c"),
-                width: IntegerWidth::I32,
-                domain: Some(ClampDomain { min: 0, max: 1000 }),
+                kind: ColumnType::Integer {
+                    width: IntegerWidth::I32,
+                    domain: Some(ClampDomain { min: 0, max: 1000 }),
+                },
             };
             // (i64::MAX + 1) + 0: the inner addition overflows i64 before the outer
             // addition, or the column's clamp, ever sees a value.
@@ -139,8 +143,10 @@ mod kiln_ir_27 {
     fn a_nested_result_that_only_briefly_exceeds_the_width_still_commits() {
         let declared_column = Column {
             name: column("c"),
-            width: IntegerWidth::I8,
-            domain: None,
+            kind: ColumnType::Integer {
+                width: IntegerWidth::I8,
+                domain: None,
+            },
         };
         // (127 + 1) - 1: the inner sum (128) exceeds i8's width, but the outer
         // subtraction brings the expression's one final value (127) back inside it.
@@ -167,8 +173,10 @@ mod kiln_ir_29 {
     fn overflow_abort_discards_every_effect_and_retains_every_attempted_access() {
         let declared_column = Column {
             name: column("c"),
-            width: IntegerWidth::I8,
-            domain: None,
+            kind: ColumnType::Integer {
+                width: IntegerWidth::I8,
+                domain: None,
+            },
         };
         let program = program_with_column(
             declared_column,
@@ -279,8 +287,10 @@ mod kiln_ir_22 {
     fn text_literal_written_into_a_declared_column_aborts_with_a_typed_reason() {
         let declared_column = Column {
             name: column("c"),
-            width: IntegerWidth::I8,
-            domain: None,
+            kind: ColumnType::Integer {
+                width: IntegerWidth::I8,
+                domain: None,
+            },
         };
 
         let execution = run_write(
@@ -320,8 +330,7 @@ mod kiln_ir_30 {
 
             let declared_column = Column {
                 name: column("c"),
-                width: IntegerWidth::I32,
-                domain: Some(ClampDomain { min: domain_min, max: domain_max }),
+                kind: ColumnType::Integer { width: IntegerWidth::I32, domain: Some(ClampDomain { min: domain_min, max: domain_max }) }
             };
             let write_expr = if via_arithmetic {
                 add(operand_a, operand_b)
@@ -350,8 +359,10 @@ mod kiln_ir_31 {
     fn value_already_inside_the_domain_is_left_unchanged() {
         let declared_column = Column {
             name: column("c"),
-            width: IntegerWidth::I32,
-            domain: Some(ClampDomain { min: 0, max: 100 }),
+            kind: ColumnType::Integer {
+                width: IntegerWidth::I32,
+                domain: Some(ClampDomain { min: 0, max: 100 }),
+            },
         };
 
         let execution = run_write(
@@ -382,8 +393,10 @@ mod kiln_ir_32 {
         for via in [WriteVia::Insert, WriteVia::Update] {
             let declared_column = Column {
                 name: column("c"),
-                width: IntegerWidth::I8,
-                domain: Some(ClampDomain { min: 0, max: 100 }),
+                kind: ColumnType::Integer {
+                    width: IntegerWidth::I8,
+                    domain: Some(ClampDomain { min: 0, max: 100 }),
+                },
             };
             // 4000 + 1000 = 5000, far outside i8's -128..=127, but the domain still
             // saturates it to its own max instead of aborting on the width.
@@ -459,8 +472,10 @@ mod kiln_ir_13 {
 
         let declared_column = Column {
             name: column("balance"),
-            width: IntegerWidth::I32,
-            domain: None,
+            kind: ColumnType::Integer {
+                width: IntegerWidth::I32,
+                domain: None,
+            },
         };
         let program = program_with_column(
             declared_column,

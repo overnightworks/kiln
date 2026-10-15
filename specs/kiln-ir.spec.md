@@ -60,5 +60,19 @@ module; several tests may share it.
 ## Access log
 
 - [KILN-IR-34] The access log records every attempted access, including the one that aborts the call.
-- [KILN-IR-35] Each access log entry carries its table, key or range bounds, and touched columns, for every access kind: point read, range read, insert, update and delete. Origin is deferred to the next `kiln-ir` slice (constraints, text columns, access origin).
+- [KILN-IR-35] Each access log entry carries its table, key or range bounds, and touched columns, and origin (transaction logic or constraint check), for every access kind: point read, range read, insert, update and delete.
 - [KILN-IR-36] A range read logs its bounds, including when the range turns out empty.
+- [KILN-IR-43] Every access the transaction's own effects make is logged with logic origin.
+- [KILN-IR-44] A constraint check logs its accesses with constraint origin; they stay in the log when the check aborts the call.
+
+## Text columns
+
+- [KILN-IR-37] A schema can declare a column as text; a text value written to it commits.
+- [KILN-IR-38] An integer value written to a column declared as text aborts with a typed reason and changes no state.
+
+## Unique constraints
+
+- [KILN-IR-39] A unique constraint is declared in the schema on one column of one table. A schema that declares one on an undeclared table or column is rejected with a typed schema error.
+- [KILN-IR-40] A duplicate value that exists only in the middle of a transaction and is gone from its final state commits.
+- [KILN-IR-41] A duplicate value in a transaction's final state aborts the call with a typed reason naming the constraint and the value; the call changes no state and publishes no response.
+- [KILN-IR-42] The unique check runs once at the end of the transaction and logs exactly one point read on the unique value per row the transaction wrote that column on, however often it wrote the row; a row the transaction deleted, or wrote without that column, is not checked. The check's logged footprint is those point reads, never a range read or table scan.

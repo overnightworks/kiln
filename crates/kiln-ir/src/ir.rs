@@ -73,20 +73,36 @@ pub struct ClampDomain {
     pub max: i64,
 }
 
-/// A table's column declaration: its name, declared integer width, and
-/// optional clamping domain (D1).
+/// What a column holds: a checked integer at a declared width with an
+/// optional clamping domain, or text (D1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnType {
+    Integer {
+        width: IntegerWidth,
+        domain: Option<ClampDomain>,
+    },
+    Text,
+}
+
+/// A table's column declaration: its name and declared type (D1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Column {
     pub name: ColumnName,
-    pub width: IntegerWidth,
-    pub domain: Option<ClampDomain>,
+    pub kind: ColumnType,
+}
+
+/// A unique constraint (D1): no two rows of `table` may hold the same value
+/// in `column` in a transaction's final state (D2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UniqueConstraint {
+    pub table: TableName,
+    pub column: ColumnName,
 }
 
 /// A table declaration: its name and the columns rows in it may carry.
 ///
-/// Uniqueness, foreign keys and check constraints (D1's full schema shape)
-/// are later slices' work; this slice only needs a table's name and its
-/// columns' integer widths and clamping domains.
+/// Foreign keys and check constraints (D1's full schema shape) are a later
+/// slice's work.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Table {
     pub name: TableName,
@@ -97,6 +113,7 @@ pub struct Table {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Schema {
     pub tables: Vec<Table>,
+    pub unique_constraints: Vec<UniqueConstraint>,
 }
 
 impl Schema {
@@ -126,31 +143,50 @@ impl Schema {
     /// value the width itself forbids, silently defeating D3's width check
     /// (`docs/concept.md` §2.2, D3). `run` calls this before executing any
     /// call, so a schema this rejects never reaches the evaluator at all.
+    /// A unique constraint must likewise name a declared table and column.
     pub fn validate(&self) -> Result<(), SchemaError> {
         for table in &self.tables {
             for column in &table.columns {
-                let Some(domain) = column.domain else {
-                    continue;
-                };
-                if domain.min > domain.max {
-                    return Err(SchemaError::ReversedDomain {
-                        table: table.name.clone(),
-                        column: column.name.clone(),
-                        min: domain.min,
-                        max: domain.max,
-                    });
+                if let ColumnType::Integer {
+                    width,
+                    domain: Some(domain),
+                } = column.kind
+                {
+                    validate_domain(&table.name, &column.name, width, domain)?;
                 }
-                let (width_min, width_max) = column.width.range();
-                if domain.min < width_min || domain.max > width_max {
-                    return Err(SchemaError::DomainExceedsWidth {
-                        table: table.name.clone(),
-                        column: column.name.clone(),
-                    });
-                }
+            }
+        }
+        for constraint in &self.unique_constraints {
+            if self.column(&constraint.table, &constraint.column).is_none() {
+                return Err(SchemaError::UnknownUniqueTarget(constraint.clone()));
             }
         }
         Ok(())
     }
+}
+
+fn validate_domain(
+    table: &TableName,
+    column: &ColumnName,
+    width: IntegerWidth,
+    domain: ClampDomain,
+) -> Result<(), SchemaError> {
+    if domain.min > domain.max {
+        return Err(SchemaError::ReversedDomain {
+            table: table.clone(),
+            column: column.clone(),
+            min: domain.min,
+            max: domain.max,
+        });
+    }
+    let (width_min, width_max) = width.range();
+    if domain.min < width_min || domain.max > width_max {
+        return Err(SchemaError::DomainExceedsWidth {
+            table: table.clone(),
+            column: column.clone(),
+        });
+    }
+    Ok(())
 }
 
 /// Why a [`Schema`] fails [`Schema::validate`]: one column's own
@@ -169,6 +205,8 @@ pub enum SchemaError {
         table: TableName,
         column: ColumnName,
     },
+    /// A unique constraint names a table or column the schema does not declare.
+    UnknownUniqueTarget(UniqueConstraint),
 }
 
 /// A position in a function's body that a later [`Condition`] or [`Expr`]

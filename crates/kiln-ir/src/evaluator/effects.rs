@@ -10,8 +10,8 @@ use crate::store::Store;
 
 use super::resolve::{resolve, resolve_for_write, WriteOverflow};
 use super::{
-    AbortReason, AccessKind, AccessLogEntry, AccessTarget, AccessedColumns, Binding, CallContext,
-    Outcome,
+    AbortReason, AccessKind, AccessLogEntry, AccessOrigin, AccessTarget, AccessedColumns, Binding,
+    CallContext, Outcome,
 };
 
 /// Applies a block's effects in program order, then its terminal. Returns
@@ -116,6 +116,7 @@ fn apply_read(
         kind: AccessKind::PointRead,
         target: AccessTarget::Point(key),
         columns: AccessedColumns::EntireRow,
+        origin: AccessOrigin::TransactionLogic,
     });
     bindings.insert(into, Binding::Row(row));
     None
@@ -175,6 +176,7 @@ fn apply_read_range(
             end: end.clone(),
         },
         columns: AccessedColumns::EntireRow,
+        origin: AccessOrigin::TransactionLogic,
     });
     let rows = store.rows_in_range(range.table, &start, &end);
     if usize::try_from(bound).map_or(true, |bound| rows.len() > bound) {
@@ -266,6 +268,7 @@ fn apply_insert(
         kind: AccessKind::Insert,
         target: AccessTarget::Point(key.clone()),
         columns: AccessedColumns::Named(columns.keys().cloned().collect()),
+        origin: AccessOrigin::TransactionLogic,
     });
     if store.row(table, &key).is_some() {
         return Some(Outcome::Aborted {
@@ -309,6 +312,7 @@ fn apply_update(
         kind: AccessKind::Update,
         target: AccessTarget::Point(key.clone()),
         columns: AccessedColumns::Named(columns.keys().cloned().collect()),
+        origin: AccessOrigin::TransactionLogic,
     });
     let Some(mut row) = store.row(table, &key).cloned() else {
         return Some(Outcome::Aborted {
@@ -346,6 +350,7 @@ fn apply_delete(
         kind: AccessKind::Delete,
         target: AccessTarget::Point(key.clone()),
         columns: AccessedColumns::EntireRow,
+        origin: AccessOrigin::TransactionLogic,
     });
     if store.row(table, &key).is_none() {
         return Some(Outcome::Aborted {
@@ -381,6 +386,13 @@ fn resolve_write_columns(
             resolve_for_write(expr, ctx, bindings, declared).map_err(|error| match error {
                 WriteOverflow::Resolve(error) => Outcome::Aborted {
                     reason: error.into(),
+                },
+                WriteOverflow::NonText => Outcome::Aborted {
+                    reason: AbortReason::NonTextValue {
+                        table: table.clone(),
+                        column: column.clone(),
+                        key: key.clone(),
+                    },
                 },
                 WriteOverflow::Width => Outcome::Aborted {
                     reason: AbortReason::Overflow(super::OverflowReason::Width {
