@@ -231,9 +231,9 @@ insert and delete responses), so these history-based checks do not suit
 repeated executions and `Starvation` checks neither. Rearrival leaves a
 transaction pending and undispatched; only the next `Dispatch` queues it
 and starts the `RequestedLeadsToTerminal` obligation. The `NoBypass` mutant drops `OlderQueued` from
-`WaitsOn` (rule 3) and TLC returns the lasso: t1 is admitted, commits and
-requests again, over and over, while t3, queued since before t1's second
-request, is admitted in no state of the loop.
+`WaitsOn` (rule 3) and TLC returns the lasso: t3 is admitted, commits and
+requests again, over and over, while t1, queued before each of t3's
+requests, is admitted in no state of the loop.
 
 Queued sequence numbers are dense (1..n): `Acquire` closes the gap it
 leaves, so the numbers stay bounded when requests repeat. This changed the
@@ -290,6 +290,9 @@ Depth is the length of the longest shortest path (breadth-first).
 **Reachability witnesses.** Each scenario names negated state predicates
 (`*Unreached`); TLC's counterexample is the proof that the scenario's
 decisive state is reachable. Logs: `<Scenario>.witness.<Predicate>.tlc.log`.
+Witnesses and mutants run with one worker and a fixed fingerprint
+function, so their traces reproduce; trace lengths are the number of
+states in the committed log.
 Two witnesses (`ComposedPinDeleteUnreached`, `PinsTableUnreached`) once
 asserted that two queued transactions each wait *only* on the holder;
 under rule 3 the later-dispatched one also waits on the earlier, so they
@@ -327,6 +330,8 @@ assert membership.
 Each mutant is a patch against `Kernel.tla` that removes one named guard;
 `run.sh` applies it to a temporary copy and checks exactly one property.
 TLC refutes every one; the log is `<Mutant>.<Scenario>.<Property>.tlc.log`.
+`run.sh` uses one worker and a fixed fingerprint function; the trace
+lengths below are the states of the committed logs.
 
 | Mutant (guard removed) | Scenario | Property refuted | Trace length |
 |---|---|---|---|
@@ -352,7 +357,7 @@ TLC refutes every one; the log is `<Mutant>.<Scenario>.<Property>.tlc.log`.
 | `DrawIgnoresReservation` — admission accounts what other holders have drawn, not what they reserved | `AllowanceCycle` | `ReservationsFunded` (both admitted with 2 on a balance of 2) | 5 |
 | `DrawIgnoresReservation` | `AllowanceCycle` | `BalanceNonNegative` (quota −2) | 11 |
 | `BudgetUndercounts` — the budget is the largest single draw, not the total | `AllowanceCycle` | `Serializable` (t1 reserves 1 and is told `insufficient` on its second draw; no serial order rejects t1) | 5 |
-| `NoBypass` — a later request may overtake an older queued request on a shared resource (`OlderQueued` dropped from `WaitsOn`) | `Starvation` | `RequestedLeadsToTerminal` (liveness: a lasso in which t1 is admitted, commits and requests again forever while t3, queued first, is never admitted) | 9, loop back to 5 |
+| `NoBypass` — a later request may overtake an older queued request on a shared resource (`OlderQueued` dropped from `WaitsOn`) | `Starvation` | `RequestedLeadsToTerminal` (liveness: a lasso in which t3 is admitted, commits and requests again forever while t1, queued first, is never admitted) | 8, loop back to 4 |
 
 `TypeOK` has no mutant: it is a typing check with no protocol content.
 

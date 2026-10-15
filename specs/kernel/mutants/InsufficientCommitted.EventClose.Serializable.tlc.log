@@ -1,10 +1,10 @@
 TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
 Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 126 and seed -3864600081196608610 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 3702577] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
-Starting... (2026-10-15 23:41:19)
+Running breadth-first search Model-Checking with fp 0 and seed -4612748820666277493 with 1 worker on 12 cores with 15518MB heap and 64MB offheap memory [pid: 3951844] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-10-15 23:47:15)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-15 23:41:19.
+Finished computing initial states: 1 distinct state generated at 2026-10-15 23:47:16.
 Error: Invariant Serializable is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
@@ -131,7 +131,7 @@ State 8: <DoOp line 358, col 3 to line 380, col 26 of module Kernel>
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-122 states generated, 81 distinct states found, 8 states left on queue.
-The depth of the complete state graph search is 9.
+104 states generated, 68 distinct states found, 11 states left on queue.
+The depth of the complete state graph search is 8.
 The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 3 and the 95th percentile is 3).
-Finished in 01s at (2026-10-15 23:41:19)
+Finished in 00s at (2026-10-15 23:47:16)

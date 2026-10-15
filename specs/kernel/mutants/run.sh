@@ -3,6 +3,7 @@
 # Applies mutants/<Mutant>.patch to a temporary copy of the modules and runs TLC
 # with only that property (none for the deadlock check), as an INVARIANT or, when
 # the scenario's cfg lists it so, a PROPERTY under the cfg's own SPECIFICATION.
+# One worker with a fixed fingerprint function makes the counterexample reproducible.
 # Expected outcome: a violation; the log lands in mutants/<Mutant>.<Scenario>.<Property>.tlc.log.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -19,6 +20,6 @@ patch -s -d "$work" -p0 < "$mutant.patch"
   [ "$property" = deadlock ] || printf '\n%s %s\n' "$kind" "$property"
 } > "$work/$scenario.cfg"
 java -XX:+UseSerialGC -jar "${TLA2TOOLS:?set TLA2TOOLS to the tla2tools.jar path}" \
-  -workers 4 -cleanup -config "$work/$scenario.cfg" "$work/$scenario.tla" \
+  -workers 1 -fp 0 -cleanup -config "$work/$scenario.cfg" "$work/$scenario.tla" \
   | grep -v '^Parsing file\|^Semantic processing' | sed "s#$work/##g" \
   | tee "$mutant.$scenario.$property.tlc.log"
