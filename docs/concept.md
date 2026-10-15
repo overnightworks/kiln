@@ -299,24 +299,25 @@ doing so would reintroduce the deadlock risk the ordering exists to avoid.
 Instead it discards its tentative effects and restarts from the beginning
 with the wider resource acquired first, in canonical order.
 
-**Why this is the proposal.** First, the class-3 mechanism the thesis
-already commits to — associative summaries evaluated by a parallel prefix
-scan — was designed together with this locking kernel in the same source
+**Why this is the proposal.** The class-3 mechanism the thesis already
+commits to — associative summaries evaluated by a parallel prefix scan —
+was designed together with this locking kernel in the same source
 (`docs/research/ideation/codex-astra-ideation.md`); grafting it onto
 Fable's domain/ticket backbone would be an unproven hybrid nobody has
-argued through. Second, this kernel needs no static ownership-key
-assignment, so it has no single point where a wrong schema-time guess turns
-into a serial bottleneck or a disruptive migration. Third, its fallback for
-unknown/navigational transactions is not a different code path with its own
-staleness risk — it is the same lock protocol, just with a wider lock,
+argued through. This kernel also needs no static ownership-key assignment,
+so it has no single point where a wrong schema-time guess turns into a
+serial bottleneck or a disruptive migration, and its fallback for
+unknown/navigational transactions is the same lock protocol with a wider
+lock rather than a separate path carrying the staleness risk named above —
 which is what makes class 4 "always correct" rather than "usually
-correct." The cost accepted in return: this kernel holds locks through
-commit for classes 3 and 4, with deadlock-avoidance-by-ordering
-bookkeeping, and inherits two-phase locking's classic latency cost under
-heavy contention — but classes 1 and 2, which the thesis expects to carry
-most real traffic (per the E1 hypothesis below), never take a lock under
-either proposal, so this cost is paid only where some coordination is
-unavoidable regardless of kernel choice.
+correct." The cost accepted in return is two-phase locking's classic
+latency cost under heavy contention for classes 3 and 4, with
+deadlock-avoidance-by-ordering bookkeeping; classes 1 and 2 never take a
+lock under either proposal, so this cost is paid only where some
+coordination is unavoidable regardless of kernel choice — how much of real
+traffic actually lands in classes 1–2 rather than 3–4 is a
+pairwise-eligibility question E1 does not answer (§14), not the
+footprint-coverage question it does.
 
 ## 5. ACID and uniqueness
 
@@ -457,114 +458,108 @@ engine-phase obligation in §9.3 — they are not yet a specified protocol.
 
 ## 9. Engine-phase obligations
 
-Three correctness obligations belong to the engine build, not to this
-concept: each is stated here precisely enough that no engine built against
-this document can honestly ignore it, with the direction this document
-commits to and the conditions under which that direction fails — but the
-exact protocol is not yet specified, and a builder implementing it owns
+Four correctness obligations belong to the engine build, not to this
+concept. Each paragraph below states the obligation, the direction this
+document commits to, and the condition under which that direction fails —
+precisely enough that no engine built against this document can honestly
+ignore it — but not the protocol itself; a builder implementing it owns
 writing that protocol down before shipping it.
 
 ### 9.1 Publication boundary
 
-**Obligation.** After a transaction commits effects touching more than one
-derived structure (an index, a view, a reverse-reference set, §5), no
-reader may ever observe a state reflecting some but not all of those
-effects — not during normal operation, and not during recovery after a
-crash. A durable log record proves a commit is recoverable; it does not by
-itself prove every reader sees that commit's effects atomically, and this
-document does not claim otherwise.
-
-**Chosen direction.** Readers see committed state through a single,
-monotonically increasing *visible version* pointer. A commit's
-derived-structure updates are prepared independently of readers and become
-visible only when that pointer advances past the commit, in one atomic
-step. The log append is the source of truth for what has committed; the
-visible-version pointer is a cache that can always be rebuilt from the log.
-
-**Failure conditions.** If a crash occurs after the log records a commit
-but before every derived structure has finished installing, recovery must
-either finish installing them before advancing the pointer past that
-commit, or must not advance the pointer past it at all. One log may back
-more than one logical store within it; this boundary's atomicity is scoped
-to the commits recorded in one log, never implied across two independent
-logs.
-
-**Status: not yet specified.** The exact pointer or version representation,
-how far ahead installation of derived structures may run, and the recovery
-procedure that re-derives or replays incomplete installation are engine-
-phase work.
+After a transaction commits effects touching more than one derived
+structure (an index, a view, a reverse-reference set, §5), no reader may
+ever observe a state reflecting some but not all of those effects, during
+normal operation or during recovery after a crash — a durable log record
+proves a commit is recoverable, not that every reader sees its effects
+atomically. The chosen direction is a single, monotonically increasing
+*visible version* pointer: a commit's derived-structure updates are
+prepared independently of readers and become visible only when the pointer
+advances past the commit, in one atomic step, with the log itself as the
+source of truth the pointer can always be rebuilt from; one log may back
+more than one logical store, and this boundary's atomicity is scoped to the
+commits recorded in one log, never implied across two independent logs. It
+fails if a crash lands between a commit's log record and the completion of
+every derived-structure install and recovery advances the pointer past that
+commit anyway — recovery must finish installing first, or not advance the
+pointer past it at all. **Status: not yet specified** — the exact pointer
+representation, how far ahead installation may run, and the recovery
+procedure that re-derives or replays incomplete installation are
+engine-phase work.
 
 ### 9.2 Storage failure model
 
-**Obligation.** A committed record, once acknowledged, must survive every
-failure within the storage system's declared failure granularity. Detecting
-corruption in a newly appended record must never be the mechanism relied on
-to protect a previously acknowledged record — checksum detection on the new
-record proves nothing about damage to older, already-durable bytes.
-
-**Chosen direction.** Commit records are framed (length and digest) and
-validated on read. A flush is trusted to be truthful: if it reports success,
-the bytes are durable, consistent with the cited study's own framing; an
-`fsync` failure fences the writer — it stops accepting new work rather than
-retrying and assuming success repaired anything — because an `fsync`
-failure does not tell you whether the bytes reached storage
+A committed record, once acknowledged, must survive every failure within
+the storage system's declared failure granularity; detecting corruption in
+a newly appended record must never be the mechanism relied on to protect a
+previously acknowledged record, because a checksum on the new record proves
+nothing about damage to older, already-durable bytes. The chosen direction
+frames every commit record (length and digest) and validates it on read,
+trusts a flush that reports success as truthful, fences the writer entirely
+on an `fsync` failure rather than retrying — an `fsync` failure does not
+tell you whether the bytes reached storage
 (`docs/research/ideation/codex-astra-ideation.md`, citing "Can Applications
 Recover from fsync Failures?", USENIX ATC 2020,
-[PDF](https://www.usenix.org/system/files/atc20-rebello.pdf)). New commit
-records are appended only into storage regions the engine has not
-previously acknowledged as committed — fresh aligned extents, or
-copy-on-write rather than in-place overwrite of a committed extent — so a
-torn write to a new record can never reach into bytes a caller was already
-told are durable. Directory entries are fsynced separately from file
-contents, because a file can be lost after a crash even when its own
-contents were durably written but its directory entry was not.
-
-**Failure conditions.** A torn write to a new, not-yet-acknowledged record
-is detected by its framing and the incomplete record is discarded safely —
-nothing was promised durable yet. A torn write that reaches into
-already-acknowledged bytes, or a storage device that lies about a flush,
-is outside this model: the engine cannot repair it, and recovery must
-surface the failure rather than silently skip the damaged record.
+[PDF](https://www.usenix.org/system/files/atc20-rebello.pdf), for the
+fencing decision only — that study is not cited for, and does not claim,
+checksum sufficiency), appends new commit records only into storage regions
+never previously acknowledged as committed (fresh aligned extents, or
+copy-on-write rather than in-place overwrite of a committed extent) so a
+torn write to a new record cannot reach already-durable bytes, and fsyncs
+directory entries separately from file contents. It fails — is outside this
+model — for a torn write that does reach already-acknowledged bytes, or a
+device that lies about a flush: the engine cannot repair either, and
+recovery must surface the failure rather than silently skip the damaged
+record, the same truthful-flush assumption
 [SQLite's own atomic-commit documentation](https://www.sqlite.org/atomiccommit.html)
-makes the same truthful-flush assumption for the same reason.
-
-**Status: not yet specified.** The exact extent size, the allocation and
-reclaim policy, and the checkpoint layout that make "never overwrite
-acknowledged bytes" concrete are engine-phase work.
+makes for the same reason. **Status: not yet specified** — the exact extent
+size, the allocation and reclaim policy, and the checkpoint layout that
+make "never overwrite acknowledged bytes" concrete are engine-phase work.
 
 ### 9.3 Migration watermark and rollback window
 
-**Obligation.** After the compiler diffs two program versions, the new
-structures it backfills must reflect every commit up to a definite point in
-the log, with no gap and no duplicate. The live switch to the new version
-must not drop or double-apply a commit made during backfill. Rollback must
-only be offered when switching back cannot make a committed fact invalid.
-
-**Chosen direction.** Backfill replays the log up to a recorded snapshot
-position (a watermark). While backfill is in progress, new commits apply to
-both the old and new structures (a catch-up phase). The switch happens at a
-barrier commit where both versions agree the new structures have caught up
-to the same point the old ones are at. Migrations are classified by how the
-new invariants relate to the old ones: a *restriction* (a new, stricter
-bound) requires validating every existing row against it before the switch;
-a *relaxation* (for example, lowering a `balance ≥ 0` bound) can let the new
-version commit facts the old invariant would have rejected, so rollback
-after such a commit is not simply "switch back" — the old version's bound
-would now be violated by real, already-committed data.
-
-**Failure conditions.** Rollback is available only for a defined window,
-and only while the old structures kept receiving every commit — they are
-never reclaimed before that window closes. It becomes unavailable once a
-commit has occurred that the old invariant would reject, or once the old
-structures have been reclaimed.
-
-**Status: not yet specified.** The watermark representation, the catch-up
+After the compiler diffs two program versions, the structures it backfills
+must reflect every commit up to a definite point in the log with no gap and
+no duplicate, the live switch must not drop or double-apply a commit made
+during backfill, and rollback must only be offered when switching back
+cannot make a committed fact invalid. The chosen direction backfills by
+replaying the log up to a recorded snapshot watermark, applies new commits
+to both old and new structures during that catch-up phase, and switches at
+a barrier commit where both versions agree the new structures have caught
+up to the same log position as the old ones; migrations are classified as a
+*restriction* (a new, stricter bound, which requires validating every
+existing row before the switch) or a *relaxation* (for example lowering a
+`balance ≥ 0` bound), because a relaxation can let the new version commit
+facts the old invariant would have rejected. Rollback is available only for
+a defined window and only while the old structures keep receiving every
+commit — the rollback window is exactly "while the old structures are still
+maintained"; it becomes unavailable once a commit has occurred that the old
+invariant would reject, because rollback is not simply "switch back" once
+such a fact has committed, or once the old structures have been reclaimed.
+**Status: not yet specified** — the watermark representation, the catch-up
 write path, and the exact rollback-window length and reclaim trigger are
 engine-phase work.
 [F1's migration protocol](https://research.google.com/pubs/archive/41376.pdf)
 is the model to adapt for the watermark and catch-up mechanics; sharing one
 log alone does not supply them, which is why this remains an obligation and
 not an architecture decision already made.
+
+### 9.4 Checker soundness
+
+§6's certificate obligation states what a specialization must preserve; it
+does not by itself establish that the checker verifying a certificate is
+correct, and a checker bug can admit an unsound specialization that the
+certificate's own proof would not catch. The chosen direction treats the
+three detection mechanisms of §6 (simulator, reference-model diff,
+footprint-tag check) as a safety net for exactly this failure mode, never
+as the admission criterion, and keeps the checker itself a small,
+separately reviewable component rather than folding its logic into the
+compiler's general code paths. It fails if a checker bug produces a
+false-positive certificate that the detection mechanisms also fail to catch
+on the executions actually exercised. **Status: not yet specified** —
+bounding the checker's own soundness, by formal review, a restricted
+checker language, or a meta-certificate, is engine-phase work
+(`docs/verification.md` names which mechanism, if any, is chosen).
 
 ## 10. Exit door (operator ruling 15.10.2026)
 
@@ -635,12 +630,15 @@ overhead on top of it.
 
 kiln's bet dies on either of these:
 
-- **Navigational transactions dominate.** If most real transaction
-  *instances* are "read, then decide what to write based on what was read"
-  (class 4 by construction), the compiler has nothing to classify and kiln
-  degenerates into a deterministic database with an expensive compiler
-  attached — "Calvin with extra steps" — and loses on latency to a
-  conventional engine. E1 measures this directly.
+- **Navigational transactions dominate.** If most frequency-weighted
+  transaction instances fall into E1's **unknown** footprint category
+  (`docs/experiments.md`, §"E1" — not static, one-hop, or domain-bounded;
+  this is E1's own measured category, stated independently of the pairwise
+  execution classes of §3, not a restatement of class 4), the compiler has
+  nothing to classify and kiln degenerates into a deterministic database
+  with an expensive compiler attached — "Calvin with extra steps" — and
+  loses on latency to a conventional engine. E1's 70%/50% coverage
+  thresholds are exactly this kill criterion made numeric and falsifiable.
 - **Transaction summaries do not stay compact.** If the associative
   summaries class 3 needs (§3.3) grow without bound for realistic
   contended-state transaction families — or if most such families simply
@@ -694,7 +692,7 @@ claim that no such system exists anywhere.
 | Part of the thesis | Closest prior art | Where a bounded search stops | Confidence it is still open |
 |---|---|---|---|
 | Compiling a whole engine from a known workload (§1, §3) | **Bespoke OLAP** (2026) — LLM-agent pipeline synthesizing a whole OLAP engine from a workload contract; **Beta** — already compiles whole database application programs and specializes their execution ([arXiv 1807.09887](https://arxiv.org/abs/1807.09887)) | Bespoke OLAP is OLAP-only, single-threaded, in-memory, explicitly leaves transactions/concurrency as future work. Beta compiles and specializes, but the search found no certified algebra in it for parallel evaluation of guarded ACID batches — it is a closer collision for "compile a whole engine from known code" than Bespoke OLAP, not a match for kiln's class-3 bet | Medium (`prior-art-report.md`; Beta per `docs/research/ideation/codex-astra-ideation.md`) |
-| Static, build-time read/write-set derivation driving the compiled schedule (§3, §4) | **Calvin lineage** (Calvin, Bohm, Aria, Caracal) — derive footprints by declaration or by one runtime pass, never by static analysis of compiled code; **VoltDB** — abort-free, but by partitioning the schema and serializing cross-partition work through a coordinator; **IC3** (SIGMOD 2016) — pairs static workload analysis with runtime dependency tracking, reporting ~434K TPS on single-warehouse TPC-C on 64 cores ([NYU TR2016-981](https://cs.nyu.edu/media/publications/TR2016-981.pdf)) | No system in the search derives read/write sets purely as a function of a transaction's parameters, at build time, with no runtime dependency tracking; IC3 is the closest in mechanism (static analysis plus a scheduler) but refines a fixed, pre-known set of stored-procedure-like programs at runtime rather than deriving the schedule once at build time | Medium-high (`notes/static_analysis_deterministic_scheduling.md`) |
+| Static, build-time read/write-set derivation driving the compiled schedule (§3, §4) | **Amato, Giannotti & Mainetto, VLDB 1993** — abstract interpretation automatically derives an approximate read/write set from transaction source and feeds a scheduler implementing conservative two-phase locking: the closest collision in shape for §3+§4 combined, three decades before any system below ([VLDB 1993 PDF](https://www.vldb.org/conf/1993/P405.PDF)); **Calvin lineage** (Calvin, Bohm, Aria, Caracal) — derive footprints by declaration or by one runtime pass, never by static analysis of compiled code; **VoltDB** — abort-free, but by partitioning the schema and serializing cross-partition work through a coordinator; **IC3** (SIGMOD 2016) — pairs static workload analysis with runtime dependency tracking, reporting ~434K TPS on single-warehouse TPC-C on 64 cores ([NYU TR2016-981](https://cs.nyu.edu/media/publications/TR2016-981.pdf)) | Amato 1993 is a pure formal result: a correctness proof that the abstract read/write set safely over-approximates the exact one, two hand-worked examples, no analyzer or scheduler ever implemented, no benchmark, no measured analysis cost or concurrency gain. Its own closing questions — what the analysis costs, and whether the information it gathers is actually useful for realistic optimizations — are exactly what E1 measures, thirty years later; the line stopped after a 1997 follow-on and was never picked up by the Calvin/Bohm/Aria lineage. No system in the search derives read/write sets purely as a function of a transaction's parameters, at build time, with no runtime dependency tracking, *and measured on real code*; among the implemented systems, IC3 is the closest mechanism match (static analysis plus a scheduler) but refines a fixed, pre-known set of stored-procedure-like programs at runtime rather than deriving the schedule once at build time | Medium — plausible, not exhaustively proven (`notes/static_analysis_deterministic_scheduling.md`); narrowed from a higher confidence because a 1993 theoretical precedent for exactly this combination exists and was never carried to measurement |
 | Invariants replacing isolation levels (§3.2, §4) | **O'Neil's escrow method**, 1986, general database concurrency, predating geo-replication as a research focus entirely ([EscrowTM PDF](https://www.cs.umb.edu/~poneil/EscrowTM.pdf)); **Doppel**, OSDI 2014, explicitly single-node multicore contention ([Doppel PDF](https://pdos.csail.mit.edu/papers/doppel:osdi14.pdf)); Homeostasis (2015), I-confluence, IPA/Hamsaz/Katara (2015–2022); production escrow-style updates shipped in Microsoft's Extensible Storage Engine ([`JetEscrowUpdate`](https://learn.microsoft.com/en-us/windows/win32/extensible-storage-engine/jetescrowupdate-function)) | A bounded search (`notes/invariant_driven_coordination.md`) found every *fully automatic* system after Doppel confined to geo-replicated or CRDT-store settings, evaluated as research prototypes. That is narrower than "every system in this lineage targets geo-replication": the lineage's origin (O'Neil) predates geo-replication as a concern, its clearest single-node multicore precedent (Doppel) is not geo-replicated, and its one confirmed production deployment (ESE) ships in a non-replicated storage engine. What the search did not find is kiln's combination — single-node, build-time-compiled, fully automatic discovery of the reservation type — not an absence of non-geo-replicated invariant-driven coordination generally | Medium-high (`notes/invariant_driven_coordination.md`) |
 | Migration as a diff of two compiled workloads (§8, §9.3) | Schema-diff tooling (F1, CockroachDB, Atlas) and schema-less log-replay (XTDB, Datomic); Noria's "fast migrations" by reusing dataflow state | A bounded search found no source that diffs two compiled query/transaction sets to derive a migration; the schema-diff and log-replay camps were not found connected to per-query incremental materialization | Medium-high (`notes/migrations_and_combined_systems.md`) |
 
@@ -730,12 +728,19 @@ hot spot); it does not remove the *dynamic* serialization strict 2PL
 imposes once two live batches actually conflict, and this document does
 not claim otherwise.
 
-**The narrowed candidate contribution.** After the corrections above, the
-candidate contribution is **checked synthesis of compact ordered
-transaction summaries (§3.3, tested by E2 and E3) plus precisely defined
-compile-time footprint analysis and its coverage measurement (§3, tested by
-E1)** — not the full six-part combination surveyed above, and not a claim
-that invariant-driven coordination itself is novel. The two sharpest named
+**The narrowed candidate contribution.** After the corrections above, and
+against Amato, Giannotti & Mainetto's 1993 precedent for "static analysis
+plus a two-phase-locking scheduler" (above), the candidate contribution
+narrows further than "static analysis plus a lock scheduler" in general —
+that combination is three decades old. What remains is **checked synthesis
+of compact ordered transaction summaries (§3.3, tested by E2 and E3) plus
+*parametric* per-call footprint derivation, typed reservations, and ordered
+batch summaries under one logical-resource protocol, measured on real code
+rather than argued only by a correctness proof (§3, tested by E1)** — not
+the full six-part combination surveyed above, and not a claim that
+invariant-driven coordination itself is novel. Confidence in this narrowed
+claim is no higher than `notes/static_analysis_deterministic_scheduling.md`'s
+own phrase for it: plausible, not exhaustively proven. The two sharpest named
 collisions for the riskiest part of that narrowed claim (class 3, §3.3,
 E2/E3) are, in order: **TransactionMerger** (submitted January 2026), which
 already merges contended transactions and reconstructs per-caller results
@@ -757,22 +762,19 @@ serializing statically (though not dynamically, per the paragraph above).
    summary evaluation, or does holding locks through the parallel-prefix-
    scan computation reintroduce coordination the mechanism was meant to
    avoid?
-2. §6's certificate obligation states what a specialization must preserve;
-   it does not establish that the checker which verifies a certificate is
-   itself correct. Is there a cheaper way to bound the checker's own
-   soundness than the detection mechanisms §6 already names?
-3. §5's tentative/committed distinction resolves the uniqueness race named
+2. §5's tentative/committed distinction resolves the uniqueness race named
    in an earlier critique. Does the same ordering rule resolve every
    escrow and pin interaction equally, or are there reservation types where
    "wait on the tentative holder's outcome" itself needs a bound to avoid
    unbounded waiting?
-4. §9 names three obligations as engine-phase, not yet specified. Are there
+3. §9 now names four obligations as engine-phase, not yet specified
+   (including §9.4's checker-soundness bound, added this round). Are there
    others this document should flag the same way before a builder starts,
    rather than discovering them mid-build?
-5. §9.3's migration classification (restriction vs. relaxation) assumes a
+4. §9.3's migration classification (restriction vs. relaxation) assumes a
    migration can always be sorted into one of those two buckets relative to
    the old invariant. Does that hold for a migration that changes an
    invariant in a way that is incomparable — neither strictly stricter nor
    strictly looser — to the old one?
-6. Is there a cheaper experiment than E1/E2/E3 that could kill the thesis
+5. Is there a cheaper experiment than E1/E2/E3 that could kill the thesis
    faster, which this document does not name?

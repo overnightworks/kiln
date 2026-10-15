@@ -152,6 +152,13 @@ test:
   transaction function in the family;
 - every response and failure it can produce;
 - its overflow behavior at any declared numeric bound;
+- its **guard shape** — whether admission is a simple clamp or cap
+  (monotonic, composes as a bounded accumulator) or an all-or-nothing
+  threshold such as `reserve(q)` (grants every requested unit or fails
+  entirely). This is stated explicitly because the guard shape determines
+  whether the summary representation below is even attemptable: E3 §"Six
+  preregistered families" names all-or-nothing reservation as the hard case
+  a clamped summary cannot express;
 - the exact associative summary representation and the combine/apply
   operators proposed for it.
 
