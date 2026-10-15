@@ -1,0 +1,7 @@
+claim_id = "7c74aa47908f4d0380c2e04f903de493"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "e5599638071dbaa634d0db2127fa0aefb8748230"
+branch = "claude/issue-19-e4-harness"
+scope = ["experiments/e4-sqlite-cost-anatomy/harness"]
+opened_commit = "cc13c5df2c25650fe74fec299b5496ecf70843f7"
