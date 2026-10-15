@@ -1,8 +1,0 @@
-claim_id = "ebaff9fa82af4c5fba17023754384fd4"
-agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
-role = "builder"
-base = "e97b3d2f226cc1144bacaf941a11f383e231ec72"
-branch = "claude/issue-24-escrow-admission"
-scope = ["docs/concept.md", "specs/kernel"]
-opened_commit = "ae863c668aac32a4a1d50da3762ab3e7000de840"
-whole_reason = "one kernel protocol rule in the concept and its model proof"
