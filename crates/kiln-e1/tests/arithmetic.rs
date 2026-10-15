@@ -213,7 +213,7 @@ mod kiln_e1_17 {
         assert_eq!(large.checked_add(other), Err(Overflow));
         assert_eq!(large.checked_mul(other), Err(Overflow));
         assert_eq!(median(&[large, other]), Err(Overflow));
-        assert!(Overflow.to_string().contains("128 bits"));
+        assert!(Overflow.to_string().contains("exceeded 128 bits"));
     }
 
     #[test]

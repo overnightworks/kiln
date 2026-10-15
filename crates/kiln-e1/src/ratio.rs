@@ -10,7 +10,7 @@ pub struct Overflow;
 
 impl fmt::Display for Overflow {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a share needs more than 128 bits to stay exact")
+        formatter.write_str("intermediate arithmetic on a share exceeded 128 bits")
     }
 }
 
