@@ -1,0 +1,8 @@
+claim_id = "e68fb9aa17c2458cb4a347722686ab4a"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "ba063bdb43501749f4122549b96ca69ef0ddc0df"
+branch = "claude/issue-63-kernel-stale-mutants"
+scope = ["specs/README.md", "specs/kernel/mutants"]
+opened_commit = "2599cf2ab1b9d9ac43e60f664562769002b1a9e9"
+whole_reason = "three mutation patches and their README rows"
