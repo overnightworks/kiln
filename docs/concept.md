@@ -728,7 +728,8 @@ including responses that depend on a predecessor whose commit is durable
 but unacknowledged (`specs/README.md`, `Durable.tla`). Mutants (an `fsync`
 failure answered as an abort or shrinking a reservation, an acknowledgement
 before the flush, a recovery that drops a durable record, locks released
-before the flush) are each refuted. Eventual acknowledgement and eventual
+before the flush, tentative effects shown to a dependent whose record then
+survives a crash without its predecessor's) are each refuted. Eventual acknowledgement and eventual
 recovery are not proved. That is a bounded check of an
 abstract log, not of bytes, framing, checksums or a device that lies; the
 visible-version pointer (§9.1) is not covered. The exact extent size, the

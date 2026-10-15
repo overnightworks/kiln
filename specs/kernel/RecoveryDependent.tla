@@ -26,17 +26,22 @@ RecoveryDependentInitDb ==
 
 (* Witnesses. *)
 
-(* t1's record was durable and its caller unacknowledged when the engine
-   crashed; after recovery t2 committed and was told t1's row: its
-   response depends on a commit nobody confirmed. *)
+(* t1's flush completed and its caller was not told when the engine
+   crashed. t2 had run on t1's committed row, and its record reached
+   storage in the crash: recovery serves both as committed, answers both
+   `unknown`, and t2's response depends on a commit nobody confirmed. *)
 RecoveryDependentSeesUnackedUnreached ==
   ~(failuresUsed >= 1 /\ answer["t1"] = "unknown" /\ status["t1"] = "committed"
     /\ status["t2"] = "committed" /\ resp["t2"][1].val = 5)
 
-(* t1's record was lost with the crash; after recovery t2 committed and
-   was told the initial row: it never saw t1's discarded effects. *)
+(* t1 had run its update (told the initial row, a tentative effect
+   complete) and its caller was not told when the crash discarded it; t2,
+   not yet requested, then ran on the recovered state, was told the
+   initial row and committed. t1's response being the initial row shows
+   it ran before t2's commit, so t2 started after the discard. *)
 RecoveryDependentIgnoresLostUnreached ==
-  ~(failuresUsed >= 1 /\ status["t1"] = "aborted"
+  ~(failuresUsed >= 1 /\ status["t1"] = "aborted" /\ answer["t1"] = "unknown"
+    /\ Len(resp["t1"]) = 1 /\ resp["t1"][1].val = 0
     /\ status["t2"] = "committed" /\ resp["t2"][1].val = 0
     /\ db[1].val = 6)
 

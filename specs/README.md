@@ -446,12 +446,12 @@ assert membership.
 | `RecoveryResolvedCommittedUnreached` | an fsync failure, then recovery: t1's unknown outcome resolved to committed, its record had reached storage | 7 |
 | `RecoveryResolvedAbortedUnreached` | an fsync failure, then recovery: t1's unknown outcome resolved to aborted, its record had not | 7 |
 | `RecoveryEscrowFencedUnreached` | the engine is fenced with both outcomes unknown; t1 holds a reservation of 2 against a draw of 1, t2 a reservation of 0 after a skipped branch | 11 |
-| `RecoveryDependentSeesUnackedUnreached` | t1 durable and unacknowledged (`unknown`) after a failure; t2 committed and was told the row t1 wrote | 12 |
-| `RecoveryDependentIgnoresLostUnreached` | t1's record was lost (`aborted`); t2 committed and was told the initial row | 8 |
+| `RecoveryDependentSeesUnackedUnreached` | t1's flush completed and its caller was not told when the engine crashed; t2 read t1's committed row and its record reached storage in the crash; recovery serves both as committed and answers both `unknown`; t2 was told the row t1 wrote | 12 |
+| `RecoveryDependentIgnoresLostUnreached` | t1 ran its update and was told the initial row, then the crash discarded it before any flush (`aborted`, answered `unknown`); t2, not yet requested, ran on the recovered state, was told the initial row and committed | 11 |
 
 ## Mutants (specs/kernel/mutants/)
 
-Each mutant is a patch against `Kernel.tla` or `Durable.tla` that removes one named guard;
+Each mutant is a patch against `Kernel.tla` and `Durable.tla` that removes one named guard or adds one named fault;
 `run.sh` applies it to a temporary copy and checks exactly one property
 under the scenario's own constants.
 TLC refutes every one; the log is `<Mutant>.<Scenario>.<Property>.tlc.log`.
@@ -491,11 +491,22 @@ lengths below are the states of the committed logs.
 | `FsyncFailureAsAbort` | `Recovery` | `KnownAbortNotInLog` (the record had reached storage: recovery finds it for a transaction told `aborted`) | 6 |
 | `FsyncFailureAsAbort` | `Recovery` | `UnknownKeepsReservations` (the footprint is released while the outcome is unknown) | 6 |
 | `FsyncFailureShrinksReservation` — an fsync failure releases one unit of any reservation above 1 and keeps the rest | `RecoveryEscrow` | `UnknownKeepsReservations` (t1's reservation falls from 2 to 1, still positive: only the exact comparison sees it) | 7 |
-| `ReleaseAtEnqueue` — a transaction releases its footprint and reservations when its record enters the tail, before the flush | `RecoveryDependent` | `Serializable` (t2 passes t1's lock and is told the initial row although t1's record precedes its own in the log; no serial order yields both responses) | 11 |
+| `ReleaseAtEnqueue` — a transaction releases its footprint and reservations when its record enters the tail, before the flush (premature release, not exposure: the dependent runs on the initial row) | `RecoveryDependent` | `Serializable` (t2 passes t1's lock and is told the initial row although t1's record precedes its own in the log; no serial order yields both responses) | 11 |
+| `ExposeBeforeDurable` — a transaction that has run its program shows its tentative rows to others and releases its footprint to them, before its record is enqueued or durable; a dependent's flush waits for the transactions it read from, but its record may enter the tail first and reach storage in a crash | `RecoveryDependent` | `Serializable` (t1 has updated and is not enqueued; t2 admitted past it is told t1's row 5 and enqueues; the crash persists t2's record alone, recovery commits t2 and discards t1: no serial order of the committed t2 yields the row 5) | 10 |
 | `AckBeforeDurable` — the caller is acknowledged when the record is appended, before the flush | `Recovery` | `AcknowledgedSurvive` (t1 answered `committed`, its record in no log) | 5 |
 | `RecoverSkipsTail` — recovery drops the last durable record | `Recovery` | `AcknowledgedSurvive` (an acknowledged commit missing after recovery) | 9 |
 | `RecoverSkipsTail` | `Recovery` | `RecoveredPrefix` (the served history is shorter than the log) | 7 |
 | `RecoverSkipsTail` | `Recovery` | `Serializable` (a committed transaction's effects are missing from the recovered state) | 8 |
+
+`ExposeBeforeDurable` fails only through a failure: with `Failures = 0` the
+same mutant passes `Serializable`, because a dependent's flush waits for
+what it read. The crash is where a response justified by a tentative
+effect is lost with it. A *rejection* resting on a tentative effect needs no
+crash: it is final when told, and `ClaimLoserTrustsTentativeHolder` refutes
+it as soon as it is told. The repair is to expose nothing before the
+durable commit: a dependent that must run on a tentative effect would need
+its record to follow its predecessor's in the log, and a rejection would
+wait for committed state.
 
 `TypeOK` has no mutant: it is a typing check with no protocol content.
 
