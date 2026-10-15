@@ -432,7 +432,7 @@ mod tests {
             comparison: CellComparison::Judged {
                 pairs: vec![ComparisonPair {
                     pair_index: 1,
-                    first_build: crate::comparison::Build::Instrumented,
+                    first_build: crate::builds::Build::Instrumented,
                     operations_measured: 2000,
                     instrumented_mean_wall_ns: 1000.0 * (1.0 + ratio),
                     passthrough_mean_wall_ns: 1000.0,

@@ -12,11 +12,13 @@
 
 pub mod admission;
 pub mod affinity;
+pub mod builds;
 pub mod comparison;
 pub mod driver;
 pub mod generators;
 pub mod interference;
 pub mod machine;
+pub mod manifest;
 pub mod monitor;
 pub mod pilot;
 pub mod preflight;

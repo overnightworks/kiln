@@ -3,10 +3,10 @@
 # run: builds nothing — both release binaries (instrumented and
 # passthrough) must already exist at the given paths — takes the shared
 # probe-stack lock (waiting for it, never skipping the proof), runs
-# preflight against the instrumented binary, and then runs the pilot
-# (which gates every comparison attempt against the interference monitor
-# itself, see harness/src/comparison.rs) against the manifest preflight
-# just wrote. Outputs land under
+# preflight from the instrumented binary (it records the source commit and
+# both binaries' hashes in the manifest), and then runs the pilot (which
+# gates every comparison attempt against the interference monitor, see
+# harness/src/pilot_run.rs) against the manifest preflight just wrote. Outputs land under
 # experiments/e4-sqlite-cost-anatomy/pilot/<UTC timestamp>.<unique suffix>/,
 # a directory created for this run alone so a night never overwrites or
 # reuses the last one's record.
@@ -84,7 +84,7 @@ mkdir -p "$output_root"
 output_dir="$(mktemp -d "$output_root/$timestamp.XXXXXX")"
 
 manifest_path="$output_dir/manifest.txt"
-if ! "$instrumented_binary" preflight "$manifest_path"; then
+if ! "$instrumented_binary" preflight "$manifest_path" "$passthrough_binary"; then
   echo "run-pilot-night.sh: preflight failed against '$instrumented_binary'; no pilot run started (see output above)" >&2
   exit 1
 fi

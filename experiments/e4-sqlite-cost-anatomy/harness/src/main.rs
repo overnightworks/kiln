@@ -3,10 +3,12 @@
 //! (the feasibility pilot, protocol.md §13), wired to the real run driver
 //! for its repeated comparisons.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use kiln_e4_harness::comparison::{self, Build};
+use kiln_e4_harness::builds::BuildReport;
+use kiln_e4_harness::comparison;
+use kiln_e4_harness::manifest;
 use kiln_e4_harness::pilot::{self, MonitorCoverageRow, PerfStatus, PilotReport};
 use kiln_e4_harness::preflight::{self, CheckResult};
 use kiln_e4_harness::{admission, affinity, driver, interference, machine, monitor};
@@ -17,10 +19,7 @@ fn main() {
         Some("preflight") => run_preflight(&args[2..]),
         Some("measure-cell") => run_measure_cell(&args[2..]),
         Some("monitor-sample") => run_monitor_sample(),
-        Some("build-role") => println!(
-            "{}",
-            admission::render_build_role_line(Build::of_this_binary())
-        ),
+        Some("build-role") => println!("{}", BuildReport::of_this_binary().render_line()),
         Some("pilot") => run_pilot(&args[2..]),
         _ => {
             eprintln!(
@@ -32,6 +31,18 @@ fn main() {
 }
 
 fn run_preflight(args: &[String]) {
+    let manifest_target = match args {
+        [] => None,
+        [manifest_path, passthrough_binary] => Some((
+            PathBuf::from(manifest_path),
+            PathBuf::from(passthrough_binary),
+        )),
+        _ => {
+            eprintln!("usage: kiln-e4-harness preflight [<manifest-path> <passthrough-binary>]");
+            std::process::exit(2);
+        }
+    };
+
     let report = preflight::run_real();
 
     for (name, check) in [
@@ -40,6 +51,7 @@ fn run_preflight(args: &[String]) {
         ("build environment", &report.build_env),
         ("CPU siblings", &report.cpu_siblings),
         ("shim VFS", &report.shim_vfs),
+        ("source commit", &report.source_commit),
     ] {
         match check {
             CheckResult::Pass => println!("PASS  {name}"),
@@ -52,26 +64,32 @@ fn run_preflight(args: &[String]) {
         std::process::exit(1);
     }
 
-    if let Some(manifest_path) = args.first() {
-        match preflight::build_manifest() {
-            Ok(manifest) => {
-                if let Err(err) =
-                    preflight::write_manifest(&PathBuf::from(manifest_path), &manifest)
-                {
-                    eprintln!("could not write manifest to {manifest_path}: {err}");
-                    std::process::exit(1);
-                }
-                println!(
-                    "manifest written to {manifest_path} (binary sha256: {})",
-                    manifest.binary_sha256
-                );
-            }
-            Err(err) => {
-                eprintln!("could not build manifest: {err}");
-                std::process::exit(1);
-            }
-        }
+    if let Some((manifest_path, passthrough_binary)) = manifest_target {
+        write_preflight_manifest(&manifest_path, &passthrough_binary);
     }
+}
+
+fn write_preflight_manifest(manifest_path: &Path, passthrough_binary: &Path) {
+    let manifest = std::env::current_exe()
+        .and_then(|instrumented| preflight::build_manifest(&instrumented, passthrough_binary))
+        .unwrap_or_else(|err| {
+            eprintln!("could not build manifest: {err}");
+            std::process::exit(1);
+        });
+    if let Err(err) = manifest::write_manifest(manifest_path, &manifest) {
+        eprintln!(
+            "could not write manifest to {}: {err}",
+            manifest_path.display()
+        );
+        std::process::exit(1);
+    }
+    println!(
+        "manifest written to {} (source commit {}, instrumented sha256 {}, passthrough sha256 {})",
+        manifest_path.display(),
+        manifest.source_commit,
+        manifest.binary_sha256,
+        manifest.passthrough_binary_sha256
+    );
 }
 
 /// `measure-cell <workload> <warmup> <operations> <seed>`: pins itself to

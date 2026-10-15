@@ -139,6 +139,7 @@ else
 fi
 
 pilot_call="$(cat "$work_dir/calls"/pilot-* 2>/dev/null || true)"
+preflight_call="$(cat "$work_dir/calls"/preflight-* 2>/dev/null || true)"
 run_dirs=("$output_root"/*/)
 if [[ ${#run_dirs[@]} -eq 1 && -d "${run_dirs[0]}" ]]; then
   pass "exactly one timestamped output directory was created"
@@ -153,6 +154,12 @@ if [[ "$pilot_call" == *"--output-dir $run_dir"* \
   pass "the pilot is called with its output directory, passthrough binary and preflight manifest"
 else
   fail "the pilot was not called with the expected arguments: $pilot_call"
+fi
+
+if [[ "$preflight_call" == *"$passthrough"* ]]; then
+  pass "preflight is handed the passthrough binary to record in the manifest"
+else
+  fail "preflight was not handed the passthrough binary: $preflight_call"
 fi
 
 # --- a run never reuses an earlier run's directory ---------------------

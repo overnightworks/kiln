@@ -24,9 +24,9 @@ in its check names. One criterion per module; several tests may share it.
 
 ## Preflight and passthrough build
 
-- [KILN-E4-09] The preflight manifest records the binary's SHA-256, the `rustc` version and the SQLite version; a later run compares its own binary hash with the manifest and fails closed on a mismatch or an unreadable manifest, and the pilot is such a run: it starts only when its instrumented binary's hash is the manifest's (§12, §13).
+- [KILN-E4-09] The preflight manifest records the source commit, the SHA-256 of both builds (the instrumented one preflight ran from and the passthrough one handed to it), the `rustc` version and the SQLite version, and preflight itself fails for a binary built outside a git checkout or from uncommitted changes; a later run compares its binaries with the manifest and fails closed on any mismatch or an unreadable or incomplete manifest, and the pilot is such a run: it starts only when both measured binaries have the manifest's hashes and were compiled from its commit, so a replaced or stale instrumented or passthrough binary is refused (§12, §13).
 - [KILN-E4-10] The passthrough build commits through the same shim path as the instrumented build but records no `xWrite` or `xSync` time, while the instrumented build records both (§5).
-- [KILN-E4-20] Each binary reports which build it is through `build-role`; the pilot starts only when the instrumented binary reports the instrumented build and the passthrough binary reports the passthrough build, so the same build given twice, the two swapped, or a binary that cannot report its role is refused (§5).
+- [KILN-E4-20] Each binary reports which build it is and which source commit it was compiled from through `build-role`; preflight records a manifest only for an instrumented and a passthrough build of one commit, and the pilot starts only when the instrumented binary reports the instrumented build and the passthrough binary the passthrough build, so the same build given twice, the two swapped, a build of another commit or a binary that cannot report its role is refused (§5, §12).
 
 ## Feasibility pilot
 

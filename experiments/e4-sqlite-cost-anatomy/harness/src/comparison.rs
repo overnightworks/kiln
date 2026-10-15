@@ -15,6 +15,7 @@ use std::io;
 use std::path::Path;
 use std::time::Instant;
 
+use crate::builds::Build;
 use crate::driver::{self, AttemptOutcome, OperationPlan};
 use crate::generators;
 use crate::machine;
@@ -24,46 +25,6 @@ use crate::pilot::{PilotWorkload, run_measure_cell_child};
 /// build's mean per-operation wall time must not exceed the passthrough
 /// build's by more than this fraction.
 pub const OVERHEAD_BOUND: f64 = 0.02;
-
-/// The two builds a pair compares (protocol §5).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Build {
-    Instrumented,
-    Passthrough,
-}
-
-impl Build {
-    pub fn label(self) -> &'static str {
-        match self {
-            Build::Instrumented => "instrumented",
-            Build::Passthrough => "passthrough",
-        }
-    }
-
-    pub fn parse(label: &str) -> Option<Build> {
-        [Build::Instrumented, Build::Passthrough]
-            .into_iter()
-            .find(|build| build.label() == label)
-    }
-
-    /// The role this very binary was compiled for: the `passthrough_shim`
-    /// feature (see `Cargo.toml`) selects the build protocol §5's overhead
-    /// bound compares against.
-    pub fn of_this_binary() -> Build {
-        if cfg!(feature = "passthrough_shim") {
-            Build::Passthrough
-        } else {
-            Build::Instrumented
-        }
-    }
-
-    fn other(self) -> Build {
-        match self {
-            Build::Instrumented => Build::Passthrough,
-            Build::Passthrough => Build::Instrumented,
-        }
-    }
-}
 
 /// Protocol §5's frozen counterbalanced order, fixed per pair index in
 /// advance: pair `k` (1-based) runs the instrumented build first when `k`

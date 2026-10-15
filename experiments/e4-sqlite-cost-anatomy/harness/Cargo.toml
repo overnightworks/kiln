@@ -3,6 +3,7 @@ name = "kiln-e4-harness"
 version = "0.1.0"
 edition = "2024"
 publish = false
+build = "build.rs"
 
 # Its own, empty workspace table: this crate is not a member of any root
 # workspace (protocol.md §12, issue #19).

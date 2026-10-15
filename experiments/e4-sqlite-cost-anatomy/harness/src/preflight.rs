@@ -12,9 +12,10 @@ use std::path::Path;
 use std::process::Command;
 
 use libsqlite3_sys as ffi;
-use sha2::{Digest, Sha256};
 
+use crate::builds::BuildEvidence;
 use crate::machine;
+use crate::manifest::Manifest;
 
 /// One check's outcome.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +39,7 @@ pub struct PreflightReport {
     pub build_env: CheckResult,
     pub cpu_siblings: CheckResult,
     pub shim_vfs: CheckResult,
+    pub source_commit: CheckResult,
 }
 
 impl PreflightReport {
@@ -49,6 +51,7 @@ impl PreflightReport {
             &self.build_env,
             &self.cpu_siblings,
             &self.shim_vfs,
+            &self.source_commit,
         ]
         .iter()
         .all(|c| c.is_pass())
@@ -173,97 +176,18 @@ pub fn check_shim_vfs(install_result: Result<(), String>, is_registered: bool) -
     }
 }
 
-/// SHA-256 of a file's bytes, as a lowercase hex string (protocol §12:
-/// "Preflight hashes the harness binary... into the manifest; the
-/// result-bearing run re-hashes and fails closed on a mismatch").
-pub fn hash_file(path: &Path) -> io::Result<String> {
-    let bytes = fs::read(path)?;
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect())
-}
-
-/// SHA-256 of the currently running binary's own bytes.
-pub fn hash_current_binary() -> io::Result<String> {
-    hash_file(&std::env::current_exe()?)
-}
-
-/// The preflight manifest (protocol §12): "Preflight hashes the harness
-/// binary (SHA-256) into the manifest; the result-bearing run re-hashes
-/// and fails closed on a mismatch — preflight's build must be the exact
-/// bytes producing the result, not a rebuild in between."
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Manifest {
-    pub binary_sha256: String,
-    pub rustc_version_output: String,
-    pub sqlite_version: String,
-}
-
-impl Manifest {
-    /// Renders the manifest as simple `key = value` lines — the same
-    /// hand-rolled format `rust-toolchain.toml` already uses here (see
-    /// [`pinned_toolchain_channel`]), so one small, stable record pulls in
-    /// no serialization dependency.
-    pub fn render(&self) -> String {
-        format!(
-            "binary_sha256 = \"{}\"\nrustc_version = \"{}\"\nsqlite_version = \"{}\"\n",
-            self.binary_sha256,
-            self.rustc_version_output.trim(),
-            self.sqlite_version,
-        )
+/// The binary must come from a known, committed state of the source: a
+/// result needs a commit it can be reproduced from (protocol §12).
+pub fn check_source_commit(commit: &str) -> CheckResult {
+    if commit == "unknown" {
+        CheckResult::Fail("this binary was built outside a git checkout".to_string())
+    } else if commit.ends_with("-dirty") {
+        CheckResult::Fail(format!(
+            "this binary was built from uncommitted changes on top of {commit}"
+        ))
+    } else {
+        CheckResult::Pass
     }
-}
-
-/// Reads one quoted `key = "value"` line's value out of a rendered
-/// manifest. Shared by every manifest field reader so each one stays a
-/// one-line call instead of repeating the same quote-stripping.
-fn read_quoted_field(manifest_contents: &str, key: &str) -> Option<String> {
-    manifest_contents.lines().find_map(|line| {
-        let rest = line.trim().strip_prefix(key)?;
-        let rest = rest.trim_start().strip_prefix('=')?.trim();
-        let value = rest.strip_prefix('"')?.strip_suffix('"')?;
-        Some(value.to_string())
-    })
-}
-
-/// Reads a rendered manifest's `binary_sha256` field back out.
-pub fn read_binary_sha256(manifest_contents: &str) -> Option<String> {
-    read_quoted_field(manifest_contents, "binary_sha256")
-}
-
-/// Whether the manifest's recorded binary hash still matches the hash of
-/// the binary running right now (protocol §12's re-hash-and-fail-closed
-/// rule, also reused by §13's amendment delta check).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BinaryHashCheck {
-    Match,
-    Mismatch { manifest: String, current: String },
-    ManifestUnreadable,
-}
-
-/// Checks a freshly computed binary hash against a manifest's recorded
-/// one. Pure: both hashes are already-collected evidence, so the decision
-/// is tested without hashing a real file.
-pub fn check_binary_hash(manifest_contents: &str, current_hash: &str) -> BinaryHashCheck {
-    match read_binary_sha256(manifest_contents) {
-        Some(manifest_hash) if manifest_hash == current_hash => BinaryHashCheck::Match,
-        Some(manifest_hash) => BinaryHashCheck::Mismatch {
-            manifest: manifest_hash,
-            current: current_hash.to_string(),
-        },
-        None => BinaryHashCheck::ManifestUnreadable,
-    }
-}
-
-/// Writes the manifest to `path`. The thin, untested adapter — exactly
-/// like [`run_real`] is for the checks themselves: [`Manifest::render`],
-/// [`read_binary_sha256`], and [`check_binary_hash`] carry the logic.
-pub fn write_manifest(path: &Path, manifest: &Manifest) -> io::Result<()> {
-    fs::write(path, manifest.render())
 }
 
 fn pinned_toolchain_channel(repo_root: &Path) -> io::Result<String> {
@@ -344,16 +268,23 @@ pub fn run_real() -> PreflightReport {
         build_env,
         cpu_siblings,
         shim_vfs,
+        source_commit: check_source_commit(crate::builds::SOURCE_COMMIT),
     }
 }
 
-/// Builds the real manifest (protocol §12): the currently running
-/// binary's own SHA-256, `rustc --version`'s raw output, and
+/// Builds the real manifest (protocol §12): the source commit and the
+/// SHA-256 of the instrumented binary and of the passthrough binary it
+/// will be compared with, `rustc --version`'s raw output, and
 /// `sqlite3_libversion()`. Called only once every preflight check has
 /// passed — a manifest recording a binary preflight has already rejected
-/// is not the record §12 means.
-pub fn build_manifest() -> io::Result<Manifest> {
-    let binary_sha256 = hash_current_binary()?;
+/// is not the record §12 means. Refuses a passthrough binary that is not
+/// the passthrough build of this very commit.
+pub fn build_manifest(
+    instrumented_binary: &Path,
+    passthrough_binary: &Path,
+) -> io::Result<Manifest> {
+    let instrumented = BuildEvidence::collect(instrumented_binary)?;
+    let passthrough = BuildEvidence::collect(passthrough_binary)?;
     let rustc_version_output =
         String::from_utf8_lossy(&Command::new("rustc").arg("--version").output()?.stdout)
             .into_owned();
@@ -363,11 +294,13 @@ pub fn build_manifest() -> io::Result<Manifest> {
             .unwrap_or_default()
             .to_string()
     };
-    Ok(Manifest {
-        binary_sha256,
+    Manifest::record(
+        &instrumented,
+        &passthrough,
         rustc_version_output,
         sqlite_version,
-    })
+    )
+    .map_err(io::Error::other)
 }
 
 #[cfg(test)]
@@ -464,19 +397,6 @@ mod tests {
     }
 
     #[test]
-    fn hash_file_is_deterministic_and_sensitive_to_content() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let a = dir.path().join("a.bin");
-        let b = dir.path().join("b.bin");
-        fs::write(&a, b"same bytes").unwrap();
-        fs::write(&b, b"same bytes").unwrap();
-        assert_eq!(hash_file(&a).unwrap(), hash_file(&b).unwrap());
-
-        fs::write(&b, b"different bytes").unwrap();
-        assert_ne!(hash_file(&a).unwrap(), hash_file(&b).unwrap());
-    }
-
-    #[test]
     fn report_fails_closed_if_any_check_fails() {
         let report = PreflightReport {
             rustc_version: CheckResult::Pass,
@@ -484,6 +404,7 @@ mod tests {
             build_env: CheckResult::Pass,
             cpu_siblings: CheckResult::Pass,
             shim_vfs: CheckResult::Fail("not registered".into()),
+            source_commit: CheckResult::Pass,
         };
         assert!(!report.all_passed());
     }
@@ -536,6 +457,7 @@ mod tests {
                 Err(io::Error::new(io::ErrorKind::NotFound, "no such path"))
             }),
             shim_vfs: check_shim_vfs(Ok(()), true),
+            source_commit: CheckResult::Pass,
         };
         assert!(!report.rustc_version.is_pass());
         assert!(!report.cpu_siblings.is_pass());
@@ -552,6 +474,7 @@ mod tests {
             build_env: CheckResult::Pass,
             cpu_siblings: CheckResult::Pass,
             shim_vfs: CheckResult::Pass,
+            source_commit: CheckResult::Pass,
         };
         assert!(report.all_passed());
     }
@@ -560,80 +483,11 @@ mod tests {
         use super::*;
 
         #[test]
-        fn manifest_render_round_trips_through_read_binary_sha256() {
-            let manifest = Manifest {
-                binary_sha256: "deadbeef".repeat(8),
-                rustc_version_output: "rustc 1.99.1 (58cf8f9c3 2026-10-13)\n".to_string(),
-                sqlite_version: "3.53.2".to_string(),
-            };
-            let rendered = manifest.render();
-            assert_eq!(read_binary_sha256(&rendered), Some(manifest.binary_sha256));
-        }
-
-        #[test]
-        fn read_binary_sha256_is_none_for_a_manifest_missing_the_field() {
-            assert_eq!(read_binary_sha256("rustc_version = \"1.99.1\"\n"), None);
-        }
-
-        #[test]
-        fn check_binary_hash_matches_when_the_rendered_manifest_agrees() {
-            let manifest = Manifest {
-                binary_sha256: "abc123".to_string(),
-                rustc_version_output: "rustc 1.99.1".to_string(),
-                sqlite_version: "3.53.2".to_string(),
-            };
-            let rendered = manifest.render();
-            assert_eq!(
-                check_binary_hash(&rendered, "abc123"),
-                BinaryHashCheck::Match
-            );
-        }
-
-        #[test]
-        fn check_binary_hash_reports_a_mismatch_against_a_rebuilt_binary() {
-            let manifest = Manifest {
-                binary_sha256: "original-hash".to_string(),
-                rustc_version_output: "rustc 1.99.1".to_string(),
-                sqlite_version: "3.53.2".to_string(),
-            };
-            let rendered = manifest.render();
-            assert_eq!(
-                check_binary_hash(&rendered, "rebuilt-hash"),
-                BinaryHashCheck::Mismatch {
-                    manifest: "original-hash".to_string(),
-                    current: "rebuilt-hash".to_string(),
-                }
-            );
-        }
-
-        #[test]
-        fn check_binary_hash_fails_closed_on_an_unreadable_manifest() {
-            assert_eq!(
-                check_binary_hash("not a manifest at all", "any-hash"),
-                BinaryHashCheck::ManifestUnreadable
-            );
-        }
-
-        #[test]
-        fn write_manifest_writes_a_file_read_binary_sha256_can_read_back() {
-            let dir = tempfile::tempdir().expect("tempdir");
-            let path = dir.path().join("manifest.txt");
-            let manifest = Manifest {
-                binary_sha256: "0123456789abcdef".to_string(),
-                rustc_version_output: "rustc 1.99.1".to_string(),
-                sqlite_version: "3.53.2".to_string(),
-            };
-            write_manifest(&path, &manifest).unwrap();
-            let contents = fs::read_to_string(&path).unwrap();
-            assert_eq!(read_binary_sha256(&contents), Some(manifest.binary_sha256));
-        }
-
-        #[test]
-        fn build_manifest_reports_the_current_binarys_own_hash() {
-            let manifest = build_manifest().expect("build_manifest against the real environment");
-            let expected = hash_current_binary().expect("hash the current binary directly");
-            assert_eq!(manifest.binary_sha256, expected);
-            assert_eq!(manifest.sqlite_version, machine::PINNED_SQLITE_VERSION);
+        fn source_commit_passes_only_for_a_committed_known_state() {
+            assert_eq!(check_source_commit(&"a".repeat(40)), CheckResult::Pass);
+            for refused in ["unknown", &format!("{}-dirty", "a".repeat(40))] {
+                assert!(!check_source_commit(refused).is_pass(), "{refused}");
+            }
         }
     }
 }
