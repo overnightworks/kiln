@@ -1,0 +1,8 @@
+claim_id = "e85f614168bf445a8d3b1435259093a8"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "b0bc18b6c9ea1a9309586e636f0b844b1dc6eba6"
+branch = "claude/issue-28-e4-driver-pilot"
+scope = ["experiments/e4-sqlite-cost-anatomy"]
+opened_commit = "4bf0d84572917912ddeea0cd9aabe0ec37698e6e"
+whole_reason = "one experiment's driver, pilot output and amendment log under its own directory"
