@@ -247,7 +247,7 @@ pub fn coverage_ratio(actual: usize, expected: usize) -> f64 {
 /// mechanism: an in-process thread inherits whatever CPU the pilot
 /// itself runs on, so it cannot stand in for a genuinely separate,
 /// independently pinned monitor process. Every attempt's actual
-/// interference gate is [`crate::run::sample_interference`], a real
+/// interference gate is [`crate::interference::sample_interference`], a real
 /// `monitor-sample` child process pinned to the complement of
 /// `{PINNED_CPU, SIBLING_CPU}` (protocol §9), called from
 /// [`run_pilot_comparisons`].

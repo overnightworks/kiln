@@ -20,7 +20,7 @@ in its check names. One criterion per module; several tests may share it.
 - [KILN-E4-06] An attempt is accepted when its monitor window shows no CPU 8 activity, at most 1 ms of CPU 2 scheduler wait and a 1-minute load below 18, and otherwise rejected with a reason naming the violated limit (§9).
 - [KILN-E4-07] Every repetition and every comparison attempt runs as its own child process pinned to CPU 2, sampled by a separate monitor process pinned to the CPUs outside {2, 8}; a child that cannot be started or exits unsuccessfully is an error (§9).
 - [KILN-E4-08] A repetition's measurement and a monitor sample cross the process boundary as one line each and read back exactly; a line missing a field is rejected rather than defaulted.
-- [KILN-E4-18] Workloads, sizes and `synchronous` settings are selected on the command line by their documented spellings, and an unknown spelling is rejected.
+- [KILN-E4-18] The measurement child selects its workload by the documented spelling (`point-read`, `point-update`), and an unknown spelling is rejected.
 
 ## Preflight and passthrough build
 

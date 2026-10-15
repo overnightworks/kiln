@@ -297,7 +297,7 @@ fn run_gated_pair_attempt(
     operations: usize,
     seed: u64,
 ) -> AttemptOutcome<ComparisonMeasurement> {
-    let start = match crate::run::sample_interference(binaries.instrumented) {
+    let start = match crate::interference::sample_interference(binaries.instrumented) {
         Ok(sample) => sample,
         Err(err) => {
             return AttemptOutcome::Rejected(format!(
@@ -313,7 +313,7 @@ fn run_gated_pair_attempt(
     let first_mean = measure(first);
     let second_mean = measure(first.other());
     let elapsed = window_start.elapsed();
-    let end = match crate::run::sample_interference(binaries.instrumented) {
+    let end = match crate::interference::sample_interference(binaries.instrumented) {
         Ok(sample) => sample,
         Err(err) => {
             return AttemptOutcome::Rejected(format!(
@@ -321,7 +321,7 @@ fn run_gated_pair_attempt(
             ));
         }
     };
-    if let Some(reason) = crate::run::judge_attempt(&start, &end, elapsed) {
+    if let Some(reason) = crate::interference::judge_attempt(&start, &end, elapsed) {
         return AttemptOutcome::Rejected(reason);
     }
     match (first_mean, second_mean) {
