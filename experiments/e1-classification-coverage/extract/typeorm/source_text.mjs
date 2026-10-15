@@ -27,7 +27,8 @@ export class SourceText {
     this.sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
     this.text = text;
     this.lineStarts = this.sourceFile.getLineStarts();
-    this.calls = collectCalls(this.sourceFile);
+    this.calls = collect(this.sourceFile, ts.isCallExpression);
+    this.classMethods = collect(this.sourceFile, isClassMethod);
   }
 
   /** Offset of a validated position: the line exists and the column lies inside the line (a span's end may sit at its end). */
@@ -51,11 +52,15 @@ export class SourceText {
 
   /** Every call written exactly over the reported span with the reported name. */
   callsReportedAt(located, method) {
-    const start = this.offsetAt(located.start);
-    const end = this.offsetAt(located.end, { endOfSpan: true });
+    const { start, end } = this.spanOf(located);
     return this.calls.filter(
       (call) => call.getStart(this.sourceFile) === start && call.getEnd() === end && calledMethodName(call) === method,
     );
+  }
+
+  /** Offsets of a reported span; positions outside the source text fail loudly. */
+  spanOf(located) {
+    return { start: this.offsetAt(located.start), end: this.offsetAt(located.end, { endOfSpan: true }) };
   }
 
   /** The one call the analyzer reported by its span and called name. */
@@ -73,12 +78,18 @@ export class SourceText {
   }
 }
 
-function collectCalls(sourceFile) {
-  const calls = [];
+/** What the analyzer calls a `MethodDefinition`: a method, constructor or accessor of a class. */
+function isClassMethod(node) {
+  const isMember = ts.isMethodDeclaration(node) || ts.isConstructorDeclaration(node) || ts.isGetAccessor(node) || ts.isSetAccessor(node);
+  return isMember && ts.isClassLike(node.parent);
+}
+
+function collect(sourceFile, accepts) {
+  const nodes = [];
   const visit = (node) => {
-    if (ts.isCallExpression(node)) calls.push(node);
+    if (accepts(node)) nodes.push(node);
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
-  return calls;
+  return nodes;
 }

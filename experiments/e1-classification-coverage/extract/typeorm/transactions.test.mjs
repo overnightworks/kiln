@@ -192,3 +192,91 @@ test("KILN-E1TO-11 a helper's own site is its own unit while a function defined 
     ["S2", 6, ["id"], [8]],
   ]);
 });
+
+const NESTED_STARTS = `\
+async function outer(a) {
+  await qr.startTransaction();
+  await qr.manager.save(a);
+  await qr.startTransaction();
+  await qr.manager.insert(a);
+  await qr.commitTransaction();
+  await qr.manager.delete(a);
+  await qr.commitTransaction();
+}
+`;
+
+test("KILN-E1TO-10 a start written inside an open transaction of the same receiver nests and the outermost owns every site", () => {
+  const messages = [
+    marker(NESTED_STARTS, "qr.startTransaction()", "startTransaction"),
+    marker(NESTED_STARTS, "qr.startTransaction()", "startTransaction", { occurrence: 2 }),
+    site(NESTED_STARTS, "qr.manager.save(a)", "save", { methodType: "write" }),
+    site(NESTED_STARTS, "qr.manager.insert(a)", "insert", { methodType: "write" }),
+    site(NESTED_STARTS, "qr.manager.delete(a)", "delete", { methodType: "write" }),
+  ];
+  assert.deepEqual(unitsOf(NESTED_STARTS, messages).map(shape), [["S2", 2, ["a"], [3, 5, 7]]]);
+});
+
+test("KILN-E1TO-10 sequential transactions of one receiver stay separate units", () => {
+  const messages = [
+    marker(TWO_STARTS, "qr.startTransaction()", "startTransaction"),
+    marker(TWO_STARTS, "qr.startTransaction()", "startTransaction", { occurrence: 2 }),
+    site(TWO_STARTS, "qr.manager.save(a)", "save", { methodType: "write" }),
+    site(TWO_STARTS, "qr.manager.save(a)", "save", { methodType: "write", occurrence: 2 }),
+  ];
+  assert.deepEqual(unitsOf(TWO_STARTS, messages).map(shape), [
+    ["S2", 2, ["a"], [3]],
+    ["S2", 6, ["a"], [7]],
+  ]);
+});
+
+test("KILN-E1TO-10 a commit and a rollback after a closed transaction still belong to it, up to the next start", () => {
+  const messages = [
+    marker(START_COMMIT, "queryRunner.startTransaction()", "startTransaction"),
+    site(START_COMMIT, "queryRunner.manager.insert(Rec, item)", "insert", { methodType: "write" }),
+    site(START_COMMIT, "audit.save(items)", "save", { methodType: "write" }),
+  ];
+  assert.deepEqual(unitsOf(START_COMMIT, messages).map(shape), [
+    ["S2", 3, ["items"], [7]],
+    ["S3", 13, ["items"], [13]],
+  ]);
+});
+
+const DECORATED = `\
+class Pay {
+  @LazyTransaction({ isolation: "READ COMMITTED" })
+  async decorated(a) {
+    await repo.save(a);
+  }
+
+  @Cached()
+  async plain(a) {
+    await repo.save(a);
+  }
+}
+`;
+
+const DECORATED_METHOD = '@LazyTransaction({ isolation: "READ COMMITTED" })\n  async decorated(a) {\n    await repo.save(a);\n  }';
+const PLAIN_METHOD = "@Cached()\n  async plain(a) {\n    await repo.save(a);\n  }";
+
+test("KILN-E1TO-19 a method decorated @Transaction or @LazyTransaction is a legitimate marker, whether its span starts at the decorator or after it", () => {
+  const atDecorator = marker(DECORATED, DECORATED_METHOD, "decorated");
+  const afterDecorator = { ...atDecorator, fromLine: 2, fromColumn: 2 };
+  for (const report of [atDecorator, afterDecorator]) {
+    const { unmatchedMarkers } = enumerationOf(DECORATED, [report]);
+    assert.deepEqual(unmatchedMarkers, [{ file: "src/db.ts", line: report.fromLine + 1, column: report.fromColumn }]);
+  }
+});
+
+const shortenedEnd = (report) => ({ ...report, toColumn: report.toColumn - 1 });
+const MALFORMED_REPORTS = [
+  ["a start call whose end column is one short", TWO_STARTS, shortenedEnd(marker(TWO_STARTS, "qr.startTransaction()", "startTransaction"))],
+  ["a method that is not decorated @Transaction", DECORATED, marker(DECORATED, PLAIN_METHOD, "plain")],
+  ["a decorated method under another name", DECORATED, marker(DECORATED, DECORATED_METHOD, "other")],
+  ["a span over no call and no method", DECORATED, marker(DECORATED, "repo", "transaction")],
+];
+
+for (const [name, source, report] of MALFORMED_REPORTS) {
+  test(`KILN-E1TO-19 a transaction report over ${name} fails loudly instead of changing ownership`, () => {
+    assert.throws(() => unitsOf(source, [report]), /no transaction-decorated method match the report at/);
+  });
+}

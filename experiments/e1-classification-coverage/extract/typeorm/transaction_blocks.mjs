@@ -2,12 +2,14 @@
 
 import ts from "typescript";
 
+import { ExtractorError } from "./extractor_error.mjs";
 import { isFunctionLike } from "./function_scopes.mjs";
 import { calledMethodName } from "./source_text.mjs";
 
 const START = "startTransaction";
 const TERMINATORS = new Set(["commitTransaction", "rollbackTransaction"]);
 const CALLBACK_TRANSACTION = "transaction";
+const TRANSACTION_DECORATORS = new Set(["Transaction", "LazyTransaction"]);
 const CALLBACK_RECEIVER_NAMES = new Set(["dataSource", "manager", "connection"]);
 
 /**
@@ -16,6 +18,9 @@ const CALLBACK_RECEIVER_NAMES = new Set(["dataSource", "manager", "connection"])
  */
 
 /**
+ * A transaction report is a call of the reported name over the reported span, or
+ * a method decorated `@Transaction` / `@LazyTransaction` over it. A report that
+ * is neither has an invalid identity and fails the run.
  * @param {import("./source_text.mjs").SourceText} sourceText
  * @param {import("./analyzer_report.mjs").Marker[]} markers
  * @returns {{ blocks: TransactionBlock[], unmatched: import("./analyzer_report.mjs").Marker[] }}
@@ -24,11 +29,46 @@ export function readTransactionBlocks(sourceText, markers) {
   const blocks = [];
   const unmatched = [];
   for (const marker of markers) {
-    const block = sourceText.callsReportedAt(marker, marker.name).map((call) => blockOf(call, sourceText))[0];
+    const block = blockOfReport(marker, sourceText);
     if (block) blocks.push(block);
     else unmatched.push(marker);
   }
   return { blocks, unmatched };
+}
+
+function blockOfReport(marker, sourceText) {
+  const calls = sourceText.callsReportedAt(marker, marker.name);
+  if (calls.length === 1) return blockOf(calls[0], sourceText);
+  if (calls.length === 0 && isDecoratedMethodReport(marker, sourceText)) return undefined;
+  const where = `${marker.start.line}:${marker.start.column}`;
+  throw new ExtractorError(`${marker.file}: ${calls.length} calls of \`${marker.name}\` and no transaction-decorated method match the report at ${where}`);
+}
+
+function isDecoratedMethodReport(marker, sourceText) {
+  const { start, end } = sourceText.spanOf(marker);
+  return sourceText.classMethods.some((method) => {
+    const spansReport = method.getEnd() === end && spanStarts(method, sourceText).includes(start);
+    return spansReport && methodName(method) === marker.name && decoratorNames(method).some((name) => TRANSACTION_DECORATORS.has(name));
+  });
+}
+
+/** Parsers differ on whether a method's span starts at its first decorator or after the last. */
+function spanStarts(method, sourceText) {
+  const firstToken = (method.modifiers ?? []).find((modifier) => !ts.isDecorator(modifier)) ?? method.name ?? method.getFirstToken(sourceText.sourceFile);
+  return [sourceText.startOf(method), sourceText.startOf(firstToken)];
+}
+
+/** The name the analyzer reports: an identifier key, otherwise nothing. */
+function methodName(method) {
+  if (ts.isConstructorDeclaration(method)) return "constructor";
+  return ts.isIdentifier(method.name) ? method.name.text : "";
+}
+
+function decoratorNames(method) {
+  return (ts.getDecorators(method) ?? []).map(({ expression }) => {
+    const called = ts.isCallExpression(expression) ? expression.expression : expression;
+    return ts.isIdentifier(called) ? called.text : "";
+  });
 }
 
 function blockOf(call, sourceText) {
@@ -51,17 +91,29 @@ function finalName(expression) {
   return ts.isPropertyAccessExpression(expression) ? expression.name.text : undefined;
 }
 
-/** The start up to the last commit or rollback on the same receiver, within the same function. */
+/**
+ * The start up to the last commit or rollback on the same receiver within the same function,
+ * before the next start that is not nested in this one: a start written while an earlier start's
+ * transaction is still open (more starts than commits and rollbacks so far) nests.
+ */
 function startedBlock(start, sourceText) {
   const receiverOf = (call) => withoutWhitespace(call.expression.expression?.getText(sourceText.sourceFile) ?? "");
   const startOf = (call) => sourceText.startOf(call);
-  const sameReceiver = sourceText.calls.filter((call) => sameFunction(call, start) && receiverOf(call) === receiverOf(start));
-  const after = sameReceiver.filter((call) => startOf(call) >= start.getEnd());
-  const nextStart = after.find((call) => calledMethodName(call) === START);
-  const limit = nextStart ? startOf(nextStart) : Infinity;
-  const terminators = after.filter((call) => TERMINATORS.has(calledMethodName(call)) && call.getEnd() <= limit);
-  if (terminators.length === 0) return undefined;
-  return { position: startOf(start), start: startOf(start), end: Math.max(...terminators.map((call) => call.getEnd())) };
+  const after = sourceText.calls
+    .filter((call) => sameFunction(call, start) && receiverOf(call) === receiverOf(start) && startOf(call) >= start.getEnd())
+    .sort((first, second) => startOf(first) - startOf(second));
+  let open = 1;
+  let end;
+  for (const call of after) {
+    const name = calledMethodName(call);
+    if (name === START && open === 0) break;
+    if (name === START) open += 1;
+    else if (TERMINATORS.has(name)) {
+      open = Math.max(open - 1, 0);
+      end = call.getEnd();
+    }
+  }
+  return end === undefined ? undefined : { position: startOf(start), start: startOf(start), end };
 }
 
 function withoutWhitespace(text) {
