@@ -3,5 +3,6 @@ agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
 role = "builder"
 base = "36bdcaad48a175e66f536858c24c7e48f985cddb"
 branch = "claude/issue-17-e1-inputs-freeze"
-scope = ["experiments/e1-classification-coverage"]
+scope = ["docs/experiments.md", "experiments/e1-classification-coverage"]
 opened_commit = "96a508d8f966bc1bc5e7e8d0853853417e811d96"
+whole_reason = "E1's frozen inputs directory and the E1 verdict paragraph it changes"
