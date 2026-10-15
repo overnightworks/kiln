@@ -20,8 +20,8 @@ pub struct DataSelection {
 }
 
 pub fn data_selection(paths: &[FeasiblePath]) -> Option<DataSelection> {
-    paths.iter().enumerate().find_map(|(index, first)| {
-        paths[index + 1..]
+    paths.iter().find_map(|first| {
+        paths
             .iter()
             .find_map(|second| selection_between(first, second))
     })

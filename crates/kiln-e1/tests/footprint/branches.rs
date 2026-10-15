@@ -124,6 +124,18 @@ mod kiln_e1_19 {
     }
 
     #[test]
+    fn the_most_demanding_path_decides_whichever_side_it_is_on() {
+        let rows_of_range = |effect| returns(vec![iterate(0, 1, vec![effect])]);
+        let inserting = || rows_of_range(insert("orders", key_of(1)));
+        let updating = || rows_of_range(update("orders", key_of(1), &[]));
+        let range = || vec![read_range("orders", param("from"), param("to"), 0)];
+        let inserting_first = branch_on_presence(range(), 0, inserting(), updating());
+        let inserting_last = branch_on_presence(range(), 0, updating(), inserting());
+        assert_eq!(category_of(inserting_first), ONE_HOP);
+        assert_eq!(category_of(inserting_last), ONE_HOP);
+    }
+
+    #[test]
     fn an_unknown_arm_makes_the_function_unknown() {
         let body = branch_on_presence(vec![read_order()], 0, static_arm(), unknown_arm());
         assert_eq!(category_of(body), None);
