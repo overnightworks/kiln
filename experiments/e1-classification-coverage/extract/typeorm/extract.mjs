@@ -59,7 +59,7 @@ function writeUnits(row, corpus, outputDirectory) {
   const stem = path.join(outputDirectory, row.directoryName);
   const root = applicationDirectory(row, corpus);
   const selection = selectionOf(trackedFiles(root));
-  verifySnapshot(row, root, selection);
+  verifySnapshot(row, root);
   const messages = `${stem}.analyzer.json`;
   const analyzerLog = runAnalyzer({ script: analyzerScript(corpus), workingDirectory: corpus, selection, applicationRoot: root, output: path.resolve(messages) });
   writeFileSync(`${stem}.analyzer.log`, analyzerLog);

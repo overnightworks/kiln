@@ -7,9 +7,8 @@ import { after, before, test } from "node:test";
 
 import {
   MANIFEST_PATH, analyzerInstallCommands, applicationRow, corpusDirectory, dependencyCommands, fetchCommands, readManifest,
-  trackedFiles, verifySnapshot,
+  verifySnapshot,
 } from "./corpus.mjs"; // fmt: skip
-import { selectionOf } from "./file_selection.mjs";
 
 const REPOSITORY_ROOT = "/work/kiln";
 const CORPUS = "/data/corpus";
@@ -69,6 +68,9 @@ before(() => {
   write("tsconfig.json", "{}\n");
   write("src/a.ts");
   write("client/tsconfig.json", "{}\n");
+  write("tsconfig.base.json", '{"compilerOptions": {"strict": true}}\n');
+  write("package-lock.json", "{}\n");
+  write(".gitignore", "node_modules/\nignored.log\n");
   git("add", ".");
   git("commit", "--quiet", "-m", "pinned");
   row = { ...applicationRow(manifest, EPGSTATION), commitShaFull: git("rev-parse", "HEAD") };
@@ -76,34 +78,33 @@ before(() => {
 
 after(() => rmSync(root, { recursive: true, force: true }));
 
-const selection = () => selectionOf(trackedFiles(root));
-
-test("KILN-E1TO-05 a checkout at the manifest commit without changes is accepted, node_modules aside", () => {
+test("KILN-E1TO-05 a checkout at the manifest commit with only the installation added is accepted", () => {
   write("node_modules/dep/index.d.ts");
-  write(".gitignore", "node_modules/\n");
-  verifySnapshot(row, root, selection());
+  write("package-lock.json", '{"lockfileVersion": 3}\n');
+  verifySnapshot(row, root);
   rmSync(path.join(root, "node_modules"), { recursive: true });
-  rmSync(path.join(root, ".gitignore"));
+  git("checkout", "--", ".");
 });
 
 const CHANGES = [
   ["a modified tracked source file", () => write("src/a.ts", "export const changed = 1;\n"), "src/a.ts"],
   ["an untracked source file", () => write("src/b.ts"), "src/b.ts"],
   ["a modified tsconfig", () => write("tsconfig.json", '{"include": []}\n'), "tsconfig.json"],
+  ["a modified tsconfig the project extends, outside the selected directory", () => write("tsconfig.base.json", '{"exclude": ["src"]}\n'), "tsconfig.base.json"],
+  ["an untracked file outside the selected directory", () => write("client/untracked.ts"), "client/untracked.ts"],
+  ["an ignored file outside node_modules", () => write("ignored.log"), "ignored.log"],
+  ["a deleted tracked configuration file", () => rmSync(path.join(root, "tsconfig.base.json")), "tsconfig.base.json"],
 ];
 
 for (const [name, change, file] of CHANGES) {
   test(`KILN-E1TO-05 ${name} is rejected naming the file`, () => {
     change();
-    assert.throws(() => verifySnapshot(row, root, selection()), (error) => error.message.includes(file));
+    assert.throws(() => verifySnapshot(row, root), (error) => error.message.includes(file));
     git("checkout", "--", ".");
-    git("clean", "--quiet", "--force");
+    git("clean", "--quiet", "--force", "-x", "--exclude=node_modules");
   });
 }
 
-test("KILN-E1TO-05 a stray file outside the selection is accepted, and another commit is rejected", () => {
-  write("client/untracked.ts");
-  verifySnapshot(row, root, { directory: "src", fallback: false });
-  git("clean", "--quiet", "--force");
-  assert.throws(() => verifySnapshot({ ...row, commitShaFull: "0".repeat(40) }, root, selection()), /not the manifest commit/);
+test("KILN-E1TO-05 another commit is rejected", () => {
+  assert.throws(() => verifySnapshot({ ...row, commitShaFull: "0".repeat(40) }, root), /not the manifest commit/);
 });
