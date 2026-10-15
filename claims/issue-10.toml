@@ -1,7 +1,0 @@
-claim_id = "85f9f049775c4c2d8b4bb53e12de20eb"
-agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
-role = "builder"
-base = "4c0edb03bf81d8d4d581373862735e61bc134d27"
-branch = "claude/issue-10-ci-minimal-checks"
-scope = [".github/workflows/ci.yml"]
-opened_commit = "1d2cc930fcf165d215dfb55e7d283afae044abbb"
