@@ -1,0 +1,11 @@
+[package]
+name = "kiln-ir"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The reference interpreter for kiln's semantic IR, shared by E1, E2, E3 and docs/verification.md's layer 3."
+
+[dependencies]
+
+[dev-dependencies]
+proptest = "1.12.0"
