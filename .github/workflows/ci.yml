@@ -21,38 +21,30 @@ jobs:
           persist-credentials: false
 
       # On a pull request the diff runs against the base the pull request
-      # targets; on a push to main the parent commit was already green, so
-      # the diff runs against it instead. Either way fetch-depth: 0 above
-      # gives git diff --check the history it needs.
+      # targets. On a push, it runs against the push's previous tip so a
+      # multi-commit push is checked in full, not just its last commit;
+      # `before` is the all-zero SHA on a branch's first push (no previous
+      # tip exists yet), so that case falls back to the parent commit.
+      # Either way fetch-depth: 0 above gives git diff --check the history
+      # it needs.
       - name: Check for whitespace errors and conflict markers
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base="${{ github.event.pull_request.base.sha }}"
-          else
+          elif [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
             base="HEAD^"
+          else
+            base="${{ github.event.before }}"
           fi
           git diff --check "${base}" HEAD
 
-      # No third-party action: a relative Markdown link is checked with
-      # plain shell against the files actually tracked in the checkout.
-      # Only inline link targets ]( ... ) are in scope; a web, mailto, or
-      # in-page anchor target is not a repository path and is skipped.
+      # lychee parses Markdown properly (titles, angle brackets,
+      # reference-style links, code spans and fenced blocks excluded)
+      # instead of reinventing that in shell. --offline skips network
+      # requests, so only local file links are checked. Pinned by full
+      # commit SHA; the version comment names the matching release tag.
       - name: Check relative Markdown links
-        run: |
-          status=0
-          while IFS= read -r file; do
-            dir=$(dirname "$file")
-            while IFS= read -r target; do
-              [ -z "$target" ] && continue
-              case "$target" in
-                http://*|https://*|mailto:*|'#'*) continue ;;
-              esac
-              target="${target%%#*}"
-              [ -z "$target" ] && continue
-              if [ ! -e "$dir/$target" ]; then
-                echo "broken link in $file: $target"
-                status=1
-              fi
-            done < <(grep -oP '(?<=\])\([^)]*\)' "$file" | sed -E 's/^\(//; s/\)$//')
-          done < <(git ls-files '*.md')
-          exit "$status"
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: --offline --no-progress './**/*.md'
+          fail: true
