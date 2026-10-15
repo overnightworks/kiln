@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # On a pull request the diff runs against the base the pull request
+      # targets. On a push, it runs against the push's previous tip so a
+      # multi-commit push is checked in full, not just its last commit;
+      # `before` is the all-zero SHA on a branch's first push (no previous
+      # tip exists yet), so that case falls back to the parent commit.
+      # Either way fetch-depth: 0 above gives git diff --check the history
+      # it needs.
+      - name: Check for whitespace errors and conflict markers
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          elif [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+            base="HEAD^"
+          else
+            base="${{ github.event.before }}"
+          fi
+          git diff --check "${base}" HEAD
+
+      # lychee parses Markdown properly (titles, angle brackets,
+      # reference-style links, code spans and fenced blocks excluded)
+      # instead of reinventing that in shell. --offline skips network
+      # requests, so only local file links are checked. Pinned by full
+      # commit SHA; the version comment names the matching release tag.
+      - name: Check relative Markdown links
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: --offline --no-progress './**/*.md'
+          fail: true
+          # A checkout without Markdown links (e.g. just the aco config) must not fail.
+          failIfEmpty: false
