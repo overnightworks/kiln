@@ -1,0 +1,7 @@
+claim_id = "229e846a4e6f4699853510787e3447c4"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "3402a79b591d733e1ede0d1bee3d28e41c28ad7f"
+branch = "claude/issue-35-e1-verdict-contract"
+scope = ["Cargo.lock", "crates/kiln-e1", "specs/kiln-e1.spec.md"]
+opened_commit = "ca11467400e4f121e92cf4045daba9601279a1a6"
