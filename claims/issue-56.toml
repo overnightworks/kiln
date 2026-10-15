@@ -1,0 +1,8 @@
+claim_id = "9ee92555f8694e4e8c04680dcedc8bd6"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "36c004afbc9b94c99e82c5f1370b2d835e1eb6c0"
+branch = "claude/issue-56-kiln-ir-comparison-conditions"
+scope = ["crates/kiln-e1", "crates/kiln-ir", "docs/concept.md", "specs/kiln-e1.spec.md", "specs/kiln-ir.spec.md"]
+opened_commit = "0e07feadb9dc5949a0806c2f208fa78ffa39e674"
+whole_reason = "one IR condition form, its reference meaning, and the classifier's handling of it"
