@@ -88,13 +88,14 @@ not a cached statement
   the offsets keep every (cell, repetition) seed distinct.
 - **Initial load.** Each size (§3) loads once with `id = 1..row_count`,
   `balance = 1000000` (large enough D's guard almost never fires), and
-  `email` = 16 lowercase hex characters deterministically derived from
-  `id` (not the repetition PRNG) plus `-init-` and `id` — C's inserted
-  emails' random-leading shape (§2), so initial and inserted keys
-  interleave through the B-tree instead of concentrating. The harness
-  then asserts the row count, closes the connection, runs `PRAGMA
-  wal_checkpoint(TRUNCATE);` ("checkpoints all frames... and syncs the
-  database file," then truncates the WAL "to zero bytes upon successful
+  `email` = the first 16 lowercase hex characters of `SHA-256` over the
+  decimal ASCII encoding of `id` (not the repetition PRNG, a collision a
+  protocol violation) plus `-init-` and `id` — C's inserted-emails'
+  random-leading shape (§2), so initial and inserted keys interleave through
+  the B-tree instead of concentrating. The harness then asserts the row
+  count, closes the loading connection, opens a second connection, and runs
+  `PRAGMA wal_checkpoint(TRUNCATE);` on it ("checkpoints all frames... and
+  syncs the database file," truncating the WAL "to zero bytes upon successful
   completion," https://www.sqlite.org/pragma.html#pragma_wal_checkpoint,
   fetched 2026-10-15), and copies that main file plus the empty WAL to
   `data/<cell>/pristine/` — the state restored before every attempt.
@@ -239,15 +240,15 @@ around two already-existing method calls, nothing else.
 ## 6. Controls
 
 - **Flush-only control.** A SQLite-free mode opens a scratch file beside
-  the database files and repeats, for §8's operation count: append a
-  fixed 512-byte buffer, then `fdatasync` — append, since every workload
-  here only appends to the WAL between checkpoints (§4); `fdatasync`, not
-  `fsync`, since it "does not flush modified metadata unless that
-  metadata is needed," and the file's size is fixed after its first write
-  (https://man7.org/linux/man-pages/man2/fdatasync.2.html, fetched
-  2026-10-15). Timed the same way (`CLOCK_MONOTONIC`), giving this
-  machine's device-level flush cost to sanity-check `xsync_time` against
-  (§14: a cross-check, not a decomposition).
+  the database files and repeats, for §8's operation count: append a fixed
+  512-byte buffer, then `fdatasync` — append, since every workload here
+  only appends to the WAL between checkpoints (§4); `fdatasync`, not
+  `fsync`, since it "does not flush modified metadata unless that metadata
+  is needed," and here each append grows the file, so `fdatasync` may also
+  flush size metadata, the same cost a growing WAL append incurs
+  (https://man7.org/linux/man-pages/man2/fdatasync.2.html, fetched 2026-10-15).
+  Timed the same way (`CLOCK_MONOTONIC`), giving this machine's device-level
+  flush cost to sanity-check `xsync_time` against (§14: a cross-check, not a decomposition).
 - **In-memory cross-check.** Small-size, `synchronous=FULL`, on-disk
   median wall time minus the `:memory:` median (§4) is an **upper-bound**
   cross-check, not a second estimate: `:memory:` removes every
@@ -370,12 +371,12 @@ different machine re-collects these fresh; not a portable assumption.
 - **Retry budget.** A repetition failing a sample above is discarded and
   retried from warm-up (§8.2) with the same input trace (§2.1) — up to
   **3 retries (4 attempts)**: one clears a single spike, two more guard a
-  second, and a 4th failure shows sustained contention, so the run stops
-  and reports the gap. **Exhausted:** marked `FAILED-INTERFERENCE`,
-  excluded from statistics (§8.5); fewer than **5** of 9 succeeding makes
-  the verdict `inconclusive — insufficient repetitions` (distinct from
-  §10's inconclusive), since that no longer carries §8.4's confidence
-  bound. Warm-up count and cell order (§8.2, §8.6) stay fixed per attempt.
+  second, and a 4th shows sustained contention for that repetition, marked
+  `FAILED-INTERFERENCE` and logged (below). A cell's verdict (§10) requires
+  all 9 repetitions to succeed; one exhausted repetition makes that cell
+  `inconclusive — insufficient repetitions` (distinct from §10's
+  inconclusive) instead of stopping the run — the remaining cells still run
+  to completion. Warm-up count and cell order (§8.2, §8.6) stay fixed per attempt.
 - **Rejected-attempt log.** Every discarded attempt (timestamp, cell,
   attempt, reason) is appended to `data/rejected.log`, never overwritten.
 
