@@ -1,10 +1,10 @@
 TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
 Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 91 and seed 7057060305920714682 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 2584691] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
-Starting... (2026-10-15 22:02:09)
+Running breadth-first search Model-Checking with fp 60 and seed 4381449043043212108 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 2638922] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-10-15 22:06:30)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-15 22:02:09.
+Finished computing initial states: 1 distinct state generated at 2026-10-15 22:06:31.
 Error: Invariant NoWaitCycle is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
@@ -35,7 +35,7 @@ State 3: <DoOp line 277, col 3 to line 298, col 17 of module Kernel>
   t2 |-> {[kind |-> "DRAW", cov |-> {1}]} ]
 /\ wr = [t1 |-> << >>, t2 |-> << >>]
 
-11 states generated, 9 distinct states found, 1 states left on queue.
+12 states generated, 10 distinct states found, 1 states left on queue.
 The depth of the complete state graph search is 5.
 The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 2 and the 95th percentile is 2).
-Finished in 00s at (2026-10-15 22:02:09)
+Finished in 00s at (2026-10-15 22:06:31)

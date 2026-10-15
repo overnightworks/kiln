@@ -1,10 +1,10 @@
 TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
 Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 112 and seed 7650197278518108907 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 2575346] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
-Starting... (2026-10-15 22:00:54)
+Running breadth-first search Model-Checking with fp 61 and seed 208308456538045631 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 2639632] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-10-15 22:06:35)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-15 22:00:54.
+Finished computing initial states: 1 distinct state generated at 2026-10-15 22:06:36.
 Error: Invariant EventCloseUnreached is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
@@ -34,4 +34,4 @@ State 2: <DoOp line 277, col 3 to line 298, col 17 of module Kernel>
 9 states generated, 7 distinct states found, 0 states left on queue.
 The depth of the complete state graph search is 5.
 The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 2 and the 95th percentile is 2).
-Finished in 00s at (2026-10-15 22:00:54)
+Finished in 00s at (2026-10-15 22:06:36)
