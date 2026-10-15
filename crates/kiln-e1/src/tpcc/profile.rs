@@ -36,7 +36,8 @@ pub enum Requirement {
     /// A column that Clause 1.3.1 allows to be null, written before it has a
     /// value.
     NullEncoding,
-    /// A response of several fields; the IR returns one value.
+    /// A response of several fields, or of one result per repeated part (the
+    /// districts of Delivery, skipped ones included); the IR returns one value.
     MultiFieldResponse,
     /// New-Order's rollback response carries the allocated O_ID (Clause
     /// 2.4.3.4), which an abort cannot.
@@ -100,9 +101,11 @@ impl Requirement {
                 "the IR has no null; a sentinel encoding of a null column is not fixed or audited"
                     .to_owned(),
             ),
-            Self::MultiFieldResponse => {
-                Some("the IR's response is one value, not several fields".to_owned())
-            }
+            Self::MultiFieldResponse => Some(
+                "the IR's response is one value, not several fields or one result per \
+                 repeated part"
+                    .to_owned(),
+            ),
             Self::RollbackResponseWithAllocatedId => Some(
                 "the IR's abort names a fixed error and carries no dynamic field such as the \
                  allocated O_ID"
@@ -380,8 +383,8 @@ const ORDER_STATUS_AFTER_CUSTOMER: [Step; 3] = [
     ),
     step(
         "2.6.2.2, 2.6.3.3",
-        "communicate the output data to the terminal",
-        &[MultiFieldResponse],
+        "communicate the output data to the terminal, O_CARRIER_ID and OL_DELIVERY_D possibly null",
+        &[MultiFieldResponse, NullEncoding],
     ),
 ];
 
@@ -429,8 +432,8 @@ const DELIVERY_STEPS: [Step; 6] = [
     ),
     step(
         "2.7.4.2, 2.7.2.2",
-        "queue the delivery and record the delivered orders and times in the result file after commit",
-        &[HostQueueAndResultFile],
+        "report the delivered order of every district, or its skip, and queue the delivery and record the result file after commit",
+        &[MultiFieldResponse, HostQueueAndResultFile],
     ),
 ];
 

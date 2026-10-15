@@ -1,5 +1,6 @@
 use std::fmt::{self, Write as _};
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use crate::classified::ClassifiedUnit;
@@ -105,7 +106,7 @@ fn run_tpcc(arguments: &[String]) -> Result<String, CommandError> {
     let flags = Flags::parse(arguments, &["--out", "--sensitivity-out"])?;
     let out = flags.require("--out")?;
     let sensitivity_out = flags.require("--sensitivity-out")?;
-    if resolved(out) == resolved(sensitivity_out) {
+    if Destination::of(out)? == Destination::of(sensitivity_out)? {
         return Err(CommandError::Usage(
             "`--out` and `--sensitivity-out` name the same file".to_owned(),
         ));
@@ -122,21 +123,43 @@ fn run_tpcc(arguments: &[String]) -> Result<String, CommandError> {
     ))
 }
 
-/// The path a write to `path` lands on, so that a symlink or a `..` cannot
-/// hide two names for one file; a path that cannot be resolved stays as given
-/// and fails loudly when written.
-fn resolved(path: &Path) -> PathBuf {
-    fs::canonicalize(path)
-        .or_else(|_| {
-            let parent = path
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty());
-            let file_name = path.file_name().ok_or(std::io::ErrorKind::NotFound)?;
-            Ok::<_, std::io::Error>(
-                fs::canonicalize(parent.unwrap_or(Path::new(".")))?.join(file_name),
-            )
-        })
-        .unwrap_or_else(|_| path.to_owned())
+/// The file a write to a destination lands on: an existing file by its device
+/// and inode, so that a symlink, a `..` or a hard link cannot hide two names for
+/// one file; a file still to be created by its resolved directory and name.
+#[derive(PartialEq)]
+enum Destination {
+    Existing { device: u64, inode: u64 },
+    ToCreate(PathBuf),
+}
+
+impl Destination {
+    fn of(path: &Path) -> Result<Self, CommandError> {
+        let unresolvable = |error| CommandError::Write {
+            path: path.to_owned(),
+            error,
+        };
+        match fs::metadata(path) {
+            Ok(file) => Ok(Self::Existing {
+                device: file.dev(),
+                inode: file.ino(),
+            }),
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(unresolvable(error)),
+            Err(error) => {
+                if fs::symlink_metadata(path).is_ok() {
+                    return Err(unresolvable(error));
+                }
+                let directory = path
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                    .unwrap_or(Path::new("."));
+                let file_name = path.file_name().ok_or_else(|| {
+                    unresolvable(std::io::Error::from(std::io::ErrorKind::InvalidInput))
+                })?;
+                let directory = fs::canonicalize(directory).map_err(unresolvable)?;
+                Ok(Self::ToCreate(directory.join(file_name)))
+            }
+        }
+    }
 }
 
 fn read(path: &Path) -> Result<String, CommandError> {
