@@ -1,0 +1,35 @@
+--- Kernel.tla
++++ Kernel.tla
+@@ -189,7 +189,7 @@
+ NoDraws == [k \in Keys |-> [bal |-> 0, val |-> 0]]
+ 
+ Init ==
+-  /\ status = [t \in Txns |-> "pending"]
++  /\ status = [t \in Txns |-> "active"]
+   /\ pc = [t \in Txns |-> 0]
+   /\ held = [t \in Txns |-> {}]
+   /\ wr = [t \in Txns |-> NoWrites]
+@@ -244,8 +244,11 @@
+    allowance of its next draw. Empty exactly when its next step may run. *)
+ WaitsOn(t) ==
+   IF Pending(t) THEN Conflicting(t, Footprint(t))
+-  ELSE IF Running(t) /\ AllowanceBlocks(t, NextOp(t)) THEN DrawHolders(t, NextOp(t).k)
+-  ELSE {}
++  ELSE IF ~Running(t) THEN {}
++  ELSE LET C == Conflicting(t, Need(NextOp(t), View(t))) IN
++       IF C # {} THEN C
++       ELSE IF AllowanceBlocks(t, NextOp(t)) THEN DrawHolders(t, NextOp(t).k)
++       ELSE {}
+ 
+ Changed(t, v) == {k \in Keys : v[k] # View(t)[k]}
+ 
+@@ -278,7 +281,8 @@
+              /\ held' = [held EXCEPT ![t] = {}]
+              /\ wr' = [wr EXCEPT ![t] = NoWrites]
+              /\ draws' = [draws EXCEPT ![t] = NoDraws]
+-        ELSE /\ UNCHANGED <<status, held>>
++        ELSE /\ held' = [held EXCEPT ![t] = @ \cup Need(op, View(t))]
++             /\ UNCHANGED status
+              /\ IF op.op = "Buy"
+                 THEN /\ draws' = [draws EXCEPT ![t][op.k] =
+                                    [bal |-> @.bal + op.a, val |-> @.val + 1]]

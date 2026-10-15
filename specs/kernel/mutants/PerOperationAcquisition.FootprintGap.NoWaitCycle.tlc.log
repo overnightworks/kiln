@@ -1,0 +1,72 @@
+TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
+Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Running breadth-first search Model-Checking with fp 3 and seed 2077202734912776472 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 2729473] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-10-15 22:22:35)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-10-15 22:22:35.
+Error: Invariant NoWaitCycle is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ resp = [t1 |-> <<>>, t2 |-> <<>>]
+/\ pc = [t1 |-> 0, t2 |-> 0]
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0],
+   [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0] >>
+/\ draws = [ t1 |->
+      << [val |-> 0, bal |-> 0],
+         [val |-> 0, bal |-> 0],
+         [val |-> 0, bal |-> 0] >>,
+  t2 |->
+      << [val |-> 0, bal |-> 0],
+         [val |-> 0, bal |-> 0],
+         [val |-> 0, bal |-> 0] >> ]
+/\ status = [t1 |-> "active", t2 |-> "active"]
+/\ held = [t1 |-> {}, t2 |-> {}]
+/\ wr = [t1 |-> << >>, t2 |-> << >>]
+
+State 2: <DoOp line 273, col 3 to line 294, col 17 of module Kernel>
+/\ resp = [t1 |-> <<"ok">>, t2 |-> <<>>]
+/\ pc = [t1 |-> 1, t2 |-> 0]
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0],
+   [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0] >>
+/\ draws = [ t1 |->
+      << [val |-> 0, bal |-> 0],
+         [val |-> 0, bal |-> 0],
+         [val |-> 0, bal |-> 0] >>,
+  t2 |->
+      << [val |-> 0, bal |-> 0],
+         [val |-> 0, bal |-> 0],
+         [val |-> 0, bal |-> 0] >> ]
+/\ status = [t1 |-> "active", t2 |-> "active"]
+/\ held = [ t1 |-> {[kind |-> "CLAIM", cov |-> {3}], [kind |-> "PIN", cov |-> {1}]},
+  t2 |-> {} ]
+/\ wr = [ t1 |-> (3 :> [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 1]),
+  t2 |-> << >> ]
+
+State 3: <DoOp line 273, col 3 to line 294, col 17 of module Kernel>
+/\ resp = [ t1 |-> <<"ok">>,
+  t2 |-> <<[present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0]>> ]
+/\ pc = [t1 |-> 1, t2 |-> 1]
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0],
+   [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0] >>
+/\ draws = [ t1 |->
+      << [val |-> 0, bal |-> 0],
+         [val |-> 0, bal |-> 0],
+         [val |-> 0, bal |-> 0] >>,
+  t2 |->
+      << [val |-> 0, bal |-> 0],
+         [val |-> 0, bal |-> 0],
+         [val |-> 0, bal |-> 0] >> ]
+/\ status = [t1 |-> "active", t2 |-> "active"]
+/\ held = [ t1 |-> {[kind |-> "CLAIM", cov |-> {3}], [kind |-> "PIN", cov |-> {1}]},
+  t2 |-> {[kind |-> "X", cov |-> {2}]} ]
+/\ wr = [ t1 |-> (3 :> [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 1]),
+  t2 |-> << >> ]
+
+15 states generated, 13 distinct states found, 1 states left on queue.
+The depth of the complete state graph search is 7.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 2 and the 95th percentile is 2).
+Finished in 00s at (2026-10-15 22:22:35)
