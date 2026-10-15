@@ -195,7 +195,7 @@ BudgetKnown(t, k) ==
 RECURSIVE SumAmounts(_, _)
 SumAmounts(ops, k) ==
   IF ops = <<>> THEN 0
-  ELSE (IF Draws(Head(ops)) /\ Head(ops).k = k THEN Head(ops).a ELSE 0)
+  ELSE (IF Head(ops).op \in {"Buy", "BuyUnder"} /\ Head(ops).k = k THEN Head(ops).a ELSE 0)
        + SumAmounts(Tail(ops), k)
 
 Budget(t, k) == SumAmounts(Prog[t], k)
