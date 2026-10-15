@@ -1,0 +1,8 @@
+claim_id = "88ba07441290486b871b955ebcbfd0bc"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "b0fa498c9b8d803701abd3a1ea217648e32ec5d4"
+branch = "claude/issue-54-e1-typeorm-extractor"
+scope = [".github/workflows/ci.yml", "experiments/e1-classification-coverage/extract/typeorm", "experiments/e1-classification-coverage/inputs.md", "specs/kiln-e1-typeorm.spec.md"]
+opened_commit = "2ff11cdc91b6326889e6dd76236f446de508cd42"
+whole_reason = "one extractor directory, its criteria file, its CI job and any TypeORM clarification of the frozen rule"
