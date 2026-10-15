@@ -1,0 +1,5 @@
+{"unit": {"application": "new-order", "file": "app/views.py", "line": 1, "column": 4, "rule": "S3", "parameters": ["pk"], "absorbed_sites": []}, "category": "static", "evidence": ["read#0/key"]}
+{"unit": {"application": "payment", "file": "app/views.py", "line": 1, "column": 4, "rule": "S3", "parameters": ["pk"], "absorbed_sites": []}, "category": "static", "evidence": ["read#0/key"]}
+{"unit": {"application": "order-status", "file": "app/views.py", "line": 1, "column": 4, "rule": "S3", "parameters": ["pk"], "absorbed_sites": []}, "category": "static", "evidence": ["read#0/key"]}
+{"unit": {"application": "delivery", "file": "app/views.py", "line": 1, "column": 4, "rule": "S3", "parameters": ["pk"], "absorbed_sites": []}, "category": "static", "evidence": ["read#0/key"]}
+{"unit": {"application": "stock-level", "file": "app/views.py", "line": 1, "column": 4, "rule": "S3", "parameters": ["pk"], "absorbed_sites": []}, "category": "static", "evidence": ["read#0/key"]}
