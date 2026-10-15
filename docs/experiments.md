@@ -47,7 +47,9 @@ footprint category the compiler can analyze rather than unknown, measured
 on TPC-C — weighted by its frozen transaction mix (`inputs.md` §1) — and on
 a corpus of real open-source applications — unweighted, one instance per
 enumerated transaction function, because no trace source exists for any of
-them (`inputs.md` §4). Below 50% falsifies the thesis.
+them (`inputs.md` §4). Below 50% falsifies the thesis: for TPC-C directly, and for the
+application corpus only under the refusal-qualified rule (below, "Gating
+numerator and verdict").
 
 **Scope.** A footprint extractor plus classifier only — no runtime, no
 storage engine, no kernel from `docs/concept.md` §4.
@@ -122,6 +124,9 @@ TPC-C's own transaction mix is unaffected by this and stays weighted
 - **Pass** when TPC-C's weighted coverage is at least 70% *and* the median
   unweighted coverage over the frozen application corpus is at least 70%.
 - **Fail** when TPC-C's coverage is below 50% *or* that median is below 50%.
+  The application-side Fail falsifies only per the refusal-qualified rule
+  above (median of U below 50%); TPC-C's own below-50% Fail falsifies as
+  stated.
 - **Inconclusive** otherwise. A unit landing strictly between 50% and 70% is
   reported as inconclusive for that unit specifically, never rounded into a
   pass or a fail.

@@ -968,23 +968,24 @@ further access".
    parallel.
 4. One resolving result may determine any number of later accesses without
    adding a hop.
-5. A key for an insert derived from a read counts as that hop; the inserted
-   row need not exist beforehand.
+5. A key for an insert derived from a read contributes that function's one
+   resolution; the inserted row need not exist beforehand. This holds
+   assuming all remaining behaviour qualifies.
 6. A minimum, maximum or selection computed over one argument-bounded range
    of an identifiable index is computation, not a further read; using its
    result as an access key is one resolution. An arbitrary secondary scan is
    not covered by this rule.
-7. Two or more chained resolutions are Unknown.
+7. Two or more chained resolutions are not One-hop. Such a function is
+   Domain-bounded if provably confined to one argument-selected partition
+   (`docs/experiments.md`'s definition), otherwise Unknown.
 8. Splitting or combining independent reads syntactically (one query versus
    several, helper calls) does not change the count.
 
 *Bias:* strict cardinality lowers coverage relative to counting parallel
-rounds; rule 5 keeps writes from biasing upward. *TPC-C:* by rule 5, a unit
-whose insert key derives from a read (New-Order's district counter) is
-one-hop and not static; both are in the numerator, so the gating share is
-unaffected by this move. Units whose complete behavior chains two or more
-resolutions (rule 7) are Unknown; recognising one minimum or one lookup
-inside such a unit does not promote it.
+rounds; rule 5 keeps writes from biasing upward. *TPC-C:* no unit's category
+is stated here; the classifier assigns it by these rules. Recognising one
+minimum or one lookup inside a unit that chains two or more resolutions
+(rule 7) does not make it One-hop.
 
 **Q4. Lowering fidelity and the audit oracle.** *Changes:* what a lowering
 may omit and where audit expectations come from. *Grounding:* the
@@ -1010,15 +1011,10 @@ Fail counts as falsification. *Grounding:* "A unit landing strictly between
 ..." and "an unsupported function is never dropped from the denominator"
 keep every denominator; this adds a reading, not a new threshold.
 
-1. For each application let N be its enumerated units (§3), C those
-   classified static or one-hop, R those refused in full (Q4 rule 1). Report
-   L = C/N and U = (C+R)/N.
-2. The gating metric stays the median over applications (§4); the verdict
-   thresholds are unchanged. The median of L gates as before.
-3. An application-side Fail counts as falsification only when median(U) is
-   below 50%. When median(L) is below 50% and median(U) is not, the report
-   reads "measured Fail; lower bound, not established falsification".
-4. No denominator changes; both L and U are always reported.
+The definitions of L and U, the median(U) threshold and the required
+report wording are owned by `docs/experiments.md` ("Gating numerator and
+verdict"); this section keeps only the rationale. Refusals never leave a
+denominator, so both L and U are always reported.
 
 *Bias:* a Fail that refusals may have caused cannot falsify the thesis;
 a Pass is untouched. Realised in the `kiln-e1 verdict` command's
