@@ -1,0 +1,111 @@
+orm,owner_repo,repository_url,description,github_stars_at_annotation,commit_sha_paper_abbrev,commit_sha_full
+Django,allegro/ralph,https://github.com/allegro/ralph,Data center management,2197,5440253,5440253ca788156c97d4a82d0e2c1ee1d8019abe
+Django,amidaware/tacticalrmm,https://github.com/amidaware/tacticalrmm,Monitoring,2981,8cfba49,8cfba49559471a40324b9eb17eb512473e111c1e
+Django,ansible/awx,https://github.com/ansible/awx,DevOps,13746,a15bcf1,a15bcf1d552d5430f5dfe7cdcb71906f327fe57b
+Django,ansible-community/ara,https://github.com/ansible-community/ara,DevOps,1827,8eda9c8,8eda9c87086a289cf9bf41a2d4cc4060e2d50ad7
+TypeORM,antoinejaussoin/retro-board,https://github.com/antoinejaussoin/retro-board,Collaboration,773,c22ada6,c22ada6a8fe25eaf263d6bcb0ece4426b8badc13
+Django,anyant/rssant,https://github.com/anyant/rssant,Newsfeed,1566,a6e37fb,a6e37fb9a93a3387d1f3871b6068264ef04065b3
+TypeORM,apitable/apitable,https://github.com/apitable/apitable,Project management,12731,404dedb,404dedbd55cd6a6a2a3288280fb16515e2e60c50
+TypeORM,ArkEcosystem/core,https://github.com/ArkEcosystem/core,Blockchain,336,341c1e5,341c1e581578ba59810d798ebd3ab17e7991b1bf
+Django,arxiv-vanity/arxiv-vanity,https://github.com/arxiv-vanity/arxiv-vanity,Paper renderer,1599,f7eb2f1,f7eb2f19ee2c3120a3084cfce2ba96fb766fbf8e
+Django,awesto/django-shop,https://github.com/awesto/django-shop,E-commerce,3187,13d9a77,13d9a77aff7eede74a5f363c1d540e005d88dbcd
+Django,babybuddy/babybuddy,https://github.com/babybuddy/babybuddy,Baby tracking,2020,ba46c49,ba46c49bea0694fd6b9bda728bcd281ef15f284c
+TypeORM,birkir/prime,https://github.com/birkir/prime,Content management,1718,336f50c,336f50c0d30c88f2b4fdf2d390c0e221ad15f129
+Django,blackholll/loonflow,https://github.com/blackholll/loonflow,Workflow management,1904,b0e236b,b0e236b314286c5f6cc6959622c9c8505e776443
+Django,bookwyrm-social/bookwyrm,https://github.com/bookwyrm-social/bookwyrm,Social network,2187,c4b21ee,c4b21ee2583dea5352285b2177660262dacea0a4
+TypeORM,boxyhq/jackson,https://github.com/boxyhq/jackson,Authentication,1708,4177982,41779822e8806b815cf38741dd133a3f18247623
+TypeORM,bpatrik/pigallery2,https://github.com/bpatrik/pigallery2,Photo management,1711,2aea6f4,2aea6f4456ffa35f6eb42800744efe2018aa01e8
+Django,bram2w/baserow,https://github.com/bram2w/baserow,Database tool,2322,af01ec7,af01ec755fa3b5a684f28bb175d543577438e263
+TypeORM,brookshi/Hitchhiker,https://github.com/brookshi/Hitchhiker,Testing,2193,318bc47,318bc47d4041b32d0e2ffb1716be053abd28b456
+Django,certsocietegenerale/FIR,https://github.com/certsocietegenerale/FIR,Incident management,1705,97fc077,97fc077f35abfe9c55dcb410f6ef5c4b96a182ca
+Django,chrisclark/django-sql-explorer,https://github.com/chrisclark/django-sql-explorer,Database tool,2695,a5d678b,a5d678b2efc9d90e5b3cb00f484d412b5a1e01ed
+TypeORM,cool-team-official/cool-admin-midway,https://github.com/cool-team-official/cool-admin-midway,Admin dashboard,2434,edc1383,edc13838439a0d6469abfe6263f51f2c987284bf
+TypeORM,CromwellCMS/Cromwell,https://github.com/CromwellCMS/Cromwell,Content management,683,ce836a3,ce836a385a64e3adfb29ea440b1e007e0c12e92d
+Django,decompiler-explorer/decompiler-explorer,https://github.com/decompiler-explorer/decompiler-explorer,Decompiler,2000,0df1700,0df17005e54051425132fe3ca4c17981db9f1ac8
+Django,django-cms/django-cms,https://github.com/django-cms/django-cms,Content management,10057,5ce5586,5ce55866bd020366c9e00ffd4e7669cf29d7ab0a
+Django,django-cms/django-filer,https://github.com/django-cms/django-filer,File management,1732,0ae797c,0ae797c6bd92fff34db3c560afe5cfc482746ed1
+Django,django-oscar/django-oscar,https://github.com/django-oscar/django-oscar,E-commerce,6181,0247120,0247120559b2ada117111c64b4bee073ddc1ed7f
+Django,django-wiki/django-wiki,https://github.com/django-wiki/django-wiki,Knowledge management,1808,050f124,050f12475c4bcca46c70d5c7f54d465be6edd4d2
+Django,dj-stripe/dj-stripe,https://github.com/dj-stripe/dj-stripe,Payment,1589,fa3990f,fa3990f611db42b48e8157377d85dcc8081388d1
+Django,doccano/doccano,https://github.com/doccano/doccano,Machine learning annotation,9272,4ac18ed,4ac18edff892f59f307731c8fbf24999d509242f
+TypeORM,emqx/MQTTX,https://github.com/emqx/MQTTX,Connection management,3697,f589c82,f589c820ff7d68ffee0bfdf066b5244e78ba1d07
+TypeORM,ever-co/ever-gauzy,https://github.com/ever-co/ever-gauzy,Business management,2120,4ffd8ec,4ffd8ec7a3ff311852572682ef946ecb0047cf75
+TypeORM,ever-co/ever-traduora,https://github.com/ever-co/ever-traduora,Translation management,1968,d1cd6bc,d1cd6bcd20318f04b23d3be2429edf0d4d8b35bc
+TypeORM,fantasticit/think,https://github.com/fantasticit/think,Knowledge management,1934,1c2d133,1c2d1338a910df42ec777eff5ea45b6893796089
+TypeORM,fantasticit/wipi,https://github.com/fantasticit/wipi,Blogging,615,9e3c15b,9e3c15b67149aaf11cd7894a2b2d4524a3abc362
+Django,Flagsmith/flagsmith,https://github.com/Flagsmith/flagsmith,Configuration management,4628,c896c50,c896c507a6ead8075b3c77d3aa834c057c0cc909
+TypeORM,garden-io/garden,https://github.com/garden-io/garden,DevOps,3297,8ccd77f,8ccd77f8e3e07c48ca3bb1ef442a3a36e8222ba9
+TypeORM,genaller/genal-chat,https://github.com/genaller/genal-chat,Chat,1900,3c3c3bb,3c3c3bb3547deed1dea5c4ef08f6c5b7245c8ea1
+Django,Gerapy/Gerapy,https://github.com/Gerapy/Gerapy,Crawler management,3278,e5662e2,e5662e2b18a0c163562f5bf090d0af962b271759
+Django,getsentry/sentry,https://github.com/getsentry/sentry,Monitoring,37712,669d6c3,669d6c3ca62549aa15fa8b039d5a2ac92c8223b9
+TypeORM,gradejs/gradejs,https://github.com/gradejs/gradejs,Security,407,ceca9c9,ceca9c9db1f0f0b6e095ebce0c93f44748c3839e
+Django,grafana/oncall,https://github.com/grafana/oncall,Incident management,3367,01cb87c,01cb87cd62d2ac7327fead2948e4de98de2e59d1
+Django,graphite-project/graphite-web,https://github.com/graphite-project/graphite-web,Monitoring,5875,0ec7201,0ec7201c42ac2c14485c4c7eaab8a644082dc687
+Django,GreaterWMS/GreaterWMS,https://github.com/GreaterWMS/GreaterWMS,Inventory management,3831,ec7db97,ec7db97d87a6f8b6b1dda79becd4445808b4b306
+TypeORM,gristlabs/grist-core,https://github.com/gristlabs/grist-core,Online spreadsheet,6675,1152976,1152976152689a39ebb0a95cfb25f6ca38da1188
+Django,healthchecks/healthchecks,https://github.com/healthchecks/healthchecks,Monitoring,7687,46c70a6,46c70a69cade155d75934f7b4ed440727ad3bc77
+TypeORM,hedgedoc/hedgedoc,https://github.com/hedgedoc/hedgedoc,Collaboration,4904,7286589,72865899e157c2b72208e95329d991c9501733eb
+TypeORM,iam4x/bobarr,https://github.com/iam4x/bobarr,Media management,1476,0fdf960,0fdf96092296c43d3b00d4c7d47839ccc3ebdf97
+Django,intelowlproject/IntelOwl,https://github.com/intelowlproject/IntelOwl,Security,3203,f13a0d3,f13a0d3141e20610d0ddddc1df4c3ad8ab92ea0e
+Django,inventree/InvenTree,https://github.com/inventree/InvenTree,Inventory management,3960,6700a46,6700a4625d7754d9fdbe3a6a8e168977b116fc94
+Django,jazzband/django-silk,https://github.com/jazzband/django-silk,Profiling,4348,1cb4623,1cb46236b85f2f0b83296a02b64e9fc5f9021247
+Django,jly8866/archer,https://github.com/jly8866/archer,DevOps,1559,e208c19,e208c195f969637e3e2c6d110db7153092f04c8f
+Django,jumpserver/jumpserver,https://github.com/jumpserver/jumpserver,Access management,24734,4ebcba8,4ebcba81e08fc92f34ca0499d2b69bf42e7a83fc
+Django,khoj-ai/khoj,https://github.com/khoj-ai/khoj,AI assistant,12103,ac3e508,ac3e5089a23e26d4e14de2e9ac22a4b521de9e39
+Django,Koed00/django-q,https://github.com/Koed00/django-q,Distributed task queue,1805,85baacc,85baaccd2c3adfe0a414d4237465163e9ff6e5a0
+TypeORM,l3tnun/EPGStation,https://github.com/l3tnun/EPGStation,Media management,538,c0e201b,c0e201b83231dfed73e5bea1b2ec54866fcfbbba
+TypeORM,laudspeaker/laudspeaker,https://github.com/laudspeaker/laudspeaker,Customer relationship,2056,9da9482,9da94825722f991f8205e1d5a8327f49ab6dc758
+Django,liangliangyy/DjangoBlog,https://github.com/liangliangyy/DjangoBlog,Blogging,6471,32158b3,32158b33404943ecd60a2ff30b19ba8bdab3d6c2
+Django,LibrePhotos/librephotos,https://github.com/LibrePhotos/librephotos,Photo management,6718,d0365b0,d0365b03e82c70c231f5c3e00b2e9cf3fe5bcad0
+Django,mathesar-foundation/mathesar,https://github.com/mathesar-foundation/mathesar,Database tool,2295,5bbcbbc,5bbcbbc0e10feb39bd3107bacc1fafbf571ec32c
+Django,mdn/kuma,https://github.com/mdn/kuma,Documentation,1930,ae08600,ae0860087cfb7ce19c9296f5dfbae10260dca759
+TypeORM,medusajs/medusa,https://github.com/medusajs/medusa,E-commerce,24024,cff54d7,cff54d73253a4c2d16a174a28f0f5d31c94bcebd
+Django,MicroPyramid/Django-CRM,https://github.com/MicroPyramid/Django-CRM,Customer relationship,1891,11184ce,11184ce27acc9753b60a8e973273ca3bd2423491
+Django,milesmcc/shynet,https://github.com/milesmcc/shynet,Analytics,2870,c4410c4,c4410c48b7a25b4c192fefcb5fd7e7e22cd97787
+TypeORM,misskey-dev/misskey,https://github.com/misskey-dev/misskey,Blogging,9715,ae21b75,ae21b75687df9f85a7d4c3176ca591b3c63e85e7
+Django,mljar/mercury,https://github.com/mljar/mercury,Notebook converter,3873,fc0d4b2,fc0d4b2ba44fe3207a8ead19ee353a6079c6eb9a
+Django,modoboa/modoboa,https://github.com/modoboa/modoboa,Mail hosting,2982,07b8cf9,07b8cf927a7b15cbf9c010cb600bc425e2cf713c
+Django,mozilla/fx-private-relay,https://github.com/mozilla/fx-private-relay,Email address generator,1444,9d2ae6e,9d2ae6e37485cd296bea18e328f4ea7163f4b7cb
+Django,mozilla/kitsune,https://github.com/mozilla/kitsune,Support website,1276,2a939c5,2a939c595bd3a4cd12fbea830f9a184236503e22
+Django,mozilla/pontoon,https://github.com/mozilla/pontoon,Localization,1437,fadf697,fadf6976b6ecd4088ad5229efdd4659719c6cdcd
+Django,mwmbl/mwmbl,https://github.com/mwmbl/mwmbl,Search engine,1453,fd35442,fd3544263f580518a030919210ead79cdcdb8e90
+TypeORM,n8n-io/n8n,https://github.com/n8n-io/n8n,Workflow automation,42978,ee582cc,ee582cc3bd3cf140e73d94630fcef1fd431c92ef
+Django,netbox-community/netbox,https://github.com/netbox-community/netbox,Network automation,15492,0dde0b5,0dde0b506e942661d234cb235e67b5b8694a8b44
+TypeORM,netless-io/flat-server,https://github.com/netless-io/flat-server,Classroom,638,4776c28,4776c28de88de0fca65ccba7483153065f2c2013
+Django,nitely/Spirit,https://github.com/nitely/Spirit,Forum,1160,069e82a,069e82ae07266d1748c5497dc7e22a4d2b46654c
+Django,okfn-brasil/serenata-de-amor,https://github.com/okfn-brasil/serenata-de-amor,Government data,4512,e7aeba7,e7aeba78100b1ec96c2a79a85d6f5dfd1a8adaf7
+Django,OpenDroneMap/WebODM,https://github.com/OpenDroneMap/WebODM,Image processing,2758,fa058e7,fa058e75674a3c304262d8f302e05c0ebafc3840
+Django,openedx/edx-platform,https://github.com/openedx/edx-platform,Online courses,7120,765f2d8,765f2d864bee08a2206831d82c1307e1573d9de6
+Django,overshard/timestrap,https://github.com/overshard/timestrap,Time management,1683,a063302,a0633024e1cc189656a0293eacbdfc3af736532a
+TypeORM,owid/owid-grapher,https://github.com/owid/owid-grapher,Data visualization,1356,c666571,c66657175096b3b6762a0d61635b74f03cbf259e
+Django,paperless-ngx/paperless-ngx,https://github.com/paperless-ngx/paperless-ngx,Document management,18332,3d56a56,3d56a56eb875decc68367ef69ff3870fd8ca5770
+Django,photonixapp/photonix,https://github.com/photonixapp/photonix,Photo management,1822,8a02fb3,8a02fb32e1187656f8621c95a3f8ad419092c277
+Django,pinry/pinry,https://github.com/pinry/pinry,Image board,3033,fd116a5,fd116a5abe59266a61a6105706a8548a512c765c
+Django,PokeAPI/pokeapi,https://github.com/PokeAPI/pokeapi,Hobby,4067,f464535,f4645353fce8b3874e10d2c693651f57dd7dda2c
+Django,PostHog/posthog,https://github.com/PostHog/posthog,Analytics,19823,c41995f,c41995f035b75981d2d9ec2c64157c1800a089c6
+Django,pretix/pretix,https://github.com/pretix/pretix,Ticket sales,1824,1b72581,1b725810ddb42bc74db2543b92463dfbfa7dc38f
+Django,QingdaoU/OnlineJudge,https://github.com/QingdaoU/OnlineJudge,Competitive programming,5960,c25a314,c25a3140018ab195133187e136028b646be4c124
+Django,rafalp/Misago,https://github.com/rafalp/Misago,Forum,2511,abad4f0,abad4f068f8e593efe350df4ce93b0eef2a4c961
+Django,readthedocs/readthedocs.org,https://github.com/readthedocs/readthedocs.org,Documentation,7950,757984f,757984f3356d186559214ee01545c1b5cdef8584
+Django,reviewboard/reviewboard,https://github.com/reviewboard/reviewboard,Code review,1547,d0e6a04,d0e6a04f775c88445e0ce7479b7feeea1adf2a75
+Django,saleor/saleor,https://github.com/saleor/saleor,E-commerce,20385,e78902b,e78902bbb299019530efc4612694df61f05da76a
+Django,samuelclay/NewsBlur,https://github.com/samuelclay/NewsBlur,Newsfeed,6787,56cd514,56cd514030fe9f9833ce60808a79a901b0d2d824
+Django,scrapinghub/portia,https://github.com/scrapinghub/portia,Web scraping,9231,606467d,606467d278eab2236afcb3d260cb03bf6fb906a0
+TypeORM,sct/overseerr,https://github.com/sct/overseerr,Media management,3604,77a33cb,77a33cb74d744bb747b791785799b632af8c7862
+TypeORM,shidenggui/bloghub,https://github.com/shidenggui/bloghub,Blogging,413,314e309,314e3095b97ecb6c9b4f70713ea5d280315ec3ed
+Django,shuup/shuup,https://github.com/shuup/shuup,E-commerce,2214,25f78cf,25f78cfe370109b9885b903e503faac295c7b7f2
+Django,sissbruecker/linkding,https://github.com/sissbruecker/linkding,Bookmark management,5423,fa5f78c,fa5f78cf71db68c0bef8447b6e6a6176fcbf3465
+Django,stephenmcd/mezzanine,https://github.com/stephenmcd/mezzanine,Content management,4747,e719286,e719286e06b5a9e376896ab7e4c27410c80c1586
+TypeORM,tellery/tellery,https://github.com/tellery/tellery,Monitoring,352,0f0e1d2,0f0e1d2587b4358906726fab92c4d7fd3709fe28
+Django,Tencent/CodeAnalysis,https://github.com/Tencent/CodeAnalysis,Static code analysis,1626,386c948,386c9486914ab58046f5f7865eaf9461b7b80ce6
+Django,translate/pootle,https://github.com/translate/pootle,Localization,1487,1e3fc44,1e3fc449ca3e5b92fd89b37c6842db9ec1415703
+Django,tubearchivist/tubearchivist,https://github.com/tubearchivist/tubearchivist,Media management,4476,0110736,011073617d08d5a220bcf0356024430126dcc030
+Django,uselotus/lotus,https://github.com/uselotus/lotus,Pricing and billing engine,1699,0ea71f7,0ea71f7974659589b95c490af1e58a2782b8cb59
+Django,wagtail/wagtail,https://github.com/wagtail/wagtail,Content management,17667,252bae9,252bae9129f9167d371d65392ae95b2db1961de0
+Django,WeblateOrg/weblate,https://github.com/WeblateOrg/weblate,Localization,4397,768f476,768f476ef1dff93f26955b588026aeecdd17354c
+TypeORM,wenqiyun/nest-admin,https://github.com/wenqiyun/nest-admin,Permission management,577,ca53149,ca53149eaa406d4608c1c1930f8b8a4a59ff2e8b
+TypeORM,weseek/growi,https://github.com/weseek/growi,Collaboration,1297,941c546,941c546fe726818d076c6c406ccf83f464a0e9ac
+Django,wger-project/wger,https://github.com/wger-project/wger,Fitness,2974,2b6c528,2b6c5284747f78c840cd681798787e656efdf943
+Django,yogeshojha/rengine,https://github.com/yogeshojha/rengine,Security,7245,9b6ccb3,9b6ccb3c66534097079e2ff122f605fbe51a99c1
+Django,zhoubear/open-paperless,https://github.com/zhoubear/open-paperless,Document management,2559,b42d4e3,b42d4e3bc88343ca5803c613321327406eabca1a
+Django,zulip/zulip,https://github.com/zulip/zulip,Chat,21280,88e91fa,88e91fa494beefe3d6ce1b193b97a4be315a1506
