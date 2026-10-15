@@ -69,8 +69,6 @@ pub enum ResolutionRole {
     BaseRows,
     /// Its result bounds another index range.
     IndexBounds,
-    /// Its result decides between arms that reach different targets.
-    Branch,
 }
 
 /// A read whose result determines the targets of the accesses at `access_nodes`.
@@ -150,6 +148,11 @@ impl PathFacts {
             .map(|(_, present)| *present)
     }
 
+    /// The reads whose presence the path settled, with the outcome it took.
+    pub fn presence(&self) -> &[(NodePath, bool)] {
+        &self.presence
+    }
+
     pub fn assuming(&self, read: &ReadRef, present: bool) -> Self {
         let mut facts = self.clone();
         facts.presence.push((read.node.clone(), present));
@@ -161,11 +164,6 @@ impl PathFacts {
             node: node.clone(),
             target,
         });
-    }
-
-    /// The targets accessed after the first `count` accesses.
-    pub fn targets_since(&self, count: usize) -> impl Iterator<Item = &Target> {
-        self.accesses[count..].iter().map(|access| &access.target)
     }
 
     pub fn block(&mut self, node: &NodePath, cause: UnknownCause) {
@@ -195,15 +193,5 @@ impl PathFacts {
                 resolution.access_nodes.push(node.clone());
             }
         }
-    }
-
-    /// Records that `selector` decides which of the accesses after the first
-    /// `since` is made.
-    pub fn resolve_selection(&mut self, selector: &ReadRef, since: usize) {
-        let nodes: Vec<NodePath> = self.accesses[since..]
-            .iter()
-            .map(|access| access.node.clone())
-            .collect();
-        self.resolve(selector, ResolutionRole::Branch, &nodes);
     }
 }

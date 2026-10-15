@@ -1,53 +1,15 @@
 use kiln_e1::{
-    classify_function, Classification, ClassifyError, FootprintClassification, IndexRead,
-    IndexReadKind, ProvenCategory, Reason, UnknownCause,
+    classify_function, Classification, ClassifyError, IndexRead, IndexReadKind, ProvenCategory,
+    Reason, UnknownCause,
 };
-use kiln_ir::{Block, FunctionName, IndexName, Slot};
+use kiln_ir::{Block, Effect, FunctionName, IndexName, Slot};
 
 #[path = "support/programs.rs"]
 mod programs;
 use programs::*;
 
-fn classify(body: Block) -> FootprintClassification {
-    classify_function(&program(body), &FunctionName(FUNCTION.to_owned())).unwrap()
-}
-
-fn category_of(body: Block) -> Option<ProvenCategory> {
-    match classify(body).classification {
-        Classification::Proven { category, .. } => Some(category),
-        _ => None,
-    }
-}
-
-fn evidence_of(body: Block) -> Vec<String> {
-    match classify(body).classification {
-        Classification::Proven { evidence, .. } => evidence.paths().to_vec(),
-        Classification::Unknown { evidence, .. } => evidence.unwrap().paths().to_vec(),
-        Classification::ExcludedNonDatabase(_) => unreachable!("the classifier excludes nothing"),
-    }
-}
-
-fn assert_unknown(body: Block, cause: UnknownCause) {
-    let Classification::Unknown { reason, .. } = classify(body).classification else {
-        panic!("expected unknown because of {cause}");
-    };
-    assert_eq!(reason, Reason::new(cause.to_string()).unwrap());
-}
-
-const STATIC: Option<ProvenCategory> = Some(ProvenCategory::Static);
-const ONE_HOP: Option<ProvenCategory> = Some(ProvenCategory::OneHop);
-
-/// Reads an order by `order_id` into slot 0.
-fn read_order() -> Effect {
-    read("orders", param("order_id"), 0)
-}
-
-/// Reads the customer an order in slot 0 names through its foreign key.
-fn read_customer_of_order(into: u32) -> Effect {
-    read("customers", column_of(0, "customer_id"), into)
-}
-
-use kiln_ir::Effect;
+#[path = "footprint/branches.rs"]
+mod branches;
 
 mod kiln_e1_18 {
     use super::*;
@@ -125,151 +87,6 @@ mod kiln_e1_18 {
         for body in bodies {
             assert_eq!(category_of(body.clone()), STATIC, "{body:?}");
         }
-    }
-}
-
-mod kiln_e1_19 {
-    use super::*;
-
-    fn static_arm() -> Block {
-        returns(vec![update("audit", param("id"), &[])])
-    }
-
-    fn resolving_arm() -> Block {
-        returns(vec![read_customer_of_order(1)])
-    }
-
-    fn unknown_arm() -> Block {
-        returns(vec![read("customers", column_of(0, "note"), 1)])
-    }
-
-    #[test]
-    fn a_data_selected_branch_counts_its_selector_only_when_the_arms_reach_different_targets() {
-        let touching = |table: &str, key: &str, column: &str| {
-            returns(vec![update(table, param(key), &[(column, literal(1))])])
-        };
-        let cases = [
-            (
-                touching("audit", "id", "a"),
-                touching("audit", "id", "b"),
-                STATIC,
-            ),
-            (touching("a", "x", "c"), touching("b", "y", "c"), ONE_HOP),
-            (
-                touching("audit", "x", "c"),
-                touching("audit", "y", "c"),
-                ONE_HOP,
-            ),
-            (static_arm(), returns(vec![]), ONE_HOP),
-        ];
-        for (present, absent, expected) in cases {
-            let body =
-                branch_on_presence(vec![read("accounts", param("id"), 0)], 0, present, absent);
-            assert_eq!(category_of(body.clone()), expected, "{body:?}");
-        }
-    }
-
-    #[test]
-    fn the_selector_read_and_a_resolving_read_in_an_arm_are_two_resolutions() {
-        let inner = branch_on_presence(
-            vec![read("orders", param("other_order_id"), 1)],
-            1,
-            returns(vec![update("a", param("id"), &[])]),
-            returns(vec![update("b", param("id"), &[])]),
-        );
-        let body = branch_on_presence(
-            vec![read_order()],
-            0,
-            inner,
-            returns(vec![update("c", param("id"), &[])]),
-        );
-        assert_unknown(body, UnknownCause::IndependentResolutions { count: 2 });
-    }
-
-    #[test]
-    fn the_most_demanding_arm_decides_whichever_side_it_is_on() {
-        let present = branch_on_presence(vec![read_order()], 0, resolving_arm(), static_arm());
-        let absent = branch_on_presence(vec![read_order()], 0, static_arm(), resolving_arm());
-        assert_eq!(category_of(present), ONE_HOP);
-        assert_eq!(category_of(absent), ONE_HOP);
-    }
-
-    #[test]
-    fn resolutions_on_different_arms_do_not_add_up() {
-        let body = branch_on_presence(
-            vec![read_order()],
-            0,
-            returns(vec![read_customer_of_order(1)]),
-            returns(vec![read("products", column_of(0, "product_id"), 1)]),
-        );
-        assert_eq!(category_of(body), ONE_HOP);
-    }
-
-    #[test]
-    fn a_resolution_before_the_branch_adds_to_one_in_an_arm() {
-        let body = branch_on_presence(
-            vec![read_order(), read_customer_of_order(1)],
-            1,
-            returns(vec![read("regions", column_of(1, "region_id"), 2)]),
-            static_arm(),
-        );
-        assert_unknown(body, UnknownCause::ChainedResolutions { count: 2 });
-    }
-
-    #[test]
-    fn an_unknown_arm_makes_the_function_unknown() {
-        let body = branch_on_presence(vec![read_order()], 0, static_arm(), unknown_arm());
-        assert_eq!(category_of(body), None);
-    }
-
-    #[test]
-    fn of_equally_demanding_arms_the_first_names_the_cause() {
-        let arm = |column: &str| returns(vec![read("customers", column_of(0, column), 1)]);
-        let body = branch_on_presence(vec![read_order()], 0, arm("first"), arm("second"));
-        assert_unknown(
-            body,
-            UnknownCause::NoDeclaredForeignKey {
-                from: table("orders"),
-                column: kiln_ir::ColumnName("first".to_owned()),
-                to: table("customers"),
-            },
-        );
-    }
-
-    #[test]
-    fn a_continuation_contradicting_an_established_presence_is_not_feasible() {
-        let present_then_absent = branch_on_presence(
-            vec![read_order()],
-            0,
-            branch_on_presence(vec![], 0, static_arm(), unknown_arm()),
-            static_arm(),
-        );
-        let absent_then_present = branch_on_presence(
-            vec![read_order()],
-            0,
-            static_arm(),
-            branch_on_presence(vec![], 0, unknown_arm(), static_arm()),
-        );
-        assert_eq!(category_of(present_then_absent), STATIC);
-        assert_eq!(category_of(absent_then_present), STATIC);
-    }
-
-    #[test]
-    fn a_slot_read_again_inside_an_arm_is_tested_afresh() {
-        let retested = Block {
-            effects: vec![read_order()],
-            terminal: kiln_ir::Terminal::Branch {
-                condition: kiln_ir::Condition::RowPresent(Slot(0)),
-                when_present: Box::new(branch_on_presence(
-                    vec![read("orders", param("other_order_id"), 0)],
-                    0,
-                    static_arm(),
-                    unknown_arm(),
-                )),
-                when_absent: Box::new(static_arm()),
-            },
-        };
-        assert_eq!(category_of(retested), None);
     }
 }
 

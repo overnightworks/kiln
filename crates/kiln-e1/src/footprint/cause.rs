@@ -26,6 +26,9 @@ pub enum UnknownCause {
     /// A key of `table` is arithmetic over a read result, which no foreign key
     /// or range identifies.
     KeyComputedFromRead { table: TableName },
+    /// The outcome of the read at `selector` changes which targets the
+    /// function accesses, which no index or foreign key identifies (Q3).
+    DataSelectedTargets { selector: String },
 }
 
 impl fmt::Display for UnknownCause {
@@ -65,6 +68,10 @@ impl fmt::Display for UnknownCause {
                 formatter,
                 "a key of {} is arithmetic over a read result",
                 table.0
+            ),
+            Self::DataSelectedTargets { selector } => write!(
+                formatter,
+                "the read at {selector} selects between paths that reach different targets"
             ),
         }
     }

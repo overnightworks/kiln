@@ -73,10 +73,9 @@ fn path_index_reads(path: &FeasiblePath) -> Vec<(String, IndexReadKind)> {
                 .filter(|resolution| resolution.read.node == binding.node)
                 .flat_map(|resolution| &resolution.roles);
             let kind = roles
-                .filter_map(|role| match role {
-                    ResolutionRole::BaseRows => Some(IndexReadKind::FollowedByRowAccesses),
-                    ResolutionRole::IndexBounds => Some(IndexReadKind::FeedsIndexBounds),
-                    ResolutionRole::Branch => None,
+                .map(|role| match role {
+                    ResolutionRole::BaseRows => IndexReadKind::FollowedByRowAccesses,
+                    ResolutionRole::IndexBounds => IndexReadKind::FeedsIndexBounds,
                 })
                 .max()
                 .unwrap_or(IndexReadKind::IndexOnly);

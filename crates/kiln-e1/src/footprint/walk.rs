@@ -60,9 +60,8 @@ impl Walker<'_> {
         }
     }
 
-    /// Explores the arms an enclosing test has not already ruled out. When
-    /// both are feasible and reach different targets, the read deciding
-    /// between them is a resolution (Q1.3, Q3.2).
+    /// Explores the arms an enclosing test has not already ruled out. Each arm
+    /// stays a separate path, so `selection` can compare them (Q1, Q3).
     fn branch(
         &self,
         selector: Slot,
@@ -76,24 +75,17 @@ impl Walker<'_> {
             Some(false) => return self.block(when_absent, &terminal.when_absent(), facts),
             None => {}
         }
-        let prefix = facts.accesses.len();
-        let mut present = self.block(
+        let mut paths = self.block(
             when_present,
             &terminal.when_present(),
             facts.assuming(&selector, true),
         )?;
-        let mut absent = self.block(
+        paths.extend(self.block(
             when_absent,
             &terminal.when_absent(),
             facts.assuming(&selector, false),
-        )?;
-        if reach_different_targets(&present, &absent, prefix) {
-            for path in present.iter_mut().chain(&mut absent) {
-                path.facts.resolve_selection(&selector, prefix);
-            }
-        }
-        present.extend(absent);
-        Ok(present)
+        )?);
+        Ok(paths)
     }
 
     fn effects(
@@ -281,22 +273,4 @@ fn operands_of(
         .iter()
         .map(|expression| operand_of(facts, expression, at))
         .collect()
-}
-
-/// Whether the arms access different sets of targets after the `prefix`
-/// accesses they share.
-fn reach_different_targets(
-    present: &[FeasiblePath],
-    absent: &[FeasiblePath],
-    prefix: usize,
-) -> bool {
-    let targets_of = |paths: &'_ [FeasiblePath]| -> Vec<Target> {
-        paths
-            .iter()
-            .flat_map(|path| path.facts.targets_since(prefix).cloned())
-            .collect()
-    };
-    let (present, absent) = (targets_of(present), targets_of(absent));
-    let covers = |targets: &[Target], others: &[Target]| others.iter().all(|t| targets.contains(t));
-    !(covers(&present, &absent) && covers(&absent, &present))
 }

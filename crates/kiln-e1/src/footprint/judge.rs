@@ -5,6 +5,7 @@ use super::cause::UnknownCause;
 use super::evidence::distinct;
 use super::facts::PathFacts;
 use super::node_path::NodePath;
+use super::selection::data_selection;
 use super::walk::FeasiblePath;
 
 pub enum Judgement {
@@ -28,9 +29,11 @@ impl Judgement {
     }
 }
 
-/// The judgement of the most demanding path; the first of equally demanding ones.
+/// The judgement of the most demanding path, the first of equally demanding
+/// ones; a function no path makes unknown is still unknown when a data-selected
+/// branch changes the targets it accesses.
 pub fn judge_function(paths: &[FeasiblePath]) -> Judgement {
-    paths
+    let most_demanding = paths
         .iter()
         .map(judge_path)
         .reduce(|best, candidate| {
@@ -40,7 +43,16 @@ pub fn judge_function(paths: &[FeasiblePath]) -> Judgement {
                 best
             }
         })
-        .expect("a function body has at least one feasible path")
+        .expect("a function body has at least one feasible path");
+    match (&most_demanding, data_selection(paths)) {
+        (Judgement::Unknown { .. }, _) | (_, None) => most_demanding,
+        (_, Some(selection)) => Judgement::Unknown {
+            cause: UnknownCause::DataSelectedTargets {
+                selector: selection.selector.to_string(),
+            },
+            witness: selection.witness,
+        },
+    }
 }
 
 fn judge_path(path: &FeasiblePath) -> Judgement {

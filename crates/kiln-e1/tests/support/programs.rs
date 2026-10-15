@@ -3,6 +3,10 @@
 
 use std::collections::BTreeMap;
 
+use kiln_e1::{
+    classify_function, Classification, FootprintClassification, ProvenCategory, Reason,
+    UnknownCause,
+};
 use kiln_ir::{
     ArithmeticOp, Block, ColumnName, Condition, Effect, Expr, ForeignKey, Function, FunctionName,
     Index, IndexName, ParameterName, Program, Schema, Slot, TableName, Terminal, Value,
@@ -161,4 +165,43 @@ pub fn program(body: Block) -> Program {
             body,
         }],
     }
+}
+
+pub fn classify(body: Block) -> FootprintClassification {
+    classify_function(&program(body), &FunctionName(FUNCTION.to_owned())).unwrap()
+}
+
+pub fn category_of(body: Block) -> Option<ProvenCategory> {
+    match classify(body).classification {
+        Classification::Proven { category, .. } => Some(category),
+        _ => None,
+    }
+}
+
+pub fn evidence_of(body: Block) -> Vec<String> {
+    match classify(body).classification {
+        Classification::Proven { evidence, .. } => evidence.paths().to_vec(),
+        Classification::Unknown { evidence, .. } => evidence.unwrap().paths().to_vec(),
+        Classification::ExcludedNonDatabase(_) => unreachable!("the classifier excludes nothing"),
+    }
+}
+
+pub fn assert_unknown(body: Block, cause: UnknownCause) {
+    let Classification::Unknown { reason, .. } = classify(body).classification else {
+        panic!("expected unknown because of {cause}");
+    };
+    assert_eq!(reason, Reason::new(cause.to_string()).unwrap());
+}
+
+pub const STATIC: Option<ProvenCategory> = Some(ProvenCategory::Static);
+pub const ONE_HOP: Option<ProvenCategory> = Some(ProvenCategory::OneHop);
+
+/// Reads an order by `order_id` into slot 0.
+pub fn read_order() -> Effect {
+    read("orders", param("order_id"), 0)
+}
+
+/// Reads the customer an order in slot 0 names through its foreign key.
+pub fn read_customer_of_order(into: u32) -> Effect {
+    read("customers", column_of(0, "customer_id"), into)
 }

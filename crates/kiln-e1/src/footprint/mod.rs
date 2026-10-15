@@ -10,6 +10,7 @@ mod facts;
 mod judge;
 mod node_path;
 mod operand;
+mod selection;
 mod walk;
 
 use std::fmt;
