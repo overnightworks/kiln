@@ -253,15 +253,14 @@ beyond those bounds.
 
 For every scenario TLC explores the whole state space against every
 invariant its configuration lists and the deadlock check; every scenario
-passes with no violation and no deadlock, each run in under one second
-with 4 workers. Each scenario also passes `RequestedLeadsToTerminal`
-under `Fairness`. `Starvation` (under `RepeatSpec`) checks `TypeOK`,
-`MutualExclusion`, `FootprintCovers`, `ReservationsFunded`,
-`DrawsWithinReservation`, `NoWaitCycle`, `ReferentialIntegrity`,
-`BalanceNonNegative` and `RequestedLeadsToTerminal`; it is exempt from
-`Serializable` and `Uniqueness` because `Rearrive` resets the histories
-they read. Every other scenario checks `Serializable` and `Uniqueness`
-too.
+passes with no violation and no deadlock, with 4 workers. Each scenario
+also passes `RequestedLeadsToTerminal` under `Fairness`. `Starvation`
+(under `RepeatSpec`) checks `TypeOK`, `MutualExclusion`,
+`FootprintCovers`, `ReservationsFunded`, `DrawsWithinReservation`,
+`NoWaitCycle`, `ReferentialIntegrity`, `BalanceNonNegative` and
+`RequestedLeadsToTerminal`; it is exempt from `Serializable` and
+`Uniqueness` because `Rearrive` resets the histories they read. Every
+other scenario checks `Serializable` and `Uniqueness` too.
 Depth is the length of the longest shortest path (breadth-first).
 
 | Scenario | What runs | Distinct states | Depth | Log |
