@@ -230,6 +230,19 @@ mod tests {
     /// A future change to the seed formula, the PRNG, or a generator's
     /// arithmetic must change these literals by hand, deliberately, not
     /// make the test pass by recomputing alongside it.
+    ///
+    /// These literals were printed by the production generators
+    /// themselves at freeze time, so this test guards against a future
+    /// regression in that output — it does not independently prove the
+    /// generators conform to the protocol. That conformance was checked
+    /// by review, by reading the seed formula and the key-range mapping
+    /// directly against protocol §2.1 ("Inputs, frozen") rather than by
+    /// recomputing these values a second way: `seed_for`'s
+    /// `1 + cell_index × 1000 + repetition_index` matches §2.1's seed
+    /// formula verbatim, and every id this module draws is checked
+    /// against the live row range (§3.1's "uniform random over the live
+    /// key range"), both confirmed by inspection of `seed_for` and the
+    /// range-bounded draw here, not by this fixture.
     mod golden {
         use super::*;
 

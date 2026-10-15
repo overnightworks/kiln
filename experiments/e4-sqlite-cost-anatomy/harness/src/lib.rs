@@ -11,5 +11,7 @@ pub mod machine;
 pub mod monitor;
 pub mod preflight;
 pub mod restore;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod vfs;
 pub mod workloads;

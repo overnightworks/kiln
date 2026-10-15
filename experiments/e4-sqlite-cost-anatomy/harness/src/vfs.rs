@@ -523,12 +523,15 @@ mod tests {
     // The shim's counters are process-wide globals by protocol design
     // (§5: the real harness is single-threaded, so plain globals are
     // correct there) — but `cargo test` runs tests in parallel threads
-    // within one process, so any two tests that both drive real commits
-    // through the shim must not run concurrently. One combined test
-    // keeps that true without a lock every future shim test would have
-    // to remember to take.
+    // within one process, so any two tests that drive real commits
+    // through the shim, or otherwise reset or read its counters, must
+    // not run concurrently with each other or with this one. Holding
+    // `crate::test_support::lock_vfs_counters` for the whole test keeps
+    // that true; every other such test across the crate takes the same
+    // lock.
     #[test]
     fn a_real_commit_times_through_the_shim_and_reset_zeroes_it_for_the_next_one() {
+        let _guard = crate::test_support::lock_vfs_counters();
         let dir = tempfile::tempdir().expect("tempdir");
         let db_path = dir.path().join("shim-test.db");
         let conn = open_through_shim(&db_path);

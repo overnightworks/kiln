@@ -404,6 +404,11 @@ pub fn execute_insert(
             Ok(InsertOutcome::Committed)
         }
         Err(err) if is_constraint_violation(&err) => {
+            // `err` owns SQLite's allocated error message; drop it
+            // explicitly here, before the retry and COMMIT's step, so
+            // its allocator cleanup never lands inside the timed window
+            // `time_operation` measures around this function.
+            drop(err);
             stmts
                 .insert
                 .execute(rusqlite::params![params.id as i64, fallback_email])?;
@@ -745,6 +750,10 @@ mod tests {
 
     #[test]
     fn no_prng_call_happens_inside_insert_s_timed_window() {
+        // `time_operation` resets and reads the VFS shim's process-wide
+        // counters; serialize against every other test that does the
+        // same (`crate::test_support::lock_vfs_counters`'s own doc).
+        let _guard = crate::test_support::lock_vfs_counters();
         let conn = loaded_connection(5);
         let mut txn = TransactionStatements::prepare(&conn).unwrap();
         let mut stmts = InsertStatements::prepare(&conn).unwrap();
@@ -778,6 +787,7 @@ mod tests {
 
     #[test]
     fn the_timed_window_ends_at_commits_step_leaving_it_unreset() {
+        let _guard = crate::test_support::lock_vfs_counters();
         let conn = loaded_connection(5);
         let mut txn = TransactionStatements::prepare(&conn).unwrap();
         let mut stmts = PointReadStatements::prepare(&conn).unwrap();
@@ -792,6 +802,43 @@ mod tests {
             0,
             "the op must return immediately after COMMIT's step, before any reset runs — \
              nothing after the step may fall inside the measured interval"
+        );
+
+        txn.end_operation().unwrap();
+        assert_eq!(
+            txn.commit.reset_calls(),
+            1,
+            "end_operation must reset COMMIT exactly once the window has closed"
+        );
+    }
+
+    #[test]
+    fn the_collision_path_s_timed_window_also_ends_at_commits_step_leaving_it_unreset() {
+        let _guard = crate::test_support::lock_vfs_counters();
+        let conn = loaded_connection(5);
+        let mut txn = TransactionStatements::prepare(&conn).unwrap();
+        let mut stmts = InsertStatements::prepare(&conn).unwrap();
+
+        let colliding_email = generators::initial_load_email(1);
+        let params = InsertParams {
+            id: 6,
+            email: colliding_email,
+        };
+        let rng = generators::rng_for_attempt(0, 0);
+        let fallback = generators::prepare_insert_fallback(&rng, 1);
+
+        let (outcome, _timing) = crate::vfs::time_operation(|| {
+            execute_insert(&mut txn, &mut stmts, &params, &fallback.email)
+        })
+        .unwrap();
+
+        assert_eq!(outcome, InsertOutcome::CommittedWithFallback);
+        assert_eq!(
+            txn.commit.reset_calls(),
+            0,
+            "the retried insert's own op must also return immediately after COMMIT's \
+             step, before any reset runs — dropping the primary attempt's constraint \
+             error must not push anything past that point either"
         );
 
         txn.end_operation().unwrap();
