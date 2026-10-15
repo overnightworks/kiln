@@ -591,6 +591,24 @@ mod tests {
         }
 
         #[test]
+        fn the_rendered_cell_names_its_median_range_and_verdict() {
+            for (percents, line) in [
+                (&[0.5][..], "median=0.50% range=[0.50%, 0.50%] -> PASS"),
+                (&[5.0][..], "median=5.00% range=[5.00%, 5.00%] -> FAIL"),
+                (
+                    &[1.0, 3.0][..],
+                    "median=2.00% range=[1.00%, 3.00%] -> INCONCLUSIVE",
+                ),
+            ] {
+                let row = WorkloadComparison {
+                    workload: PilotWorkload::PointUpdate,
+                    comparison: judge_cell(&completed(percents)),
+                };
+                assert!(row.render().contains(line), "{}", row.render());
+            }
+        }
+
+        #[test]
         fn the_pilot_succeeds_only_for_a_passing_judged_cell() {
             for (overheads, expected) in [
                 (&[0.5][..], true),
