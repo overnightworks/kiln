@@ -195,7 +195,8 @@ this meaning, one slice at a time.
   absent row aborts — there is no implicit insert-on-update or
   no-op-on-delete. An absent key is itself a branchable value a
   transaction may test and branch on, the same as any other value. Bounded
-  iteration proceeds in key order. Write effects apply in program order
+  iteration proceeds in key order for a primary-key range and in index
+  order for an index range. Write effects apply in program order
   within one transaction. An abort discards every effect the transaction
   produced before it, not only the operation that triggered it. A
   successful call returns exactly the function's declared response.
