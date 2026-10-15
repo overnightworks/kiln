@@ -128,13 +128,17 @@ RunOps(ops, v, rs) ==
 
 RunTxn(t, v) ==
   LET r == RunOps(Prog[t], v, <<>>) IN
-  [db |-> IF r.rejected THEN v ELSE r.db, resps |-> r.resps]
+  [db |-> IF r.rejected THEN v ELSE r.db,
+   outcome |-> [resps |-> r.resps,
+                status |-> IF r.rejected THEN "rejected" ELSE "committed"]]
 
+(* `outcomes` maps each transaction run so far to its responses and its
+   terminal status. *)
 RECURSIVE RunSerial(_, _, _)
-RunSerial(perm, v, rm) ==
-  IF perm = <<>> THEN [db |-> v, resps |-> rm]
+RunSerial(perm, v, outcomes) ==
+  IF perm = <<>> THEN [db |-> v, outcomes |-> outcomes]
   ELSE LET r == RunTxn(Head(perm), v) IN
-       RunSerial(Tail(perm), r.db, rm @@ (Head(perm) :> r.resps))
+       RunSerial(Tail(perm), r.db, outcomes @@ (Head(perm) :> r.outcome))
 
 RECURSIVE Perms(_)
 Perms(S) ==
@@ -142,17 +146,48 @@ Perms(S) ==
   ELSE UNION {{<<x>> \o p : p \in Perms(S \ {x})} : x \in S}
 
 ----------------------------------------------------------------------------
-(* Canonical order (§4): a program registers its resources in
-   non-decreasing order of their lowest key, so a waiter only ever waits on
-   a transaction that is further along in that order. Checked against the
-   initial state, where the parent a delete pins is fixed. *)
-Min(S) == CHOOSE m \in S : \A x \in S : m <= x
-LowestKey(op) == Min(UNION {r.cov : r \in Need(op, InitDb)})
+(* Canonical order (§4) over a program's complete acquisition footprint.
+   Only a delete's resources depend on the view (the parent its row
+   names), and a parent is set by InitDb or by an Insert in some program,
+   so the static footprint pins every parent the row can have: an
+   over-approximation that can only refuse a program, never admit one
+   out of order. *)
+Ops == UNION {{Prog[t][i] : i \in DOMAIN Prog[t]} : t \in Txns}
+PossibleParents(k) ==
+  ({InitDb[k].parent} \cup {op.p : op \in {op \in Ops : op.op = "Insert" /\ op.k = k}})
+  \ {0}
+Footprint(op) ==
+  IF op.op = "Delete"
+  THEN {Res("DEL", {op.k})} \cup {Res("PIN", {p}) : p \in PossibleParents(op.k)}
+  ELSE Need(op, InitDb)
+KeysOf(R) == UNION {r.cov : r \in R}
+Before(t, i) == UNION {Footprint(Prog[t][j]) : j \in 1..(i - 1)}
+
+(* Every key an operation covers for the first time lies above every key
+   the program covered before it. A waiter then waits only on a holder
+   that is further along in key order, so (together with NoUpgrade) the
+   wait-for relation over exclusive resources is acyclic. *)
 CanonicalOrder ==
-  \A t \in Txns : \A i \in 1..(Len(Prog[t]) - 1) :
-    LowestKey(Prog[t][i]) <= LowestKey(Prog[t][i + 1])
+  \A t \in Txns : \A i \in 2..Len(Prog[t]) :
+    \A k \in KeysOf(Footprint(Prog[t][i])) \ KeysOf(Before(t, i)) :
+      \A j \in KeysOf(Before(t, i)) : j < k
+
+(* A mode dominates another when every kind compatible with it is also
+   compatible with the other, so a request in the dominated mode on a key
+   already held in the dominating one can never be refused. A program that
+   needs a stronger mode on a key it already holds would acquire out of
+   order; it is refused here. Whether the protocol detects, restarts or
+   forbids such an upgrade is decided in #24. *)
+Kinds == {"S", "RS", "X", "CLAIM", "PIN", "DEL", "DRAW"}
+Dominates(m, w) ==
+  \A x \in Kinds : <<m, x>> \in CompatibleKinds => <<w, x>> \in CompatibleKinds
+NoUpgrade ==
+  \A t \in Txns : \A i \in 2..Len(Prog[t]) :
+    \A r \in Footprint(Prog[t][i]) : \A k \in r.cov \cap KeysOf(Before(t, i)) :
+      \E h \in Before(t, i) : k \in h.cov /\ Dominates(h.kind, r.kind)
 
 ASSUME CanonicalOrder
+ASSUME NoUpgrade
 ASSUME \A k \in Keys : InitDb[k] \in Row /\ (~InitDb[k].present => InitDb[k] = AbsentRow)
 
 ----------------------------------------------------------------------------
@@ -167,7 +202,7 @@ VARIABLES
 
 Vars == <<status, pc, held, wr, draws, resp, db>>
 
-Resource == [kind : {"S", "RS", "X", "CLAIM", "PIN", "DEL", "DRAW"}, cov : SUBSET Keys]
+Resource == [kind : Kinds, cov : SUBSET Keys]
 
 NoWrites == [k \in {} |-> AbsentRow]
 
@@ -310,16 +345,18 @@ WaitFor == {<<t, u>> \in Txns \X Txns : u \in WaitsOn(t)}
 NoWaitCycle == \A t \in Txns : <<t, t>> \notin Closure(WaitFor, Cardinality(Txns))
 
 (* Serializability, checked for real: the transactions that have ended
-   (committed, or rejected with a caller-visible constraint failure) must
-   have produced, in some serial order, exactly the responses they
-   returned and exactly the committed state. *)
+   must have produced, in some serial order, exactly the responses they
+   returned, exactly the terminal outcome each reached (committed, or
+   rejected with its caller-visible failure as the last response), and
+   exactly the committed state. *)
 Ended == {t \in Txns : ~Active(t)}
 
 Serializable ==
   \E perm \in Perms(Ended) :
-    LET r == RunSerial(perm, InitDb, [t \in {} |-> <<>>]) IN
+    LET r == RunSerial(perm, InitDb, [t \in {} |-> {}]) IN
     /\ r.db = db
-    /\ \A t \in Ended : r.resps[t] = resp[t]
+    /\ \A t \in Ended :
+         r.outcomes[t] = [resps |-> resp[t], status |-> status[t]]
 
 (* The typed reservations' own invariants over committed state. *)
 OpOk(t, kind, k) ==

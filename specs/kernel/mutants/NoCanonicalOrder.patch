@@ -1,10 +1,10 @@
 --- Kernel.tla
 +++ Kernel.tla
-@@ -152,7 +152,6 @@
-   \A t \in Txns : \A i \in 1..(Len(Prog[t]) - 1) :
-     LowestKey(Prog[t][i]) <= LowestKey(Prog[t][i + 1])
+@@ -186,7 +186,6 @@
+     \A r \in Footprint(Prog[t][i]) : \A k \in r.cov \cap KeysOf(Before(t, i)) :
+       \E h \in Before(t, i) : k \in h.cov /\ Dominates(h.kind, r.kind)
  
 -ASSUME CanonicalOrder
+ ASSUME NoUpgrade
  ASSUME \A k \in Keys : InitDb[k] \in Row /\ (~InitDb[k].present => InitDb[k] = AbsentRow)
  
- ----------------------------------------------------------------------------

@@ -1,10 +1,10 @@
 TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
 Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 78 and seed 76475913978143952 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 2420300] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
-Starting... (2026-10-15 21:40:09)
+Running breadth-first search Model-Checking with fp 10 and seed -8070895787947764075 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 2588157] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-10-15 22:02:57)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-15 21:40:10.
+Finished computing initial states: 1 distinct state generated at 2026-10-15 22:02:58.
 Error: Invariant Serializable is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
@@ -25,7 +25,7 @@ State 1: <Initial predicate>
 /\ held = [t1 |-> {}, t2 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>]
 
-State 2: <DoOp line 243, col 3 to line 264, col 17 of module Kernel>
+State 2: <DoOp line 278, col 3 to line 299, col 17 of module Kernel>
 /\ resp = [t1 |-> <<>>, t2 |-> <<"ok">>]
 /\ pc = [t1 |-> 0, t2 |-> 1]
 /\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
@@ -44,7 +44,7 @@ State 2: <DoOp line 243, col 3 to line 264, col 17 of module Kernel>
 /\ wr = [ t1 |-> << >>,
   t2 |-> (2 :> [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0]) ]
 
-State 3: <DoOp line 243, col 3 to line 264, col 17 of module Kernel>
+State 3: <DoOp line 278, col 3 to line 299, col 17 of module Kernel>
 /\ resp = [t1 |-> <<{<<3, 0>>}>>, t2 |-> <<"ok">>]
 /\ pc = [t1 |-> 1, t2 |-> 1]
 /\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
@@ -64,7 +64,7 @@ State 3: <DoOp line 243, col 3 to line 264, col 17 of module Kernel>
 /\ wr = [ t1 |-> << >>,
   t2 |-> (2 :> [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0]) ]
 
-State 4: <Commit line 270, col 3 to line 276, col 27 of module Kernel>
+State 4: <Commit line 305, col 3 to line 311, col 27 of module Kernel>
 /\ resp = [t1 |-> <<{<<3, 0>>}>>, t2 |-> <<"ok">>]
 /\ pc = [t1 |-> 1, t2 |-> 1]
 /\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
@@ -82,7 +82,7 @@ State 4: <Commit line 270, col 3 to line 276, col 27 of module Kernel>
 /\ held = [t1 |-> {[kind |-> "RS", cov |-> 2..3]}, t2 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>]
 
-State 5: <DoOp line 243, col 3 to line 264, col 17 of module Kernel>
+State 5: <DoOp line 278, col 3 to line 299, col 17 of module Kernel>
 /\ resp = [t1 |-> <<{<<3, 0>>}, {<<2, 0>>, <<3, 0>>}>>, t2 |-> <<"ok">>]
 /\ pc = [t1 |-> 2, t2 |-> 1]
 /\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
@@ -100,7 +100,7 @@ State 5: <DoOp line 243, col 3 to line 264, col 17 of module Kernel>
 /\ held = [t1 |-> {[kind |-> "RS", cov |-> 2..3]}, t2 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>]
 
-State 6: <Commit line 270, col 3 to line 276, col 27 of module Kernel>
+State 6: <Commit line 305, col 3 to line 311, col 27 of module Kernel>
 /\ resp = [t1 |-> <<{<<3, 0>>}, {<<2, 0>>, <<3, 0>>}>>, t2 |-> <<"ok">>]
 /\ pc = [t1 |-> 2, t2 |-> 1]
 /\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
@@ -121,4 +121,4 @@ State 6: <Commit line 270, col 3 to line 276, col 27 of module Kernel>
 23 states generated, 17 distinct states found, 0 states left on queue.
 The depth of the complete state graph search is 6.
 The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 2 and the 95th percentile is 2).
-Finished in 00s at (2026-10-15 21:40:10)
+Finished in 00s at (2026-10-15 22:02:58)
