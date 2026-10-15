@@ -1,0 +1,7 @@
+claim_id = "96b9783e6a194abd9d51e6bffee0de99"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "e5599638071dbaa634d0db2127fa0aefb8748230"
+branch = "claude/issue-20-kiln-ir-core"
+scope = ["Cargo.toml", "crates/kiln-ir", "docs/concept.md"]
+opened_commit = "edfabf4e774b41ba91d9925b14cc5bfbafb286b5"
