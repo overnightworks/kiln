@@ -6,10 +6,10 @@
      t2 draws one ticket from the event's escrow, then inserts key 2 as a
         child of key 1 (claim on 2, pin on 1);
      t3 deletes child 3 (exclusive against 3's reverse references, pin on
-        its parent 1), then scans key 3.
+        its parent 1), then scans the whole table (a table resource).
    X meets DRAW on key 1, the two pins on key 1 are compatible, the claim
-   on 2 and the delete of 3 both meet t1's range, and the serial orders
-   differ in every response. *)
+   on 2 and the delete of 3 both meet t1's range, t3's table scan covers
+   every point, and the serial orders differ in every response. *)
 
 EXTENDS Kernel
 
@@ -17,7 +17,7 @@ ComposedProg ==
   [t \in {"t1", "t2", "t3"} |->
     CASE t = "t1" -> <<Update(1, 0, 0), Scan(2, 3)>>
       [] t = "t2" -> <<Buy(1, 1), Insert(2, 1)>>
-      [] t = "t3" -> <<Delete(3), Scan(3, 3)>>]
+      [] t = "t3" -> <<Delete(3), Scan(1, 3)>>]
 
 ComposedInitDb ==
   [k \in 1..3 |->

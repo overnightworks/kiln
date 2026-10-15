@@ -1,0 +1,12 @@
+--- Kernel.tla
++++ Kernel.tla
+@@ -201,8 +201,7 @@
+ 
+ (* Admission guard: every registered resource must be compatible with
+    every resource a live transaction holds. *)
+-Conflicting(t, R) ==
+-  {u \in Txns \ {t} : Active(u) /\ \E r \in R, h \in held[u] : ~Compatible(r, h)}
++Conflicting(t, R) == {}
+ 
+ (* Escrow allowance (§5): a tentative draw already reduces what a
+    concurrent draw may reserve, so the allowance is the committed balance

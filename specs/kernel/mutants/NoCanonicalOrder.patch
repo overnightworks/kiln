@@ -1,0 +1,10 @@
+--- Kernel.tla
++++ Kernel.tla
+@@ -152,7 +152,6 @@
+   \A t \in Txns : \A i \in 1..(Len(Prog[t]) - 1) :
+     LowestKey(Prog[t][i]) <= LowestKey(Prog[t][i + 1])
+ 
+-ASSUME CanonicalOrder
+ ASSUME \A k \in Keys : InitDb[k] \in Row /\ (~InitDb[k].present => InitDb[k] = AbsentRow)
+ 
+ ----------------------------------------------------------------------------

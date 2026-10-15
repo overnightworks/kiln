@@ -161,20 +161,27 @@ VARIABLES
   pc,      \* [Txns -> Nat]: operations already executed
   held,    \* [Txns -> SUBSET Resource]: resources registered, held to the end
   wr,      \* [Txns -> partial Keys -> Row]: tentative writes, applied at commit
+  draws,   \* [Txns -> [Keys -> Draw]]: tentative escrow draws, deltas at commit
   resp,    \* [Txns -> Seq(response)]: what the caller has been told
   db       \* [Keys -> Row]: committed state
 
-Vars == <<status, pc, held, wr, resp, db>>
+Vars == <<status, pc, held, wr, draws, resp, db>>
 
 Resource == [kind : {"S", "RS", "X", "CLAIM", "PIN", "DEL", "DRAW"}, cov : SUBSET Keys]
 
 NoWrites == [k \in {} |-> AbsentRow]
+
+(* An escrow draw is a delta, never an overwrite: what a transaction has
+   drawn (bal) and sold (val) so far on a key. *)
+Draw == [bal : Nat, val : Nat]
+NoDraws == [k \in Keys |-> [bal |-> 0, val |-> 0]]
 
 Init ==
   /\ status = [t \in Txns |-> "active"]
   /\ pc = [t \in Txns |-> 0]
   /\ held = [t \in Txns |-> {}]
   /\ wr = [t \in Txns |-> NoWrites]
+  /\ draws = [t \in Txns |-> NoDraws]
   /\ resp = [t \in Txns |-> <<>>]
   /\ db = InitDb
 
@@ -183,8 +190,14 @@ Running(t) == Active(t) /\ pc[t] < Len(Prog[t])
 NextOp(t) == Prog[t][pc[t] + 1]
 
 (* The view a running transaction evaluates on: committed rows overlaid
-   with its own tentative writes (read-your-writes). *)
-View(t) == [k \in Keys |-> IF k \in DOMAIN wr[t] THEN wr[t][k] ELSE db[k]]
+   with its own tentative writes and draws (read-your-writes). *)
+Drawn(t, k, row) ==
+  [row EXCEPT !.bal = @ - draws[t][k].bal, !.val = @ + draws[t][k].val]
+Undrawn(t, k, row) ==
+  [row EXCEPT !.bal = @ + draws[t][k].bal, !.val = @ - draws[t][k].val]
+
+View(t) ==
+  [k \in Keys |-> Drawn(t, k, IF k \in DOMAIN wr[t] THEN wr[t][k] ELSE db[k])]
 
 (* Admission guard: every registered resource must be compatible with
    every resource a live transaction holds. *)
@@ -195,7 +208,7 @@ Conflicting(t, R) ==
    concurrent draw may reserve, so the allowance is the committed balance
    minus every live tentative draw on the key; a draw that fits the
    committed balance but not the allowance waits on those holders. *)
-TentativeDraw(u, k) == IF k \in DOMAIN wr[u] THEN db[k].bal - wr[u][k].bal ELSE 0
+TentativeDraw(u, k) == draws[u][k].bal
 
 RECURSIVE SumDraws(_, _)
 SumDraws(U, k) ==
@@ -236,20 +249,29 @@ DoOp(t) ==
         THEN /\ status' = [status EXCEPT ![t] = "rejected"]
              /\ held' = [held EXCEPT ![t] = {}]
              /\ wr' = [wr EXCEPT ![t] = NoWrites]
+             /\ draws' = [draws EXCEPT ![t] = NoDraws]
         ELSE /\ held' = [held EXCEPT ![t] = @ \cup Need(op, View(t))]
-             /\ wr' = [wr EXCEPT ![t] =
-                        [k \in DOMAIN @ \cup Changed(t, r.db) |-> r.db[k]]]
+             /\ IF op.op = "Buy"
+                THEN /\ draws' = [draws EXCEPT ![t][op.k] =
+                                   [bal |-> @.bal + op.a, val |-> @.val + 1]]
+                     /\ UNCHANGED wr
+                ELSE /\ wr' = [wr EXCEPT ![t] =
+                                [k \in DOMAIN @ \cup Changed(t, r.db) |->
+                                   Undrawn(t, k, r.db[k])]]
+                     /\ UNCHANGED draws
              /\ UNCHANGED status
   /\ UNCHANGED db
 
-(* Commit applies the tentative writes atomically and releases every
-   resource (strict two-phase locking: held from registration to commit). *)
+(* Commit applies the tentative writes and draws atomically - the view
+   becomes the committed state - and releases every resource (strict
+   two-phase locking: held from registration to commit). *)
 Commit(t) ==
   /\ Active(t) /\ pc[t] = Len(Prog[t])
   /\ status' = [status EXCEPT ![t] = "committed"]
-  /\ db' = [k \in Keys |-> IF k \in DOMAIN wr[t] THEN wr[t][k] ELSE db[k]]
+  /\ db' = View(t)
   /\ held' = [held EXCEPT ![t] = {}]
   /\ wr' = [wr EXCEPT ![t] = NoWrites]
+  /\ draws' = [draws EXCEPT ![t] = NoDraws]
   /\ UNCHANGED <<pc, resp>>
 
 Finished == \A t \in Txns : ~Active(t)
@@ -269,6 +291,7 @@ TypeOK ==
   /\ pc \in [Txns -> Nat]
   /\ \A t \in Txns : held[t] \subseteq Resource
   /\ \A t \in Txns : DOMAIN wr[t] \subseteq Keys /\ \A k \in DOMAIN wr[t] : wr[t][k] \in Row
+  /\ draws \in [Txns -> [Keys -> Draw]]
   /\ db \in [Keys -> Row]
 
 (* No two live transactions hold incompatible resources. *)

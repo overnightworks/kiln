@@ -1,0 +1,12 @@
+--- Kernel.tla
++++ Kernel.tla
+@@ -70,7 +70,8 @@
+    conservative rule is incompatible; specs/README.md lists these gaps. *)
+ CompatibleKinds ==
+   {<<"S", "S">>, <<"S", "RS">>, <<"RS", "S">>, <<"RS", "RS">>,
+-   <<"PIN", "PIN">>, <<"DRAW", "DRAW">>}
++   <<"PIN", "PIN">>, <<"DRAW", "DRAW">>,
++   <<"PIN", "DEL">>, <<"DEL", "PIN">>}
+ 
+ Compatible(a, b) ==
+   \/ a.cov \cap b.cov = {}
