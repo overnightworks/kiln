@@ -1,0 +1,8 @@
+claim_id = "2758d5c6e60e4c419cd11108325e1685"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "ad04ea1f5d2a3e6d4fd5b16ee62ed9367d6f21c8"
+branch = "claude/issue-51-kernel-crash-recovery"
+scope = ["docs/concept.md", "specs/README.md", "specs/kernel"]
+opened_commit = "8ee46fad2a9a43d80c7ca847a8543a59949c578a"
+whole_reason = "one kernel failure model, its mutants and its concept status lines"
