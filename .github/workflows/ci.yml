@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # On a pull request the diff runs against the base the pull request
+      # targets; on a push to main the parent commit was already green, so
+      # the diff runs against it instead. Either way fetch-depth: 0 above
+      # gives git diff --check the history it needs.
+      - name: Check for whitespace errors and conflict markers
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="HEAD^"
+          fi
+          git diff --check "${base}" HEAD
+
+      # No third-party action: a relative Markdown link is checked with
+      # plain shell against the files actually tracked in the checkout.
+      # Only inline link targets ]( ... ) are in scope; a web, mailto, or
+      # in-page anchor target is not a repository path and is skipped.
+      - name: Check relative Markdown links
+        run: |
+          status=0
+          while IFS= read -r file; do
+            dir=$(dirname "$file")
+            while IFS= read -r target; do
+              [ -z "$target" ] && continue
+              case "$target" in
+                http://*|https://*|mailto:*|'#'*) continue ;;
+              esac
+              target="${target%%#*}"
+              [ -z "$target" ] && continue
+              if [ ! -e "$dir/$target" ]; then
+                echo "broken link in $file: $target"
+                status=1
+              fi
+            done < <(grep -oP '(?<=\])\([^)]*\)' "$file" | sed -E 's/^\(//; s/\)$//')
+          done < <(git ls-files '*.md')
+          exit "$status"
