@@ -13,14 +13,19 @@
 pub mod admission;
 pub mod affinity;
 pub mod builds;
+pub mod cells;
+pub mod cli;
 pub mod comparison;
 pub mod driver;
 pub mod generators;
+pub mod host;
 pub mod interference;
 pub mod machine;
 pub mod manifest;
+pub mod measure_cell;
 pub mod monitor;
 pub mod pilot;
+pub mod pilot_run;
 pub mod preflight;
 pub mod restore;
 #[cfg(test)]

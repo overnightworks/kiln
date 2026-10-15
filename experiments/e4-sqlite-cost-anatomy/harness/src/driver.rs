@@ -241,22 +241,22 @@ pub fn run_with_logging<T>(
 
     let cell_outcomes = per_cell_finished
         .into_iter()
-        .map(|finished| {
-            if finished.len() == repetitions_per_cell {
-                CellOutcome::Completed(finished)
-            } else {
-                CellOutcome::InsufficientRepetitions {
-                    finished,
-                    required: repetitions_per_cell,
-                }
-            }
-        })
+        .map(|finished| cell_outcome(finished, repetitions_per_cell))
         .collect();
 
     Ok(DriverRun {
         cell_outcomes,
         rejected_attempts,
     })
+}
+
+/// A cell is complete only when every one of its repetitions succeeded.
+fn cell_outcome<T>(finished: Vec<FinishedRepetition<T>>, required: usize) -> CellOutcome<T> {
+    if finished.len() == required {
+        CellOutcome::Completed(finished)
+    } else {
+        CellOutcome::InsufficientRepetitions { finished, required }
+    }
 }
 
 /// Which (cell, repetition) pairs exhausted their whole retry budget

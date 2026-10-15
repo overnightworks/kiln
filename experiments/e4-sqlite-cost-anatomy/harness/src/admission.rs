@@ -22,6 +22,8 @@ use crate::manifest::{BuildMismatch, Manifest};
 pub const REPORT_FILE_NAME: &str = "pilot-report.txt";
 /// Name of the rejected-attempt log inside an evidence directory.
 pub const REJECTED_LOG_FILE_NAME: &str = "rejected.log";
+/// Name of the monitor-sample log inside an evidence directory.
+pub const SAMPLES_LOG_FILE_NAME: &str = "monitor-samples.log";
 
 /// Why the pilot refuses to start.
 #[derive(Debug, PartialEq, Eq)]
@@ -89,19 +91,21 @@ pub fn admit_builds(
 pub struct EvidenceFiles {
     pub report: PathBuf,
     pub rejected_log: PathBuf,
+    pub samples_log: PathBuf,
 }
 
-/// Creates the evidence directory if needed and both evidence files
+/// Creates the evidence directory if needed and every evidence file
 /// exclusively, so no run can replace an earlier run's report or mix its
-/// rejections into an earlier log: a file that already exists is an
-/// error and stays untouched.
+/// rejections or samples into an earlier log: a file that already exists
+/// is an error and stays untouched.
 pub fn reserve_evidence_files(directory: &Path) -> io::Result<EvidenceFiles> {
     fs::create_dir_all(directory)?;
     let files = EvidenceFiles {
         report: directory.join(REPORT_FILE_NAME),
         rejected_log: directory.join(REJECTED_LOG_FILE_NAME),
+        samples_log: directory.join(SAMPLES_LOG_FILE_NAME),
     };
-    for path in [&files.report, &files.rejected_log] {
+    for path in [&files.report, &files.rejected_log, &files.samples_log] {
         File::create_new(path).map_err(|err| {
             io::Error::new(
                 err.kind(),
@@ -116,11 +120,35 @@ pub fn reserve_evidence_files(directory: &Path) -> io::Result<EvidenceFiles> {
 mod tests {
     use super::*;
 
+    mod kiln_e4_09 {
+        use super::*;
+        use crate::builds::Build;
+
+        #[test]
+        fn a_refusal_says_why_the_pilot_will_not_start() {
+            let unvetted = Refusal::Unvetted(BuildMismatch::Role {
+                expected: Build::Passthrough,
+                reported: Build::Instrumented,
+            });
+            for (refusal, expected) in [
+                (Refusal::ManifestUnreadable, "manifest"),
+                (unvetted, "passthrough"),
+                (
+                    Refusal::Unverifiable("no such file".to_string()),
+                    "no such file",
+                ),
+            ] {
+                let message = refusal.to_string();
+                assert!(message.contains(expected), "{message}");
+            }
+        }
+    }
+
     mod kiln_e4_22 {
         use super::*;
 
         #[test]
-        fn reserving_evidence_files_creates_both_in_a_new_directory() {
+        fn reserving_evidence_files_creates_all_three_in_a_new_directory() {
             let root = tempfile::tempdir().expect("tempdir");
             let directory = root.path().join("nested").join("run");
 
@@ -128,12 +156,19 @@ mod tests {
 
             assert_eq!(files.report, directory.join("pilot-report.txt"));
             assert_eq!(files.rejected_log, directory.join("rejected.log"));
-            assert!(files.report.is_file() && files.rejected_log.is_file());
+            assert_eq!(files.samples_log, directory.join("monitor-samples.log"));
+            assert!(files.report.is_file());
+            assert!(files.rejected_log.is_file());
+            assert!(files.samples_log.is_file());
         }
 
         #[test]
         fn reserving_evidence_files_leaves_an_existing_report_or_log_untouched() {
-            for existing in [REPORT_FILE_NAME, REJECTED_LOG_FILE_NAME] {
+            for existing in [
+                REPORT_FILE_NAME,
+                REJECTED_LOG_FILE_NAME,
+                SAMPLES_LOG_FILE_NAME,
+            ] {
                 let directory = tempfile::tempdir().expect("tempdir");
                 let path = directory.path().join(existing);
                 fs::write(&path, "earlier evidence").unwrap();

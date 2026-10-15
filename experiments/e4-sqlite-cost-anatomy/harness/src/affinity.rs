@@ -8,6 +8,8 @@
 
 use std::io;
 
+use crate::machine;
+
 /// Every logical CPU id on this host (`0..total_cpus`) except those in
 /// `excluded` — the interference monitor's pin set (protocol §9: "the
 /// complement of {2, 8}").
@@ -39,6 +41,23 @@ pub fn pin_current_process(cpus: &[usize]) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Pins the calling process to the complement of `{PINNED_CPU,
+/// SIBLING_CPU}` (protocol §9: "never merely unpinned"): the place for
+/// everything that must not disturb the measured core or its sibling —
+/// the interference monitor and the pilot's own orchestration.
+pub fn pin_outside_measurement_cpus() -> io::Result<()> {
+    let total_cpus = std::thread::available_parallelism()?.get();
+    let cpus = complement(total_cpus, &[machine::PINNED_CPU, machine::SIBLING_CPU]);
+    if cpus.is_empty() {
+        return Err(io::Error::other(format!(
+            "no CPUs left to pin to once {} and {} are excluded (host reports only {total_cpus} logical CPUs)",
+            machine::PINNED_CPU,
+            machine::SIBLING_CPU
+        )));
+    }
+    pin_current_process(&cpus)
 }
 
 #[cfg(test)]
@@ -77,6 +96,12 @@ mod tests {
                 .expect("available_parallelism")
                 .get();
             pin_current_process(&(0..total).collect::<Vec<_>>()).expect("pin to every CPU");
+        }
+
+        #[test]
+        fn pinning_outside_the_measurement_cpus_succeeds_on_this_host() {
+            // Pins only the calling test thread, away from CPUs 2 and 8.
+            pin_outside_measurement_cpus().expect("pin outside the measurement CPUs");
         }
     }
 }

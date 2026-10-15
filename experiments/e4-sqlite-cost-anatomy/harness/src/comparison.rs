@@ -6,20 +6,13 @@
 //! pass, fail, or inconclusive from their overhead ratios. A read-only
 //! cell is reported as not gated, never as pass or fail.
 //!
-//! The reductions here are pure and tested without a process;
-//! [`run_pilot_comparisons`] is the thin adapter that wires them to the
-//! real run driver ([`crate::driver::run_with_logging`]) and to isolated
-//! child processes.
-
-use std::io;
-use std::path::Path;
-use std::time::Instant;
+//! The reductions here are pure and tested without a process; the pair
+//! runs that feed them are [`crate::pilot_run`]'s.
 
 use crate::builds::Build;
-use crate::driver::{self, AttemptOutcome, OperationPlan};
-use crate::generators;
+use crate::driver;
 use crate::machine;
-use crate::pilot::{PilotWorkload, run_measure_cell_child};
+use crate::workloads::Cell;
 
 /// Protocol §5's frozen overhead-acceptance bound: the instrumented
 /// build's mean per-operation wall time must not exceed the passthrough
@@ -153,6 +146,10 @@ pub enum CellComparison {
 }
 
 impl CellComparison {
+    pub fn is_not_gated(&self) -> bool {
+        matches!(self, CellComparison::NotGated)
+    }
+
     /// Whether this cell lets the pilot succeed: a not-gated cell does not
     /// vote, a judged cell must pass, an insufficient one never does.
     pub fn allows_pilot_success(&self) -> bool {
@@ -164,17 +161,17 @@ impl CellComparison {
     }
 }
 
-/// One workload's row in the pilot report.
+/// One cell's row in the pilot report.
 #[derive(Debug, Clone, PartialEq)]
-pub struct WorkloadComparison {
-    pub workload: PilotWorkload,
+pub struct CellRow {
+    pub cell: Cell,
     pub comparison: CellComparison,
 }
 
-impl WorkloadComparison {
-    /// The report lines for this workload.
+impl CellRow {
+    /// The report lines for this cell.
     pub fn render(&self) -> String {
-        let label = self.workload.label();
+        let label = self.cell.label();
         match &self.comparison {
             CellComparison::NotGated => format!(
                 "  {label}: not gated — its read-only transaction never reaches the timed VFS \
@@ -258,165 +255,18 @@ pub fn judge_cell(outcome: &driver::CellOutcome<ComparisonMeasurement>) -> CellC
     }
 }
 
-/// The two builds' binaries, so one lookup serves both.
-struct BuildBinaries<'a> {
-    instrumented: &'a Path,
-    passthrough: &'a Path,
-}
-
-impl BuildBinaries<'_> {
-    fn path(&self, build: Build) -> &Path {
-        match build {
-            Build::Instrumented => self.instrumented,
-            Build::Passthrough => self.passthrough,
-        }
-    }
-}
-
-/// One gated pair attempt: samples interference around both builds'
-/// isolated `measure-cell` children, run in the pair's counterbalanced
-/// order, and judges the bracketed window against protocol §9's frozen
-/// limits. A rejected window rejects the whole pair for the driver's retry
-/// budget to absorb (§5 repeat policy); a monitor or measurement child
-/// that cannot run is an execution failure, never interference (§9).
-fn run_gated_pair_attempt(
-    binaries: &BuildBinaries,
-    workload: PilotWorkload,
-    repetition_index: usize,
-    plan: OperationPlan,
-    seed: u64,
-) -> AttemptOutcome<ComparisonMeasurement> {
-    let start = match crate::interference::sample_interference(binaries.instrumented) {
-        Ok(sample) => sample,
-        Err(err) => {
-            return AttemptOutcome::ExecutionFailed(format!(
-                "could not sample interference before the pair: {err}"
-            ));
-        }
-    };
-    let window_start = Instant::now();
-    let first = first_build(repetition_index);
-    let measure = |build: Build| {
-        run_measure_cell_child(
-            binaries.path(build),
-            workload,
-            plan.warmup,
-            plan.timed,
-            seed,
-        )
-    };
-    let first_mean = measure(first);
-    let second_mean = measure(first.other());
-    let elapsed = window_start.elapsed();
-    let (first_mean, second_mean) = match (first_mean, second_mean) {
-        (Ok(first_mean), Ok(second_mean)) => (first_mean, second_mean),
-        (Err(err), _) | (_, Err(err)) => {
-            return AttemptOutcome::ExecutionFailed(format!("measurement child failed: {err}"));
-        }
-    };
-    let end = match crate::interference::sample_interference(binaries.instrumented) {
-        Ok(sample) => sample,
-        Err(err) => {
-            return AttemptOutcome::ExecutionFailed(format!(
-                "could not sample interference after the pair: {err}"
-            ));
-        }
-    };
-    if let Some(reason) = crate::interference::judge_attempt(&start, &end, elapsed) {
-        return AttemptOutcome::Rejected(reason);
-    }
-    let (instrumented, passthrough) = match first {
-        Build::Instrumented => (first_mean, second_mean),
-        Build::Passthrough => (second_mean, first_mean),
-    };
-    AttemptOutcome::Accepted(ComparisonMeasurement {
-        operations_measured: plan.timed,
-        instrumented_mean_wall_ns: instrumented,
-        passthrough_mean_wall_ns: passthrough,
-    })
-}
-
-/// Runs every gated pilot workload's pairs through
-/// [`driver::run_with_logging`] — protocol §8/§9's interleaved order,
-/// retry budget and immediate rejected-attempt log — and reports every
-/// workload: gated ones judged, read-only ones as not gated. Writes a
-/// terminal `FAILED-INTERFERENCE` line for any pair that exhausted its
-/// budget; an attempt that cannot execute is an error, not a log line. Each
-/// workload's warm-up and timed counts come from `plan_for`: the pilot
-/// passes the frozen protocol counts, and only a test of the mechanics
-/// passes smaller ones. The thin adapter; [`judge_cell`] carries the tested
-/// reduction.
-pub fn run_pilot_comparisons(
-    self_binary: &Path,
-    passthrough_binary: &Path,
-    plan_for: impl Fn(PilotWorkload) -> OperationPlan,
-    rejected_log_path: &Path,
-) -> io::Result<(Vec<WorkloadComparison>, usize)> {
-    let binaries = BuildBinaries {
-        instrumented: self_binary,
-        passthrough: passthrough_binary,
-    };
-    let gated: Vec<PilotWorkload> = PilotWorkload::ALL
-        .into_iter()
-        .filter(|workload| workload.is_gated())
-        .collect();
-    let mut log_err = None;
-    let result = driver::run_with_logging(
-        gated.len(),
-        machine::REPETITIONS_PER_CELL,
-        machine::MAX_RETRIES,
-        driver::real_clock,
-        |id| {
-            let seed = generators::seed_for(id.cell_index as u64, id.repetition_index as u64);
-            run_gated_pair_attempt(
-                &binaries,
-                gated[id.cell_index],
-                id.repetition_index,
-                plan_for(gated[id.cell_index]),
-                seed,
-            )
-        },
-        |rejected| {
-            if let Err(err) = driver::append_log_line(rejected_log_path, &rejected.to_log_line()) {
-                log_err = Some(err);
-            }
-        },
-    );
-    if let Some(err) = log_err {
-        return Err(err);
-    }
-    let result = result.map_err(io::Error::other)?;
-    for (cell_index, repetition_index) in
-        driver::exhausted_repetitions(&result.rejected_attempts, machine::MAX_RETRIES)
-    {
-        driver::append_log_line(
-            rejected_log_path,
-            &driver::failed_interference_log_line(cell_index, repetition_index),
-        )?;
-    }
-    let judged = gated
-        .iter()
-        .zip(&result.cell_outcomes)
-        .map(|(workload, outcome)| WorkloadComparison {
-            workload: *workload,
-            comparison: judge_cell(outcome),
-        });
-    let not_gated = PilotWorkload::ALL
-        .into_iter()
-        .filter(|workload| !workload.is_gated())
-        .map(|workload| WorkloadComparison {
-            workload,
-            comparison: CellComparison::NotGated,
-        });
-    Ok((
-        judged.chain(not_gated).collect(),
-        result.rejected_attempts.len(),
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workloads::{Size, Synchronous, Workload};
+
+    fn small_full(workload: Workload) -> Cell {
+        Cell {
+            workload,
+            size: Size::Small,
+            synchronous: Synchronous::Full,
+        }
+    }
 
     fn measurement(instrumented: f64, passthrough: f64) -> ComparisonMeasurement {
         ComparisonMeasurement {
@@ -448,12 +298,12 @@ mod tests {
 
         #[test]
         fn a_not_gated_cell_renders_as_not_gated_without_pass_or_fail() {
-            let row = WorkloadComparison {
-                workload: PilotWorkload::PointRead,
+            let row = CellRow {
+                cell: small_full(Workload::PointRead),
                 comparison: CellComparison::NotGated,
             };
             let rendered = row.render();
-            assert!(rendered.contains("point-read: not gated"));
+            assert!(rendered.contains("point-read/small/full: not gated"));
             for verdict in ["PASS", "FAIL", "INCONCLUSIVE"] {
                 assert!(!rendered.contains(verdict), "got:\n{rendered}");
             }
@@ -513,8 +363,8 @@ mod tests {
 
         #[test]
         fn the_rendered_report_shows_each_pairs_index_and_starting_build() {
-            let row = WorkloadComparison {
-                workload: PilotWorkload::PointUpdate,
+            let row = CellRow {
+                cell: small_full(Workload::PointUpdate),
                 comparison: judge_cell(&completed(&[1.0, 1.0])),
             };
             let rendered = row.render();
@@ -605,8 +455,8 @@ mod tests {
                     "median=2.00% range=[1.00%, 3.00%] -> INCONCLUSIVE",
                 ),
             ] {
-                let row = WorkloadComparison {
-                    workload: PilotWorkload::PointUpdate,
+                let row = CellRow {
+                    cell: small_full(Workload::PointUpdate),
                     comparison: judge_cell(&completed(percents)),
                 };
                 assert!(row.render().contains(line), "{}", row.render());
@@ -666,8 +516,8 @@ mod tests {
 
         #[test]
         fn the_rendered_insufficient_cell_names_its_reason_and_lists_its_completed_pairs() {
-            let row = WorkloadComparison {
-                workload: PilotWorkload::PointUpdate,
+            let row = CellRow {
+                cell: small_full(Workload::PointUpdate),
                 comparison: judge_cell(&eight_of_nine_outcome()),
             };
             let rendered = row.render();

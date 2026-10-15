@@ -1,157 +1,418 @@
-//! Exercises the pilot's real child-process adapters
-//! ([`run_measure_cell_child`], [`run_pilot_comparisons`]) against the
-//! actual compiled harness binary — never a fake stand-in — so a
-//! mutation to their spawn/status/parse handling has real process
-//! behavior to catch. Every invocation uses tiny `warmup`/`operations`
-//! counts, never protocol §8's frozen counts, so this stays a fast
-//! correctness check, not a benchmark or a feasibility-pilot run.
+//! Exercises the pilot's real process adapters ([`ProcessHost`]: the
+//! measurement child and the pinned monitor process, protocol §9) against
+//! the actual compiled harness binary — never a fake stand-in — so a
+//! mutation to their spawn, pin, handshake and parse handling has real
+//! process behaviour to catch. Every invocation uses tiny `warmup`/
+//! `operations` counts, never protocol §8's frozen counts, and only the
+//! small size, so this stays a fast correctness check, not a benchmark or
+//! a feasibility-pilot run. What the machine's real load does to a pair is
+//! never asserted here: the pair logic is tested against scripted hosts
+//! (`src/pilot_run.rs`).
 
-use std::path::Path;
+use std::fs;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
+use std::time::Duration;
 
-use kiln_e4_harness::comparison::{CellComparison, WorkloadComparison, run_pilot_comparisons};
+use kiln_e4_harness::admission::{EvidenceFiles, reserve_evidence_files};
+use kiln_e4_harness::builds::Build;
+use kiln_e4_harness::comparison::CellComparison;
 use kiln_e4_harness::driver::OperationPlan;
-use kiln_e4_harness::machine::REPETITIONS_PER_CELL;
-use kiln_e4_harness::pilot::{PilotWorkload, run_measure_cell_child};
+use kiln_e4_harness::host::{HalfRequest, HalfRun, MeasurementHost, ProcessHost, Snapshots};
+use kiln_e4_harness::interference::TimedSample;
+use kiln_e4_harness::machine;
+use kiln_e4_harness::measure_cell::MeasureCellRequest;
+use kiln_e4_harness::pilot_run::run_pilot_comparisons;
+use kiln_e4_harness::restore::prepare_pristine;
+use kiln_e4_harness::workloads::{Cell, Size, Synchronous, Workload};
+
+const TINY_PLAN: OperationPlan = OperationPlan {
+    warmup: 2,
+    timed: 5,
+};
+const FAST_INTERVAL: Duration = Duration::from_millis(50);
+
+/// A judge that sees no interference whatever the samples say, so these
+/// tests never depend on how loaded this machine happens to be.
+fn machine_is_always_quiet(_samples: &[TimedSample]) -> Option<String> {
+    None
+}
 
 fn harness_binary() -> &'static Path {
     Path::new(env!("CARGO_BIN_EXE_kiln-e4-harness"))
 }
 
-const TINY_PLAN: OperationPlan = OperationPlan {
-    warmup: 1,
-    timed: 1,
-};
-
-/// Both builds' roles point at the same real binary: this proves the
-/// orchestration wiring (driver, interference gate, child spawns) runs
-/// end to end, not the §5 overhead comparison itself (which needs a
-/// genuinely separate passthrough build and is covered by the night run).
-fn run_tiny_pilot(rejected_log: &Path) -> Vec<WorkloadComparison> {
-    run_pilot_comparisons(
-        harness_binary(),
-        harness_binary(),
-        |_| TINY_PLAN,
-        rejected_log,
-    )
-    .expect("run_pilot_comparisons must succeed against the real compiled binary")
-    .0
+/// One small pristine snapshot shared by every test in this file.
+fn small_snapshot() -> &'static Path {
+    static SNAPSHOT: OnceLock<(tempfile::TempDir, PathBuf)> = OnceLock::new();
+    &SNAPSHOT
+        .get_or_init(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let pristine = dir.path().join("small").join("pristine");
+            prepare_pristine(&pristine, Size::Small.row_count()).expect("prepare snapshot");
+            (dir, pristine)
+        })
+        .1
 }
 
-/// One shared tiny pilot for the tests that only read its rows: nine
-/// interference-gated pairs are the slow part of this file.
-fn shared_tiny_pilot() -> &'static [WorkloadComparison] {
-    static CELLS: OnceLock<Vec<WorkloadComparison>> = OnceLock::new();
-    CELLS.get_or_init(|| {
-        let output_dir = tempfile::tempdir().expect("tempdir");
-        run_tiny_pilot(&output_dir.path().join("rejected.log"))
-    })
+struct Fixture {
+    host: ProcessHost,
+    _scratch: tempfile::TempDir,
+}
+
+fn fixture_with(passthrough: &Path, small_snapshot_dir: &Path) -> Fixture {
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let host = ProcessHost {
+        instrumented: harness_binary().to_path_buf(),
+        passthrough: passthrough.to_path_buf(),
+        snapshots: Snapshots {
+            small: small_snapshot_dir.to_path_buf(),
+            medium: small_snapshot_dir.to_path_buf(),
+        },
+        scratch_dir: scratch.path().to_path_buf(),
+        monitor_interval: FAST_INTERVAL,
+    };
+    Fixture {
+        host,
+        _scratch: scratch,
+    }
+}
+
+fn fixture() -> Fixture {
+    fixture_with(harness_binary(), small_snapshot())
+}
+
+fn small_cell(workload: Workload) -> Cell {
+    Cell {
+        workload,
+        size: Size::Small,
+        synchronous: Synchronous::Full,
+    }
+}
+
+fn half_request(workload: Workload, build: Build, plan: OperationPlan) -> HalfRequest {
+    HalfRequest {
+        cell: small_cell(workload),
+        build,
+        plan,
+        repetition_index: 0,
+        seed: 42,
+    }
+}
+
+fn run_half(workload: Workload, plan: OperationPlan) -> HalfRun {
+    fixture()
+        .host
+        .run_half(&half_request(workload, Build::Instrumented, plan))
+        .expect("a half must run against the real compiled binary")
+}
+
+/// CPU ids in a `Cpus_allowed_list` value such as `0-1,3,9-11`.
+fn cpus_in(list: &str) -> Vec<usize> {
+    list.trim()
+        .split(',')
+        .flat_map(|part| match part.split_once('-') {
+            Some((low, high)) => low.parse().unwrap()..=high.parse().unwrap(),
+            None => part.parse().unwrap()..=part.parse().unwrap(),
+        })
+        .collect()
+}
+
+fn allowed_cpus_of(child: &Child) -> Vec<usize> {
+    let status = fs::read_to_string(format!("/proc/{}/status", child.id())).expect("status");
+    let list = status
+        .lines()
+        .find_map(|line| line.strip_prefix("Cpus_allowed_list:"))
+        .expect("Cpus_allowed_list");
+    cpus_in(list)
+}
+
+fn first_line_of(child: &mut Child) -> String {
+    let mut line = String::new();
+    BufReader::new(child.stdout.as_mut().expect("piped stdout"))
+        .read_line(&mut line)
+        .expect("read the child's first line");
+    line
 }
 
 mod kiln_e4_07 {
     use super::*;
 
     #[test]
-    fn a_measurement_child_reports_a_real_mean_wall_time() {
-        let mean = run_measure_cell_child(harness_binary(), PilotWorkload::PointRead, 2, 3, 42)
-            .expect("measure-cell must succeed against the real compiled binary");
-        // A real SQLite point-read's wall time runs to thousands of
-        // nanoseconds; this threshold rules out a stubbed 1.0/0.0/-1.0.
-        assert!(
-            mean > 100.0,
-            "expected a real measured mean well above a stub constant, got {mean}"
-        );
+    fn every_workload_runs_in_a_child_and_reports_a_real_mean_wall_time() {
+        for workload in Workload::ALL {
+            let run = run_half(workload, TINY_PLAN);
+            // A real SQLite operation's wall time runs to thousands of
+            // nanoseconds; this threshold rules out a stubbed 1.0/0.0/-1.0.
+            assert!(
+                run.mean_wall_ns > 100.0,
+                "{workload:?}: expected a real measured mean, got {}",
+                run.mean_wall_ns
+            );
+        }
     }
 
     #[test]
-    fn a_comparison_whose_passthrough_build_cannot_start_is_an_error_not_interference() {
-        let output_dir = tempfile::tempdir().expect("tempdir");
-        let rejected_log = output_dir.path().join("rejected.log");
+    fn a_half_runs_the_passthrough_build_through_the_same_child_protocol() {
+        let run = fixture()
+            .host
+            .run_half(&half_request(
+                Workload::PointUpdate,
+                Build::Passthrough,
+                TINY_PLAN,
+            ))
+            .expect("the passthrough path of the host");
 
-        let result = run_pilot_comparisons(
-            harness_binary(),
+        assert!(run.mean_wall_ns > 100.0);
+    }
+
+    #[test]
+    fn a_half_whose_binary_cannot_start_is_an_error() {
+        let fixture = fixture_with(
             Path::new("/nonexistent-kiln-e4-passthrough-binary"),
-            |_| TINY_PLAN,
-            &rejected_log,
+            small_snapshot(),
         );
 
-        let message = result
-            .expect_err("an unstartable build must stop the pilot")
+        let result = fixture.host.run_half(&half_request(
+            Workload::PointUpdate,
+            Build::Passthrough,
+            TINY_PLAN,
+        ));
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn a_half_whose_child_fails_is_an_error_quoting_what_the_child_said() {
+        let missing_snapshot = tempfile::tempdir().expect("tempdir");
+        let fixture = fixture_with(harness_binary(), &missing_snapshot.path().join("absent"));
+
+        let message = fixture
+            .host
+            .run_half(&half_request(
+                Workload::PointUpdate,
+                Build::Instrumented,
+                TINY_PLAN,
+            ))
+            .expect_err("a child that cannot restore its snapshot must fail the half")
             .to_string();
+
         assert!(
-            message.contains("measurement child failed"),
-            "got: {message}"
+            message.contains("measure-cell for point-update"),
+            "{message}"
         );
-        assert!(
-            !rejected_log.exists(),
-            "an execution failure is not interference and must not reach the rejected-attempt log"
-        );
+        assert!(message.contains("measurement failed"), "{message}");
     }
 
     #[test]
     fn a_measurement_child_finishes_well_under_five_seconds() {
         let start = std::time::Instant::now();
-        run_measure_cell_child(harness_binary(), PilotWorkload::PointUpdate, 1, 1, 7)
-            .expect("measure-cell must succeed against the real compiled binary");
-        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+        run_half(Workload::PointUpdate, TINY_PLAN);
+        assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_measurement_child_pins_itself_to_cpu_2_before_it_measures() {
+        let scratch = tempfile::tempdir().expect("tempdir");
+        let request = MeasureCellRequest {
+            workload: Workload::PointRead,
+            synchronous: Synchronous::Full,
+            row_count: Size::Small.row_count(),
+            plan: TINY_PLAN,
+            seed: 1,
+            pristine_dir: small_snapshot().to_path_buf(),
+            scratch_dir: scratch.path().to_path_buf(),
+        };
+        let mut child = Command::new(harness_binary())
+            .arg("measure-cell")
+            .args(request.to_args())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn the measurement child");
+
+        let announced = first_line_of(&mut child);
+        let allowed = allowed_cpus_of(&child);
+        // The child waits for `go`; closing its stdin ends it unmeasured.
+        drop(child.stdin.take());
+        child.wait().expect("child exits");
+
+        assert_eq!(announced.trim(), "ready");
+        assert_eq!(allowed, vec![machine::PINNED_CPU]);
+    }
+}
+
+mod kiln_e4_24 {
+    use super::*;
+
+    #[test]
+    fn the_monitor_samples_across_the_whole_window_of_a_half() {
+        let plan = OperationPlan {
+            warmup: 20,
+            timed: 200,
+        };
+        let run = run_half(Workload::Insert, plan);
+
+        let first = run.samples.first().expect("a sample");
+        let last = run.samples.last().expect("a sample");
+        assert!(
+            first.at_ns <= run.started_ns,
+            "the first sample precedes the window"
+        );
+        assert!(
+            last.at_ns > run.finished_ns,
+            "the last sample follows the window"
+        );
+        assert!(run.samples.len() >= 2);
+    }
+
+    #[test]
+    fn consecutive_samples_are_at_least_one_interval_apart_and_in_order() {
+        let plan = OperationPlan {
+            warmup: 20,
+            timed: 200,
+        };
+        let run = run_half(Workload::Insert, plan);
+
+        for pair in run.samples.windows(2) {
+            let gap = Duration::from_nanos(pair[1].at_ns - pair[0].at_ns);
+            assert!(gap >= FAST_INTERVAL, "samples only {gap:?} apart");
+        }
+    }
+
+    #[test]
+    fn the_idle_machine_is_observed_for_one_interval_between_two_samples() {
+        let samples = fixture()
+            .host
+            .observe_idle_machine()
+            .expect("observe the idle machine");
+
+        assert_eq!(samples.len(), 2);
+        let gap = Duration::from_nanos(samples[1].at_ns - samples[0].at_ns);
+        assert!(gap >= FAST_INTERVAL, "{gap:?}");
+    }
+
+    #[test]
+    fn the_monitor_process_is_pinned_away_from_the_measured_core_and_its_sibling() {
+        let mut monitor = Command::new(harness_binary())
+            .args(["monitor-stream", "50"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn the monitor");
+
+        let first_sample = first_line_of(&mut monitor);
+        let allowed = allowed_cpus_of(&monitor);
+        monitor.kill().expect("stop the monitor");
+        monitor.wait().expect("reap the monitor");
+
+        assert!(
+            first_sample.contains("sibling_idle_ticks="),
+            "{first_sample}"
+        );
+        assert!(!allowed.is_empty());
+        for measured in [machine::PINNED_CPU, machine::SIBLING_CPU] {
+            assert!(
+                !allowed.contains(&measured),
+                "the monitor may run on {allowed:?}, which includes CPU {measured}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_monitor_refuses_a_missing_or_zero_interval() {
+        for arguments in [vec!["monitor-stream"], vec!["monitor-stream", "0"]] {
+            let output = Command::new(harness_binary())
+                .args(&arguments)
+                .output()
+                .expect("spawn");
+            assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        }
     }
 }
 
 mod kiln_e4_04 {
     use super::*;
 
+    fn evidence() -> (tempfile::TempDir, EvidenceFiles) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let files = reserve_evidence_files(&dir.path().join("evidence")).expect("evidence");
+        (dir, files)
+    }
+
+    fn update_cell() -> Cell {
+        small_cell(Workload::PointUpdate)
+    }
+
     #[test]
-    fn the_rejected_attempt_log_is_never_overwritten() {
-        let output_dir = tempfile::tempdir().expect("tempdir");
-        let rejected_log = output_dir.path().join("rejected.log");
-        std::fs::write(&rejected_log, "preexisting line\n").expect("seed the log");
+    fn a_comparison_whose_passthrough_build_cannot_start_is_an_error_not_interference() {
+        let (_dir, evidence) = evidence();
+        let fixture = fixture_with(
+            Path::new("/nonexistent-kiln-e4-passthrough-binary"),
+            small_snapshot(),
+        );
 
-        run_tiny_pilot(&rejected_log);
+        let result = run_pilot_comparisons(
+            &fixture.host,
+            &[update_cell()],
+            |_| TINY_PLAN,
+            FAST_INTERVAL,
+            machine_is_always_quiet,
+            &evidence,
+        );
 
-        let contents = std::fs::read_to_string(&rejected_log).expect("read rejected log");
+        let message = result
+            .expect_err("an unstartable build must stop the pilot")
+            .to_string();
         assert!(
-            contents.starts_with("preexisting line\n"),
-            "the rejected-attempt log must never be overwritten (protocol §9), got:\n{contents}"
+            message.contains("measurement failed for point-update/small/full"),
+            "got: {message}"
+        );
+        assert!(
+            fs::read_to_string(&evidence.rejected_log)
+                .unwrap()
+                .is_empty(),
+            "an execution failure is not interference and must not reach the rejected-attempt log"
         );
     }
-}
-
-mod kiln_e4_11 {
-    use super::*;
 
     #[test]
-    fn the_pilot_reports_the_write_workload_gated_and_the_read_workload_not_gated() {
-        let cells = shared_tiny_pilot();
+    fn real_children_and_a_real_monitor_feed_the_pair_logic_end_to_end() {
+        let (_dir, evidence) = evidence();
+        fs::write(&evidence.rejected_log, "preexisting line\n").expect("seed the log");
 
-        let read = cells
+        let comparisons = run_pilot_comparisons(
+            &fixture().host,
+            &[update_cell()],
+            |_| TINY_PLAN,
+            FAST_INTERVAL,
+            machine_is_always_quiet,
+            &evidence,
+        )
+        .expect("the real hosts must run the pairs");
+
+        let row = comparisons
+            .cells
             .iter()
-            .find(|cell| cell.workload == PilotWorkload::PointRead)
-            .expect("a row for the read workload");
-        assert_eq!(read.comparison, CellComparison::NotGated);
-        let write = cells
-            .iter()
-            .find(|cell| cell.workload == PilotWorkload::PointUpdate)
-            .expect("a row for the write workload");
-        assert_ne!(write.comparison, CellComparison::NotGated);
-        assert_eq!(cells.len(), 2);
-    }
-}
-
-mod kiln_e4_13 {
-    use super::*;
-
-    #[test]
-    fn a_judged_write_cell_holds_exactly_the_protocols_nine_pairs() {
-        let cells = shared_tiny_pilot();
-
-        // The machine's real interference gate may reject every attempt of
-        // a pair; then the cell is insufficient and has no pairs to count.
-        if let Some(CellComparison::Judged { pairs, .. }) = cells
-            .iter()
-            .find(|cell| cell.workload == PilotWorkload::PointUpdate)
-            .map(|cell| &cell.comparison)
-        {
-            assert_eq!(pairs.len(), REPETITIONS_PER_CELL);
-        }
+            .find(|row| row.cell == update_cell())
+            .expect("a row for the cell");
+        let CellComparison::Judged { pairs, .. } = &row.comparison else {
+            panic!("with no interference rejected, the cell completes its nine pairs");
+        };
+        assert_eq!(pairs.len(), machine::REPETITIONS_PER_CELL);
+        assert_eq!(comparisons.rejected_attempts, 0);
+        assert!(
+            !fs::read_to_string(&evidence.samples_log)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            fs::read_to_string(&evidence.rejected_log)
+                .unwrap()
+                .starts_with("preexisting line\n"),
+            "the rejected-attempt log must never be overwritten (protocol §9)"
+        );
+        assert!(comparisons.coverage.actual_samples > 0);
     }
 }
