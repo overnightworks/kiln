@@ -44,9 +44,12 @@ pub fn judge_function(paths: &[FeasiblePath]) -> Judgement {
             }
         })
         .expect("a function body has at least one feasible path");
-    match (&most_demanding, data_selection(paths)) {
-        (Judgement::Unknown { .. }, _) | (_, None) => most_demanding,
-        (_, Some(selection)) => Judgement::Unknown {
+    if matches!(most_demanding, Judgement::Unknown { .. }) {
+        return most_demanding;
+    }
+    match data_selection(paths) {
+        None => most_demanding,
+        Some(selection) => Judgement::Unknown {
             cause: UnknownCause::DataSelectedTargets {
                 selector: selection.selector.to_string(),
             },
