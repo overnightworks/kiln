@@ -1,0 +1,33 @@
+[package]
+name = "kiln-e4-harness"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Its own, empty workspace table: this crate is not a member of any root
+# workspace (protocol.md §12, issue #19).
+[workspace]
+
+[dependencies]
+# Versions frozen by protocol.md §4/§12; keep both in lockstep so the
+# bundled SQLite build is the one the direct FFI (libsqlite3-sys) and
+# rusqlite's high-level API share.
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+libsqlite3-sys = { version = "0.38.2", features = ["bundled"] }
+# PRNG frozen by protocol.md §2.1.
+rand_chacha = "0.10.0"
+rand_core = "0.10.0"
+# SHA-256 for the initial-load email derivation (protocol.md §2.1) and the
+# preflight binary hash (protocol.md §12).
+sha2 = "0.10"
+# CPU affinity and CLOCK_THREAD_CPUTIME_ID (protocol.md §5, §9).
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+# The one build measurements run against (protocol.md §12).
+opt-level = 3
+debug = true
+lto = false
