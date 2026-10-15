@@ -61,12 +61,15 @@ classes of `docs/concept.md` §3, which describe a relationship between a
 questions and are reported as two separate numbers, never conflated:
 
 - **Static.** The complete set of rows, ranges, or keys the function can
-  touch is a pure function of its arguments and the schema, with no read of
-  current data. Example: `read(accounts, key = from_id)`.
+  touch, over every feasible branch, is a pure function of its arguments and
+  the schema, with no read of current data. Example:
+  `read(accounts, key = from_id)`. Branch composition:
+  `inputs.md` §5, Q1.
 - **One-hop.** The footprint requires exactly one data-dependent read whose
   result determines a further access, and that one hop resolves through an
-  index or foreign key the compiler can identify ahead of time — not an
-  arbitrary secondary-attribute scan. Example: look up an order by
+  index (unique or not) or foreign key the compiler can identify ahead of
+  time — not an arbitrary secondary-attribute scan. What counts as the one
+  read and as an identifiable index: `inputs.md` §5, Q2 and Q3. Example: look up an order by
   `order_id`, then touch the customer through `order.customer_id`, a foreign
   key into `customers`.
 - **Domain-bounded.** Not static or one-hop, but provably confined to one
@@ -91,6 +94,13 @@ per enumerated transaction function, for the application corpus, because no
 trace source exists for it (below, and `inputs.md` §4). Domain-bounded
 instances are not in the numerator; their share is reported separately and
 never gates the verdict.
+
+**Refusal-qualified falsification.** Each application also reports
+L = C/N and U = (C+R)/N over its N enumerated units, C qualifying and R
+refused in full. An application-side Fail is established falsification only
+when the median of U is also below 50%; a median of L below 50% with U not
+below reads "measured Fail; lower bound, not established falsification"
+(`inputs.md` §5).
 
 **Application-side gating metric.** #2's freeze
 (`experiments/e1-classification-coverage/inputs.md` §4) establishes, before
