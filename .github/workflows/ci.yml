@@ -72,6 +72,7 @@ jobs:
       # with no Rust package yet (e.g. before #4 or #13 land) passes with a
       # clear message instead of failing.
       - name: Format, lint and test every Rust root
+        shell: bash
         run: |
           mapfile -t manifests < <(git ls-files '*Cargo.toml' | sort -u)
 
@@ -101,8 +102,8 @@ jobs:
             (
               cd "$dir"
               cargo fmt --check
-              cargo clippy --all-targets -- -D warnings
-              cargo test
+              cargo clippy --workspace --all-targets -- -D warnings
+              cargo test --workspace
             )
             echo "::endgroup::"
           done

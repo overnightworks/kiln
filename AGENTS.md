@@ -40,8 +40,9 @@ and the entry documents `README.md`, `AGENTS.md`, `CLAUDE.md` and, where the
 repository carries one, `HEART.md`. Everything else lives in the directory of
 its owner: a ratchet baseline next to the check that reads it, a fixture next to
 its test, a helper under `scripts/`. No catch-all directory (`tooling/`,
-`misc/`) and no deeper hierarchy than the owner needs. A root allowlist check in
-CI keeps the rule, so nobody has to remember it (operator ruling 06.09.2026).
+`misc/`) and no deeper hierarchy than the owner needs (operator ruling
+06.09.2026). This is policy, not a checked invariant: kiln's CI has no root
+allowlist check yet, so the rule currently relies on review.
 
 ## Code
 
@@ -239,8 +240,8 @@ defect.
   version to track.
 - Run tests targeted, not with the full suite: `cargo test -p <crate>`, with
   `CARGO_BUILD_JOBS=4` set in the shell. CI runs the same checks
-  (`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-  `cargo test`) once per tracked Rust workspace root.
+  (`cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo test --workspace`) once per tracked Rust workspace root.
 - A benchmark runs only under its experiment's frozen protocol (see
   `experiments/*/protocol.md`); never ad hoc, because an unprotocolled number
   is not evidence.
