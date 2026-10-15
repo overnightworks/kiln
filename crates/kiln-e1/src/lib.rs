@@ -10,6 +10,7 @@ mod classified;
 mod command;
 mod coverage;
 mod evaluation;
+mod footprint;
 mod jsonl;
 mod manifest;
 mod ratio;
@@ -24,6 +25,10 @@ pub use classified::{
 pub use command::{run_verdict_command, CommandError};
 pub use coverage::{median, Tally};
 pub use evaluation::{evaluate, Evaluation, Refusal};
+pub use footprint::{
+    classify_function, ClassifyError, FootprintClassification, IndexRead, IndexReadKind,
+    UnknownCause,
+};
 pub use jsonl::{parse_units, JsonlError};
 pub use manifest::{Manifest, ManifestError};
 pub use ratio::{Overflow, Ratio};
