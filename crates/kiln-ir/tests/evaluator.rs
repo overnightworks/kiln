@@ -327,3 +327,148 @@ proptest! {
         prop_assert_eq!(&execution.store, &store);
     }
 }
+
+// --- the access log entry is complete for every kind of access (docs/concept.md §2.2, D5) ---
+
+#[derive(Debug, Clone, Copy)]
+enum AccessCase {
+    PointRead,
+    Insert,
+    Update,
+    Delete,
+}
+
+#[test]
+fn access_log_entry_is_complete_for_every_access_kind() {
+    for case in [
+        AccessCase::PointRead,
+        AccessCase::Insert,
+        AccessCase::Update,
+        AccessCase::Delete,
+    ] {
+        let key = Value::Integer(1);
+        let existing_row = Row {
+            columns: columns_of_values([("c", Value::Integer(0))]),
+        };
+        let (store, effect, expected_kind, expected_columns) = match case {
+            AccessCase::PointRead => (
+                Store::containing([(table("t"), key.clone(), existing_row)]),
+                Effect::Read {
+                    table: table("t"),
+                    key: Expr::Literal(key.clone()),
+                    into: Slot(0),
+                },
+                AccessKind::PointRead,
+                AccessedColumns::EntireRow,
+            ),
+            AccessCase::Insert => (
+                Store::empty(),
+                Effect::Insert {
+                    table: table("t"),
+                    key: Expr::Literal(key.clone()),
+                    columns: columns_of([("c", Expr::Literal(Value::Integer(1)))]),
+                },
+                AccessKind::Insert,
+                AccessedColumns::Named(vec![column("c")]),
+            ),
+            AccessCase::Update => (
+                Store::containing([(table("t"), key.clone(), existing_row)]),
+                Effect::Update {
+                    table: table("t"),
+                    key: Expr::Literal(key.clone()),
+                    columns: columns_of([("c", Expr::Literal(Value::Integer(1)))]),
+                },
+                AccessKind::Update,
+                AccessedColumns::Named(vec![column("c")]),
+            ),
+            AccessCase::Delete => (
+                Store::containing([(table("t"), key.clone(), existing_row)]),
+                Effect::Delete {
+                    table: table("t"),
+                    key: Expr::Literal(key.clone()),
+                },
+                AccessKind::Delete,
+                AccessedColumns::EntireRow,
+            ),
+        };
+
+        let program = single_function_program(
+            vec![],
+            vec![effect],
+            Terminal::Return(Expr::Literal(Value::Integer(0))),
+        );
+        let execution = run(&program, &call_under_test(vec![]), &store);
+
+        assert_eq!(
+            execution.access_log.len(),
+            1,
+            "case {case:?}: expected exactly one logged access"
+        );
+        let entry = &execution.access_log[0];
+        assert_eq!(entry.table, table("t"), "case {case:?}");
+        assert_eq!(entry.kind, expected_kind, "case {case:?}");
+        assert_eq!(entry.key, key, "case {case:?}");
+        assert_eq!(entry.columns, expected_columns, "case {case:?}");
+    }
+}
+
+// --- a successful delete removes the row (docs/concept.md §2.2, D6) ---
+
+#[test]
+fn successful_delete_removes_the_row() {
+    let key = Value::Integer(1);
+    let store = Store::containing([(
+        table("t"),
+        key.clone(),
+        Row {
+            columns: columns_of_values([("c", Value::Integer(5))]),
+        },
+    )]);
+
+    let program = single_function_program(
+        vec![],
+        vec![Effect::Delete {
+            table: table("t"),
+            key: Expr::Literal(key.clone()),
+        }],
+        Terminal::Return(Expr::Literal(Value::Integer(0))),
+    );
+
+    let execution = run(&program, &call_under_test(vec![]), &store);
+
+    assert!(matches!(execution.outcome, Outcome::Committed { .. }));
+    assert_eq!(execution.store.row(&table("t"), &key), None);
+}
+
+// --- an update overwrites only its named columns (docs/concept.md §2.2) ---
+
+#[test]
+fn update_preserves_untouched_columns() {
+    let key = Value::Integer(1);
+    let store = Store::containing([(
+        table("t"),
+        key.clone(),
+        Row {
+            columns: columns_of_values([("a", Value::Integer(1)), ("b", Value::Integer(2))]),
+        },
+    )]);
+
+    let program = single_function_program(
+        vec![],
+        vec![Effect::Update {
+            table: table("t"),
+            key: Expr::Literal(key.clone()),
+            columns: columns_of([("a", Expr::Literal(Value::Integer(99)))]),
+        }],
+        Terminal::Return(Expr::Literal(Value::Integer(0))),
+    );
+
+    let execution = run(&program, &call_under_test(vec![]), &store);
+
+    let row = execution
+        .store
+        .row(&table("t"), &key)
+        .expect("row still exists after the update");
+    assert_eq!(row.columns.get(&column("a")), Some(&Value::Integer(99)));
+    assert_eq!(row.columns.get(&column("b")), Some(&Value::Integer(2)));
+}

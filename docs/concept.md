@@ -131,15 +131,22 @@ this meaning, one slice at a time.
   allowed, and a parent-deletion check runs against the children that
   still exist at that point. Checking happens before any response or
   effect is published; a violation aborts the call with a typed reason.
-  *Example.* A transaction debits one account and credits another in two
-  separate writes; the debited account is briefly negative between the
-  two, but only the balance at the transaction's end is checked against
-  `bound(balance >= 0)`.
+  *Example.* `accounts.balance` carries `check(balance >= 0)`. A
+  transaction debits an account with balance 50 by 100, then credits that
+  same account back by 100 in a second, separate write; the account sits
+  at -50 between the two writes, a temporary violation of
+  `check(balance >= 0)` that D2 allows, but the transaction only checks
+  the balance at its end, where the credit has repaired it back to 50 and
+  the call commits. This stays distinct from D3's clamping domain: a
+  check judges only the end state and aborts on violation, where a clamp
+  bounds every write's own value as it is made and never aborts.
 - **D3 Arithmetic.** Arithmetic runs over checked integers at the column's
   or argument's declared width. Overflow aborts the transaction unless the
   target column declares a clamping domain, in which case the value
-  clamps to that domain instead of aborting — a clamp and a check
-  constraint are different declarations, never interchangeable.
+  clamps to that domain instead of aborting; a computed write and a
+  literal write are clamped alike, since the clamp binds the column's
+  declared domain, not the writing expression's shape — a clamp and a
+  check constraint are different declarations, never interchangeable.
   *Example.* `balance + amount` overflowing the column's declared width
   aborts if `balance` has no clamp; if `balance` instead declares a
   saturating-counter domain, the same overflow clamps to the domain's

@@ -45,9 +45,34 @@ impl Store {
     }
 
     /// Removes the row at `key` in `table`, if one exists.
+    ///
+    /// Drops the table's own entry once its last row is gone, so a store
+    /// left with no rows anywhere compares equal to [`Store::empty`] — an
+    /// empty table map left behind would otherwise make two stores with
+    /// identical readable contents compare unequal.
     pub(crate) fn remove_row(&mut self, table: &TableName, key: &Value) {
         if let Some(rows) = self.tables.get_mut(table) {
             rows.remove(key);
+            if rows.is_empty() {
+                self.tables.remove(table);
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn insert_then_delete_from_empty_store_equals_the_empty_store() {
+        let table = TableName("t".to_owned());
+        let key = Value::Integer(1);
+        let mut store = Store::empty();
+
+        store.put_row(table.clone(), key.clone(), Row::default());
+        store.remove_row(&table, &key);
+
+        assert_eq!(store, Store::empty());
     }
 }
