@@ -1,9 +1,11 @@
 # TLA+ model of kiln's kernel
 
 Verification layer 1 of `docs/verification.md` (design proofs, checked with
-TLC). This is slice 1 (issue #16, cut from #6): resources, admission and
-typed reservations in one composed state space. Crash, recovery and
-publication are slice 2; liveness under stated fairness is slice 3.
+TLC). Slice 1 (issue #16, cut from #6) built resources, admission and
+typed reservations in one composed state space; #24 added escrow
+admission by aggregate budget after slice 1 found a wait cycle among
+escrow draws. Crash, recovery and publication, and liveness under stated
+fairness, are later slices of #6.
 
 ## Tool
 
@@ -26,8 +28,8 @@ specs/kernel/mutants/run.sh NoAdmissionGuard Composed Serializable
 
 Every log is committed next to its configuration. `check.sh` exits with
 TLC's code: 0 for a pass, 12 on a property violation and 11 on a
-deadlock — the expected outcome of every witness run, of
-`AllowanceCycle`, and of every mutant run.
+deadlock — the expected outcome of every witness run and of every mutant
+run.
 
 ## specs/kernel/Kernel.tla — the model
 
@@ -54,9 +56,10 @@ compatible: `S`/`S`, `S`/`RS`, `RS`/`RS`, `PIN`/`PIN`, `DRAW`/`DRAW`. Every
 other overlapping pair conflicts. §4 and §5 state the rules this encodes:
 equal keys conflict, a point conflicts with a covering range or table
 resource, a claim is checked against any range covering the point it
-inserts into, pins count references and so coexist, draws share an
-allowance, a delete is incompatible with the pins on the parent. Where the
-concept is silent the rule is conflict (see "Concept findings").
+inserts into, pins count references and so coexist, draws share a balance
+through their reservations, a delete is incompatible with the pins on the
+parent. Where the concept is silent the rule is conflict (see "Concept
+findings").
 
 **Operations** (`ApplyOp`, one pure function used by both the live protocol
 and the serial reference): `Read(k)` under `S`; `Scan(lo, hi)` under `RS`,
@@ -65,41 +68,85 @@ returning the previous row; `Insert(k, p)` under `CLAIM` on `k` plus `PIN`
 on `p`, rejected with `exists` or `noparent`; `Delete(k)` under `DEL` on
 `k` plus `PIN` on the row's own parent while it unlinks, rejected with
 `referenced`; `Buy(k, a)` under `DRAW`, drawing `a` from `bal` and adding
-one to `val`, rejected with `insufficient`.
+one to `val`, rejected with `insufficient`; `BuyUnder(k, a, cap)`, the
+same draw under `DRAW` and `S` on `k`, taken only while `val < cap` and
+answered `skipped` otherwise (a branch on the row); `BuyVal(k, j)` under `DRAW` on `k` and `S` on `j`, drawing row
+`j`'s `val` from `k` (an amount the program does not know statically).
 
-**Protocol.** A transaction starts `pending`: dispatched, holding nothing.
+**Protocol.** A transaction starts `pending`, holding nothing. `Dispatch`
+gives it the next sequence number: it is now queued for admission.
 `Acquire` takes its complete footprint — every resource its program needs
-(`Footprint(t)`, below) — in one step, atomically with the compatibility
-check against every live holder. This is the model's abstraction of §4's
+(`Footprint(t)`, below) together with its escrow reservations — in one
+step, atomically with the compatibility check against every live holder
+and the escrow admission check. This is the model's abstraction of §4's
 atomic-at-dispatch registration: a keyed resource is registered
 "atomically at dispatch, held through commit", and a covering resource is
 acquired "before any read or write touches the underlying state". §4's
 canonical order is how an implementation acquires the same set piece by
 piece; the step abstracts that sequence, so the model never holds a
-partial footprint. The transaction is then `active` and `DoOp`
-executes its program in order on its view — committed rows overlaid with
-its own tentative writes and draws — acquiring nothing more. A rejection
-is a constraint failure returned to the caller: the transaction ends as
-`rejected`, releases everything and leaves no effect (§5, known abort).
-`Commit` makes the view the committed state and releases every resource
-(strict two-phase locking, dispatch to commit). Escrow draws are deltas,
-not overwrites: two committed draws subtract twice. There is no other
-abort: the only ways a transaction ends are commit and constraint
-rejection.
+partial footprint. The transaction is then `active` and `DoOp` executes
+its program in order on its view — committed rows overlaid with its own
+tentative writes and draws — acquiring nothing more and waiting for
+nothing (§4, rule 1: an admitted transaction never waits again). A
+rejection is a constraint failure returned to the caller: the transaction
+ends as `rejected`, releases everything, its unused reservation included,
+and leaves no effect (§5, known abort). `Commit` makes the view the
+committed state and releases every resource and reservation (strict
+two-phase locking, admission to commit). Escrow draws are deltas, not
+overwrites: two committed draws subtract twice. There is no other abort:
+the only ways a transaction ends are commit and constraint rejection.
 
-**Waiting.** `WaitsOn(t)` is derived from the state. A pending transaction
-waits on every live holder of a resource incompatible with its footprint.
-An active one holds its footprint and waits only for a draw that fits the
-committed balance but not the remaining allowance, on the holders of the
-tentative draws on that key (§5: a tentative draw already reduces what a
-concurrent draw may reserve; §9.5: a non-exclusive wait). A transaction
-steps only when it waits on nobody, so a loser behind a tentative claim
-waits for the holder's outcome and is rejected with `exists` only once
-the holder has committed. `WaitFor` is the relation, `NoWaitCycle` its
-acyclicity. Over exclusive resources a cycle is impossible by
-construction: a waiter on a resource holds nothing, so nobody waits on
-it. What remains is the allowance wait of an active transaction on
-another active draw holder — `AllowanceCycle` below.
+**Escrow budgets and reservations (§4, rules 1 and 2).** `Budget(t, k)` is a
+program's statically known total draw on key `k`, the sum of its draw
+amounts there; a branch counts in full whether or not it is taken, and a
+`BuyVal` makes the budget unknown, which counts as unbounded. At admission
+the transaction reserves `min(budget, committed balance)` on each of its
+escrow keys (`Reservation`). Live reservations are funded from the committed
+balance, so a transaction is admitted only while every other live
+reservation on each of its escrow keys leaves room for its own
+(`EscrowBlocked`); a reservation capped at the committed balance — an
+unfundable or unknown budget — is therefore admitted only once every other
+reservation on that key has resolved, and no reservation at all is taken
+until the whole footprint, every escrow key included, can be funded. A draw
+consumes the transaction's own reservation: the balance a draw sees
+(`DrawView`) is what remains of that reservation, never the committed
+balance other holders draw from, so a transaction that does not lower the
+balance itself never fails an uncapped draw (its own `Update` can lower it
+before a draw, a valid failure) and a capped one fails only on committed
+state, exactly as the serial order "earlier holders, then this transaction"
+does. One exception, one rule (`SoleDrawHolder`, shared by `DrawView` and
+`DrawsWithinReservation`): a transaction holding a covering resource on the
+key incompatible with `DRAW` (`X`, a claim, a delete, a read) is the key's
+only draw holder and draws on its own view; that is how an `Update` that
+raised the balance in the same transaction is drawn from, the one case a
+draw exceeds the reservation when draw amounts are nonnegative (every
+scenario's are; the model does not constrain the parameter). Reservations
+cover blind draws only: `BuyUnder` branches on the row's `val`, so it needs
+`S` beside `DRAW` and is ordered against every other draw on the key
+(`ConcurrentBranch`).
+
+**Admission order (§4, rule 3).** Queued transactions are ordered by
+dispatch sequence: a queued transaction waits on every older queued
+transaction whose footprint shares a resource with its own (overlapping
+coverage, compatible or not), so a later request never bypasses an older
+queued request on a resource they share, while disjoint footprints
+proceed independently. The model checks only that this order is safe
+(no cycle, no deadlock, serializable); that every queued transaction is
+eventually admitted is the liveness obligation below.
+
+**Waiting.** `WaitsOn(t)` is derived from the state. A queued transaction
+waits on every live holder of a resource incompatible with its footprint,
+on the reservation holders that leave no room for its own reservation, and
+on the older queued transactions sharing a resource with it. An active
+transaction waits on nobody. A transaction steps only when it waits on
+nobody, so a loser behind a tentative claim waits for the holder's outcome
+and is rejected with `exists` only once the holder has committed.
+`WaitFor` is the relation, `NoWaitCycle` its acyclicity. A cycle is
+impossible by construction: a waiter holds nothing, an active transaction
+never waits, and waits between queued transactions point from younger to
+older. The `ActiveAllowanceWait` mutant restores slice 1's wait of an
+active draw holder on another holder's tentative draw; TLC brings the
+`AllowanceCycle` cycle back.
 
 **The footprint, computed statically.** `Footprint(t)` is the union of the
 resources each operation of `t`'s program needs, so a program needing two
@@ -127,9 +174,10 @@ responses each caller received, ends each transaction with exactly the
 terminal status it reached (committed, or rejected with its failure as
 the last response), and produces exactly the committed state. A rejected
 transaction takes part with its failure response and no effect, so a
-premature failure (one no serial order would produce) is a violation, and
-so is a rejection recorded as a commit (`InsufficientCommitted`).
-Permutations are enumerated (at most 6 for 3 transactions).
+premature failure (one no serial order would produce) is a violation
+(`PrematureFailure`), and so is a rejection recorded as a commit
+(`InsufficientCommitted`). Permutations are enumerated (at most 6 for 3
+transactions).
 
 **What the oracle cannot see.** The serial reference runs the same
 `ApplyOp` as the live protocol, so it catches every divergence caused by
@@ -139,15 +187,30 @@ pinned only by the state invariants below (`Uniqueness`,
 `ReferentialIntegrity`, `BalanceNonNegative`) and by the witnesses, which
 name the concrete responses they expect. `resp` entries of a still-active
 transaction are buffered observations the caller has not been shown yet;
-publication is slice 2, and `Serializable` compares only ended
+publication is a later slice, and `Serializable` compares only ended
 transactions.
 
 **Other properties.** `MutualExclusion` (no two live transactions hold
-incompatible resources), `FootprintCovers` (above), `Uniqueness` (per key, committed successful
-inserts never exceed committed deletes plus one), `ReferentialIntegrity`
-(a present row's parent is present), `BalanceNonNegative`, `TypeOK`, and
-TLC's deadlock check (a state with a live transaction and no enabled step;
-`Terminating` self-loops once every transaction has ended).
+incompatible resources), `FootprintCovers` (above), `ReservationsFunded`
+(per key, the live reservations sum to at most the committed balance),
+`DrawsWithinReservation` (a transaction never draws more than it reserved
+unless it is the key's sole draw holder, `SoleDrawHolder` in concept §4),
+`Uniqueness` (per key, committed successful inserts never exceed committed
+deletes plus one), `ReferentialIntegrity` (a present row's parent is
+present), `BalanceNonNegative`, `TypeOK`, and TLC's deadlock check (a state
+with a live transaction and no enabled step; `Terminating` self-loops once
+every transaction has ended).
+
+**Liveness, deferred.** The model has no fairness condition: `Spec` is
+`Init /\ [][Next]_Vars`, so TLC checks safety and deadlock freedom only.
+The assumption §9.5 needs is weak fairness of dispatch, admission,
+execution and completion for every transaction — no enabled step of a
+live transaction stays enabled forever without being taken — with
+finite programs. Under it every holder resolves, so every queued
+transaction's blockers (holders, and older queued transactions, finitely
+many and never bypassed) resolve in turn; stating this as
+`Requested(t) ~> Terminal(t)` and checking it, with a `NoBypass` mutant
+whose refutation is a liveness violation, is #6's liveness slice.
 
 **Bounds.** 2-3 transactions with programs of 1-2 operations, 1-3 keys,
 fixed programs per scenario. The footprint is acquired as one step; the
@@ -158,49 +221,66 @@ one table, crash and recovery, any liveness.
 
 ## Scenarios and results
 
-Two outcomes exist. For a *checked* scenario TLC explores the whole state
-space against every property above and the deadlock check. A *documented
-failure* violates a property; its log is the counterexample and it is not
-part of the passing set. Every checked scenario passes with no violation
-and no deadlock; each run finished in under one second with 4 workers.
-State counts are given only for full explorations; a run that stops at a
-counterexample reports how far 4 workers had got, which varies between
-runs, while the trace length (breadth-first, hence shortest) is stable.
+For every scenario TLC explores the whole state space against every
+property above and the deadlock check; every scenario passes with no
+violation and no deadlock, each run in under one second with 4 workers.
+Depth is the length of the longest shortest path (breadth-first).
 
-| Scenario | What runs | Outcome | Distinct states | Depth | Log |
-|---|---|---|---|---|---|
-| `Composed` | t1: `Buy(1,1)`, `Insert(2,3)`; t2: `Buy(1,1)`, `Delete(3)`; t3: `Scan(1,3)` (table) — claim, pin, delete, two draws on key 1 (quota 2) and a table scan in one key space; the pin on 3 conflicts with its delete and the scan with everything, so the three serialize: insert first rejects the delete with `referenced`, delete first the insert with `noparent`, and a draw from a later-rejected transaction leaves no effect | checked, passes | 48 | 11 | `Composed.tlc.log` |
-| `Pins` | t1: `Delete(1)`, `Scan(1,3)` (table); t2: `Insert(2,1)`; t3: `Insert(3,1)` — two pins on parent 1 coexist against its delete, two claims meet the table scan | checked, passes | 38 | 9 | `Pins.tlc.log` |
-| `RangePoint` | t1: `Scan(1,2)`; t2: `Read(2)`, `Buy(3,1)`; t3: `Update(2,1,0)` — a range scan and a point read coexist against an update; the draw on 3 lies outside the range | checked, passes | 58 | 11 | `RangePoint.tlc.log` |
-| `Phantom` | t1: `Scan(2,3)` twice; t2: `Insert(2,0)` — round-1 phantom | checked, passes | 15 | 8 | `Phantom.tlc.log` |
-| `EventClose` | t1: `Update(1,10,0)` on the event row (sold 10, quota 1); t2, t3: `Buy(1,1)` — two draws coexist, the second waits on the first's allowance, the update waits on both | checked, passes | 39 | 9 | `EventClose.tlc.log` |
-| `ClaimAbort` | t1: `Insert(2,0)`, `Buy(3,1)` against an empty escrow; t2, t3: `Insert(2,0)` — tentative claim whose holder is rejected while claimants wait | checked, passes | 34 | 9 | `ClaimAbort.tlc.log` |
-| `ParentDelete` | t1: `Delete(1)`; t2: `Insert(2,1)` — parent delete concurrent with child insert | checked, passes | 11 | 6 | `ParentDelete.tlc.log` |
-| `OutOfOrder` | t1: `Buy(1,1)`, `Insert(2,0)`; t2: `Insert(2,0)`, `Buy(1,1)` — the programs touch keys 1 and 2 in opposite orders (quota 1); the claims conflict at dispatch and the second draw is rejected with `insufficient` | checked, passes | 13 | 7 | `OutOfOrder.tlc.log` |
-| `FootprintGap` | t1: `Insert(3,1)`, `Update(2,0,0)`; t2: `Update(2,1,0)`, `Delete(3)` — in order by lowest key per operation (1, 2; 2, 3), out of order over the footprint; the `X` locks on 2 conflict at dispatch | checked, passes | 17 | 9 | `FootprintGap.tlc.log` |
-| `ScanUpgrade` | t1: `Scan(1,2)`, `Update(1,0,0)`; t2: `Scan(1,2)`, `Update(2,0,0)` — each needs `X` on a key its own scan covers; range and `X` lock are taken together, and each `X` lock conflicts with the other's range | checked, passes | 16 | 9 | `ScanUpgrade.tlc.log` |
-| `DeleteReinsert` | rows 1 and 2 present, no parents; t1: `Delete(2)`, `Insert(2,1)`; t2: `Delete(1)`, `Update(2,0,0)` — the reinsert makes 1 a possible parent of 2, so t1's footprint pins 1; `DEL 1` against `PIN 1` and `DEL 2` against `X 2` conflict at dispatch | checked, passes | 14 | 8 | `DeleteReinsert.tlc.log` |
-| `AllowanceCycle` | t1, t2: `Buy(1,1)`, `Buy(1,1)` against quota 2 — both footprints are one `DRAW` on 1 and coexist; the first draws coexist, each second draw fits its own view but not the allowance left by the other's tentative draw, and each waits on the other | documented failure: `NoWaitCycle` violated at state 5 (`AllowanceCycle.tlc.log`); with the invariants off, deadlock at state 5 (`AllowanceCycle.deadlock.tlc.log`) — concept defect, [#24](https://github.com/overnightworks/kiln/issues/24) | – | – | `AllowanceCycle.tlc.log` |
+| Scenario | What runs | Distinct states | Depth | Log |
+|---|---|---|---|---|
+| `Composed` | t1: `Buy(1,1)`, `Insert(2,3)`; t2: `Buy(1,1)`, `Delete(3)`; t3: `Scan(1,3)` (table) — claim, pin, delete, two draws on key 1 (quota 2) and a table scan in one key space; the pin on 3 conflicts with its delete and the scan with everything, so the three serialize: insert first rejects the delete with `referenced`, delete first the insert with `noparent`, and a draw from a later-rejected transaction leaves no effect | 129 | 14 | `Composed.tlc.log` |
+| `Pins` | t1: `Delete(1)`, `Scan(1,3)` (table); t2: `Insert(2,1)`; t3: `Insert(3,1)` — two pins on parent 1 coexist against its delete, two claims meet the table scan | 136 | 12 | `Pins.tlc.log` |
+| `RangePoint` | t1: `Scan(1,2)`; t2: `Read(2)`, `Buy(3,1)`; t3: `Update(2,1,0)` — a range scan and a point read coexist against an update; the draw on 3 lies outside the range | 177 | 14 | `RangePoint.tlc.log` |
+| `Phantom` | t1: `Scan(2,3)` twice; t2: `Insert(2,0)` — round-1 phantom | 26 | 10 | `Phantom.tlc.log` |
+| `EventClose` | t1: `Update(1,10,0)` on the event row (sold 10, quota 1); t2, t3: `Buy(1,1)` — the second draw's reservation waits on the first's, the update waits on both | 107 | 12 | `EventClose.tlc.log` |
+| `ClaimAbort` | t1: `Insert(2,0)`, `Buy(3,1)` against an empty escrow; t2, t3: `Insert(2,0)` — tentative claim whose holder is rejected while claimants wait | 101 | 12 | `ClaimAbort.tlc.log` |
+| `ParentDelete` | t1: `Delete(1)`; t2: `Insert(2,1)` — parent delete concurrent with child insert | 21 | 8 | `ParentDelete.tlc.log` |
+| `OutOfOrder` | t1: `Buy(1,1)`, `Insert(2,0)`; t2: `Insert(2,0)`, `Buy(1,1)` — the programs touch keys 1 and 2 in opposite orders (quota 1); the claims conflict at dispatch and the second draw is rejected with `insufficient` | 25 | 9 | `OutOfOrder.tlc.log` |
+| `FootprintGap` | t1: `Insert(3,1)`, `Update(2,0,0)`; t2: `Update(2,1,0)`, `Delete(3)` — in order by lowest key per operation (1, 2; 2, 3), out of order over the footprint; the `X` locks on 2 conflict at dispatch | 29 | 11 | `FootprintGap.tlc.log` |
+| `ScanUpgrade` | t1: `Scan(1,2)`, `Update(1,0,0)`; t2: `Scan(1,2)`, `Update(2,0,0)` — each needs `X` on a key its own scan covers; range and `X` lock are taken together, and each `X` lock conflicts with the other's range | 29 | 11 | `ScanUpgrade.tlc.log` |
+| `DeleteReinsert` | rows 1 and 2 present, no parents; t1: `Delete(2)`, `Insert(2,1)`; t2: `Delete(1)`, `Update(2,0,0)` — the reinsert makes 1 a possible parent of 2, so t1's footprint pins 1; `DEL 1` against `PIN 1` and `DEL 2` against `X 2` conflict at dispatch | 26 | 10 | `DeleteReinsert.tlc.log` |
+| `AllowanceCycle` | t1, t2: `Buy(1,1)`, `Buy(1,1)` against quota 2 — slice 1's documented failure (each second draw waited on the other's tentative draw): now each reserves 2 at admission, the second is admitted once the first has resolved, capped at the remaining 0, and fails its first draw on committed state | 25 | 9 | `AllowanceCycle.tlc.log` |
+| `BranchBudget` | t1: `BuyUnder(1,1,1)` twice against quota 2 (the second branch is never taken, the budget is 2); t2: `Buy(1,1)` — the untaken branch keeps the balance reserved until t1 commits; t2 then takes the ticket it left | 26 | 10 | `BranchBudget.tlc.log` |
+| `ConcurrentBranch` | quota 2; t1, t2: `BuyUnder(1,1,1)` once each — both reservations are funded, but the branch reads the sold count, so the `S` lock orders them: one draws, the other skips | 23 | 9 | `ConcurrentBranch.tlc.log` |
+| `Unfundable` | t1: `Buy(1,2)`, `Buy(1,1)` (budget 3) against quota 2; t2: `Buy(1,1)` — t1's reservation is capped at the balance and admitted only with no other reservation live; it draws its reservation and fails the rest with `insufficient` on committed state | 22 | 9 | `Unfundable.tlc.log` |
+| `TwoEscrows` | keys 1 and 2 with quota 1 each; t1: `Buy(1,1)`, `Buy(2,1)`; t2: `Buy(2,1)`; t3: `Buy(1,1)` — admission is all-or-nothing across escrows: t1 waits on both holders reserving nothing, then is capped at 0 on both | 154 | 13 | `TwoEscrows.tlc.log` |
+| `HolderAbort` | key 2 present; t1: `Buy(1,1)`, `Insert(2,0)` (rejected with `exists`, releasing its reservation); t2: `Buy(1,1)` twice against quota 2 — t2 waits instead of reserving the remainder and failing on it; after t1's rejection it reserves 2 and commits both draws | 25 | 10 | `HolderAbort.tlc.log` |
+| `MixedModes` | quota 1; t1: `Update(1,0,2)`, `Buy(1,1)`; t2: `Buy(1,1)`, `Update(1,5,0)` — `X` and `DRAW` on one key in each footprint; the `X` locks serialize them; after t2 commits, t1 is capped at 0 and draws from the balance its own update raised | 29 | 11 | `MixedModes.tlc.log` |
+| `UnknownBudget` | quota 2, row 2 with `val` 1; t1: `BuyVal(1,2)`; t2: `Buy(1,1)`; t3: `Update(2,3,0)` — an unknown budget reserves the whole balance; the draw amount t3 raises fails on committed state | 165 | 13 | `UnknownBudget.tlc.log` |
 
-**Reachability witnesses.** Each checked scenario names negated state
-predicates (`*Unreached`); TLC's counterexample is the proof that the
-scenario's decisive state is reachable. Logs:
-`<Scenario>.witness.<Predicate>.tlc.log`.
+**Reachability witnesses.** Each scenario names negated state predicates
+(`*Unreached`); TLC's counterexample is the proof that the scenario's
+decisive state is reachable. Logs: `<Scenario>.witness.<Predicate>.tlc.log`.
+Two witnesses (`ComposedPinDeleteUnreached`, `PinsTableUnreached`) once
+asserted that two queued transactions each wait *only* on the holder;
+under rule 3 the later-dispatched one also waits on the earlier, so they
+assert membership.
 
 | Witness | State reached | Trace length |
 |---|---|---|
-| `ComposedPinDeleteUnreached` | t1 holds its draw on 1 and its pin on 3; t2's delete and t3's table scan both wait on t1 | 2 |
-| `ComposedReferencedUnreached` | t2 was told `ok, referenced`, t1 committed key 2 under parent 3, and key 1's quota is 1: the draw from the later-rejected transaction left no effect | 8 |
-| `ComposedNoParentUnreached` | t1 was told `ok, noparent`, t2 committed the delete of 3, and key 1's quota is 1 | 8 |
-| `PinsConcurrentUnreached` | t2 and t3 both hold a pin on 1; t1's delete waits on both | 3 |
-| `PinsTableUnreached` | t1 holds the table scan with its delete; both claims wait on t1 | 2 |
-| `PinsReferencedUnreached` | t1 was told `referenced`; keys 2 and 3 are committed under parent 1 | 9 |
-| `RangePointUnreached` | t1 holds the range scan over 1..2, t2 the point read on 2 and the draw on 3; t3's update waits on both | 3 |
-| `PhantomUnreached` | t1 holds `RS 2..3`, t2's claim on 2 waits on t1 | 2 |
-| `EventCloseUnreached` | t2 holds its tentative draw; t1's X lock and t3's draw both wait on t2 | 4 |
-| `ClaimAbortWaitUnreached` | t1 holds the tentative claim on 2, t2 waits on it | 2 |
-| `ClaimAbortUnreached` | t1 answered `ok, insufficient` (claim released by the rejection), t2 committed key 2, t3 was told `exists` | 9 |
-| `ParentDeleteUnreached` | t2 holds its pin on 1, t1's delete waits on it | 2 |
+| `ComposedPinDeleteUnreached` | t1 holds its draw on 1 and its pin on 3; t2's delete and t3's table scan both wait on t1 | 5 |
+| `ComposedReferencedUnreached` | t2 was told `ok, referenced`, t1 committed key 2 under parent 3, and key 1's quota is 1: the draw from the later-rejected transaction left no effect | 10 |
+| `ComposedNoParentUnreached` | t1 was told `ok, noparent`, t2 committed the delete of 3, and key 1's quota is 1 | 10 |
+| `PinsConcurrentUnreached` | t2 and t3 both hold a pin on 1; t1's delete waits on both | 6 |
+| `PinsTableUnreached` | t1 holds the table scan with its delete; both claims wait on t1 | 5 |
+| `PinsReferencedUnreached` | t1 was told `referenced`; keys 2 and 3 are committed under parent 1 | 12 |
+| `RangePointUnreached` | t1 holds the range scan over 1..2, t2 the point read on 2 and the draw on 3; t3's update waits on both | 6 |
+| `PhantomUnreached` | t1 holds `RS 2..3`, t2's claim on 2 waits on t1 | 4 |
+| `EventCloseUnreached` | t2 holds its tentative draw; t1's X lock and t3's draw both wait on t2 | 5 |
+| `ClaimAbortWaitUnreached` | t1 holds the tentative claim on 2, t2 waits on it | 4 |
+| `ClaimAbortUnreached` | t1 answered `ok, insufficient` (claim released by the rejection), t2 committed key 2, t3 was told `exists` | 12 |
+| `ParentDeleteUnreached` | t2 holds its pin on 1, t1's delete waits on it | 4 |
+| `AllowanceCycleQueuedUnreached` | the queued case: t1 holds a reservation of 2 with nothing drawn, t2 is queued behind it on the escrow alone | 4 |
+| `ConcurrentBranchSkippedUnreached` | both committed; one was told `ok`, the other `skipped`; quota 1 | 9 |
+| `BranchBudgetOverReservedUnreached` | t1 skipped its second branch and still holds a reservation of 2 against a draw of 1; t2 waits on it | 6 |
+| `BranchBudgetReleasedUnreached` | both committed; the skipped branch's ticket went to t2 | 10 |
+| `UnfundableCappedUnreached` | the capped case: t1 holds a reservation equal to the committed balance 2 and below its budget 3; t2 is queued behind it | 4 |
+| `UnfundableInsufficientUnreached` | t1 was told `ok, insufficient` after drawing its reservation; t2 committed the ticket the rejection released | 9 |
+| `TwoEscrowsAllOrNothingUnreached` | t2 and t3 each hold one key's reservation; t1 waits on both holding nothing | 6 |
+| `HolderAbortReleasedUnreached` | t1 was rejected with `ok, exists`; t2, which waited on it, holds the whole balance | 7 |
+| `MixedModesRaisedUnreached` | t1 drew one against a reservation of 0 under its X lock | 10 |
+| `UnknownBudgetUnboundedUnreached` | t1 holds the whole balance under an unknown budget; t2 waits on it | 4 |
+| `UnknownBudgetInsufficientUnreached` | after t3 raised the amount to 3, t1's draw failed on the committed balance 2 | 8 |
 
 ## Mutants (specs/kernel/mutants/)
 
@@ -210,42 +290,52 @@ TLC refutes every one; the log is `<Mutant>.<Scenario>.<Property>.tlc.log`.
 
 | Mutant (guard removed) | Scenario | Property refuted | Trace length |
 |---|---|---|---|
-| `NoAdmissionGuard` — `Conflicting` is empty, nothing ever waits | `Composed` | `Serializable` (t1 inserts the child of 3 and t2 deletes 3, both told `ok` and both committed: no serial order yields both) | 9 |
-| `NoAdmissionGuard` | `Composed` | `MutualExclusion` | 3 |
-| `InsufficientCommitted` — a constraint rejection is recorded as `committed` | `EventClose` | `Serializable` (t2 was told `insufficient` and ended `committed`; every serial order ends it `rejected`) | 6 |
-| `RangeCompatibleWithClaim` — `RS`/`CLAIM` compatible | `Phantom` | `Serializable` (second scan sees the inserted key) | 8 |
-| `DrawCompatibleWithX` — `X`/`DRAW` compatible | `EventClose` | `Serializable` | 7 |
-| `DrawIgnoresTentative` — allowance ignores live draws | `EventClose` | `BalanceNonNegative` (quota −1) | 7 |
-| `ClaimCompatibleWithClaim` | `ClaimAbort` | `Uniqueness` (two committed inserts of key 2) | 7 |
-| `ClaimLoserTrustsTentativeHolder` — the loser sees the tentative row and fails at once | `ClaimAbort` | `Serializable` (`exists` returned though no serial order produces it) | 5 |
-| `PinCompatibleWithDelete` — `PIN`/`DEL` compatible | `ParentDelete` | `ReferentialIntegrity` | 7 |
-| `PerOperationAcquisition` — nothing is acquired at dispatch; `DoOp` registers each operation's resources as it runs | `DeleteReinsert` | `NoWaitCycle` (t1 holds `DEL 2` waiting for `PIN 1`, t2 holds `DEL 1` waiting for `X 2`) | 3 |
+| `NoAdmissionGuard` — `Conflicting` is empty, nothing ever waits | `Composed` | `Serializable` (t1 inserts the child of 3 and t2 deletes 3, both told `ok` and both committed: no serial order yields both) | 11 |
+| `NoAdmissionGuard` | `Composed` | `MutualExclusion` | 5 |
+| `InsufficientCommitted` — a constraint rejection is recorded as `committed` | `EventClose` | `Serializable` (t2 was told `insufficient` and ended `committed`; every serial order ends it `rejected`) | 8 |
+| `BranchReadUnprotected` — `BuyUnder` takes `DRAW` without `S`: the branch reads the row unprotected | `ConcurrentBranch` | `Serializable` (both told `ok`, quota 0 and 2 sold; every serial order answers `ok, skipped`) | 9 |
+| `RangeCompatibleWithClaim` — `RS`/`CLAIM` compatible | `Phantom` | `Serializable` (second scan sees the inserted key) | 10 |
+| `DrawCompatibleWithX` — `X`/`DRAW` compatible | `EventClose` | `Serializable` | 9 |
+| `ClaimCompatibleWithClaim` | `ClaimAbort` | `Uniqueness` (two committed inserts of key 2) | 9 |
+| `ClaimLoserTrustsTentativeHolder` — the loser sees the tentative row and fails at once | `ClaimAbort` | `Serializable` (`exists` returned though no serial order produces it) | 7 |
+| `PinCompatibleWithDelete` — `PIN`/`DEL` compatible | `ParentDelete` | `ReferentialIntegrity` | 9 |
+| `PerOperationAcquisition` — slice 1's registration per operation: nothing is acquired at dispatch, `DoOp` registers each operation's resources as it runs, a draw sees the committed balance and waits for the allowance | `DeleteReinsert` | `NoWaitCycle` (t1 holds `DEL 2` waiting for `PIN 1`, t2 holds `DEL 1` waiting for `X 2`) | 3 |
 | `PerOperationAcquisition` | `DeleteReinsert` | TLC deadlock check | 3 |
 | `PerOperationAcquisition` | `OutOfOrder` | `NoWaitCycle` (t1 waits on t2's claim, t2 waits on t1's draw) | 3 |
 | `PerOperationAcquisition` | `FootprintGap` | `NoWaitCycle` (t1 holds `CLAIM 3` waiting for `X 2`, t2 holds `X 2` waiting for `DEL 3`) | 3 |
 | `PerOperationAcquisition` | `ScanUpgrade` | `NoWaitCycle` (each holds its range and waits for `X` on a key the other's range covers) | 3 |
+| `ActiveAllowanceWait` — slice 1's escrow restored: no reservation at admission, a draw sees the committed balance, an active transaction waits for the allowance left by other tentative draws | `AllowanceCycle` | `NoWaitCycle` (each holds a tentative draw and waits on the other's) | 7 |
+| `ActiveAllowanceWait` | `AllowanceCycle` | TLC deadlock check | 7 |
+| `CapIgnored` — the budget is reserved in full, never capped at the committed balance | `Unfundable` | `ReservationsFunded` (t1 reserves 3 on a balance of 2) | 3 |
+| `CapIgnored` | `Unfundable` | `BalanceNonNegative` (t1 draws 3 and commits: quota −1) | 6 |
+| `PrematureFailure` — a capped reservation takes what other holders leave instead of waiting for them to resolve | `HolderAbort` | `Serializable` (t2 holds a reservation of 2, t1 takes the remainder 0 and its response is `insufficient` while t2 is still live; run alone, t1's serial response is `ok, exists` and it ends rejected) | 6 |
+| `DrawIgnoresReservation` — admission accounts what other holders have drawn, not what they reserved | `AllowanceCycle` | `ReservationsFunded` (both admitted with 2 on a balance of 2) | 5 |
+| `DrawIgnoresReservation` | `AllowanceCycle` | `BalanceNonNegative` (quota −2) | 11 |
+| `BudgetUndercounts` — the budget is the largest single draw, not the total | `AllowanceCycle` | `Serializable` (t1 reserves 1 and is told `insufficient` on its second draw; no serial order rejects t1) | 5 |
 
 `TypeOK` has no mutant: it is a typing check with no protocol content.
 
 ## Concept findings
 
-**Concept defect, routed to [#24](https://github.com/overnightworks/kiln/issues/24).**
-`AllowanceCycle` is §9.5's unresolved problem made concrete: two
-transactions whose footprints coexist (one `DRAW` each), each already
+**Concept defect found by slice 1, fixed by [#24](https://github.com/overnightworks/kiln/issues/24).**
+`AllowanceCycle` was §9.5's unresolved problem made concrete: two
+transactions whose footprints coexisted (one `DRAW` each), each already
 holding a tentative draw on one key, each wanting a second draw that its
-own view affords but the shared allowance does not, wait on each other.
+own view afforded but the shared allowance did not, waited on each other.
 Acquiring the footprint at dispatch rules out every cycle over exclusive
-resources — a waiter holds nothing — but a draw's allowance is checked
-when the draw runs, after the footprint is held, so the allowance wait is
-a wait between holders. The protocol decision (aggregate reservation at
-dispatch, arbitration, or another mechanism) belongs to #24.
+resources — a waiter holds nothing — but a draw's allowance was checked
+when the draw ran, after the footprint was held, so the allowance wait was
+a wait between holders. §4's rules 1-4 (aggregate escrow budgets reserved
+at admission, no premature failure, admission in dispatch order, no
+wait-die) are what this model now encodes; the mutant table shows what
+each rule prevents.
 
-**Decided by the concept, encoded as is.** A draw whose committed balance
-suffices but whose remaining allowance does not *waits* on the tentative
-holders; it does not fail. §5 states both halves: a tentative draw already
-reduces what a concurrent draw may reserve, and only committed state may
-justify a failure. The model rejects a draw only when the committed
-balance is short.
+**Decided by the concept, encoded as is.** A transaction whose reservation
+cannot be funded because of other *tentative* reservations waits for them
+to resolve; it does not fail. §5 states both halves: a tentative draw
+already reduces what a concurrent draw may reserve, and only committed
+state may justify a failure. A draw is rejected only when it exceeds a
+reservation that equals the committed balance.
 
 **Open details, conservative choice taken (for the head to route).**
 
@@ -256,14 +346,22 @@ balance is short.
    model conflicts in all four cases. A relaxation needs its own proof,
    not a rerun of the existing scenarios: `DRAW`/`S` compatible, for
    example, would let `Read(1); Read(1)` straddle a concurrent purchase,
-   which no scenario here drives.
+   which no scenario here drives — and a transaction holding `S` and
+   `DRAW` on one key would no longer be the key's only draw holder, so it
+   would have to draw on its reservation rather than its view.
 2. **A child delete's resource on its parent.** §5 ties the reverse
    reference to the child row's lifetime but names no resource for the
    unlink; durable reverse-reference protection is required either way.
    The model takes a `PIN` on the parent while deleting the child.
+3. **What "shares a resource" means for admission order.** Rule 3 is
+   encoded as overlapping coverage, compatible or not, so a reader queued
+   behind a writer also holds back a later reader on the same key (no
+   writer starvation). A narrower reading (incompatible resources only)
+   would admit the later reader; the concept does not say which.
 
 Every other TLC violation during the build was a model error (a row
 overwrite where the concept says delta; a witness predicate satisfiable by
 an unintended route; resources registered per operation under static
 ordering assumptions, which admitted the deadlocks of `FootprintGap` and
-`DeleteReinsert`) and was fixed in the model.
+`DeleteReinsert`; an unknown budget encoded as a token TLC cannot compare
+with an integer) and was fixed in the model.

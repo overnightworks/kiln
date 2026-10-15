@@ -1,11 +1,11 @@
 --- Kernel.tla
 +++ Kernel.tla
-@@ -274,7 +274,7 @@
+@@ -355,7 +355,7 @@
       /\ pc' = [pc EXCEPT ![t] = @ + 1]
       /\ resp' = [resp EXCEPT ![t] = Append(@, r.resp)]
       /\ IF r.rejected
 -        THEN /\ status' = [status EXCEPT ![t] = "rejected"]
 +        THEN /\ status' = [status EXCEPT ![t] = "committed"]
               /\ held' = [held EXCEPT ![t] = {}]
+              /\ reserved' = [reserved EXCEPT ![t] = NoReservation]
               /\ wr' = [wr EXCEPT ![t] = NoWrites]
-              /\ draws' = [draws EXCEPT ![t] = NoDraws]

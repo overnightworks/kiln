@@ -32,10 +32,11 @@ PinsConcurrentUnreached ==
   ~(Res("PIN", {1}) \in held["t2"] /\ Res("PIN", {1}) \in held["t3"]
     /\ WaitsOn("t1") = {"t2", "t3"})
 
-(* t1 holds the table scan with its delete; both claims wait on it. *)
+(* t1 holds the table scan with its delete; both claims wait on it (the
+   later-dispatched claim also on the earlier one). *)
 PinsTableUnreached ==
   ~(Res("RS", 1..3) \in held["t1"]
-    /\ WaitsOn("t2") = {"t1"} /\ WaitsOn("t3") = {"t1"})
+    /\ "t1" \in WaitsOn("t2") /\ "t1" \in WaitsOn("t3"))
 
 (* The pins won: the delete was rejected and both children are committed. *)
 PinsReferencedUnreached ==

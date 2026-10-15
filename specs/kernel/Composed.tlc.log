@@ -1,15 +1,15 @@
 TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
 Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 63 and seed -5859277221388847863 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 2720613] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
-Starting... (2026-10-15 22:21:18)
+Running breadth-first search Model-Checking with fp 31 and seed -138930504426063762 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 3155048] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-10-15 23:15:26)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-15 22:21:18.
+Finished computing initial states: 1 distinct state generated at 2026-10-15 23:15:26.
 Model checking completed. No error has been found.
   Estimates of the probability that TLC did not check all reachable states
   because two distinct states had the same fingerprint:
-  calculated (optimistic):  val = 1.6E-17
-54 states generated, 48 distinct states found, 0 states left on queue.
-The depth of the complete state graph search is 11.
-The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 3 and the 95th percentile is 2).
-Finished in 00s at (2026-10-15 22:21:18)
+  calculated (optimistic):  val = 4.9E-16
+199 states generated, 129 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 14.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 3 and the 95th percentile is 3).
+Finished in 01s at (2026-10-15 23:15:26)

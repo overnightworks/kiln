@@ -1,21 +1,57 @@
 --- Kernel.tla
 +++ Kernel.tla
-@@ -189,7 +189,7 @@
- NoDraws == [k \in Keys |-> [bal |-> 0, val |-> 0]]
+@@ -227,7 +227,7 @@
+ NoReservation == [k \in Keys |-> 0]
  
  Init ==
 -  /\ status = [t \in Txns |-> "pending"]
 +  /\ status = [t \in Txns |-> "active"]
+   /\ seq = [t \in Txns |-> 0]
    /\ pc = [t \in Txns |-> 0]
    /\ held = [t \in Txns |-> {}]
-   /\ wr = [t \in Txns |-> NoWrites]
-@@ -244,8 +244,11 @@
-    allowance of its next draw. Empty exactly when its next step may run. *)
+@@ -265,8 +265,7 @@
+ SoleDrawHolder(t, k) == \E h \in held[t] : h.kind # "DRAW" /\ k \in h.cov
+ 
+ DrawView(t, k) ==
+-  IF SoleDrawHolder(t, k) THEN View(t)
+-  ELSE [View(t) EXCEPT ![k].bal = reserved[t][k] - draws[t][k].bal]
++  View(t)
+ 
+ OpView(t, op) == IF Draws(op) THEN DrawView(t, op.k) ELSE View(t)
+ 
+@@ -296,8 +295,7 @@
+ EscrowBlocked(t, k) ==
+   SumOver(ReservationHolders(t, k), k) + Reservation(t, k) > db[k].bal
+ 
+-EscrowBlockers(t) ==
+-  UNION {ReservationHolders(t, k) : k \in {k \in EscrowKeys(t) : EscrowBlocked(t, k)}}
++EscrowBlockers(t) == {}
+ 
+ (* Admission order (§4, rule 3): one queue per resource in dispatch
+    order. A queued transaction waits on every older queued transaction
+@@ -313,9 +311,27 @@
+    on older queued transactions sharing a resource. An active one holds
+    its whole footprint and never waits again (rule 1). Empty exactly when
+    its next step may run. *)
++(* Slice 1's allowance: the committed balance minus every live tentative
++   draw on the key; a draw that fits the view but not the allowance waits
++   on the holders of those draws. *)
++RECURSIVE SumDraws(_, _)
++SumDraws(U, k) ==
++  IF U = {} THEN 0
++  ELSE LET u == CHOOSE x \in U : TRUE IN draws[u][k].bal + SumDraws(U \ {u}, k)
++
++DrawHolders(t, k) == {u \in Txns \ {t} : Active(u) /\ draws[u][k].bal > 0}
++
++AllowanceBlocks(t, op) ==
++  /\ Draws(op)
++  /\ View(t)[op.k].bal >= op.a
++  /\ View(t)[op.k].bal - SumDraws(DrawHolders(t, op.k), op.k) < op.a
++
  WaitsOn(t) ==
-   IF Pending(t) THEN Conflicting(t, Footprint(t))
--  ELSE IF Running(t) /\ AllowanceBlocks(t, NextOp(t)) THEN DrawHolders(t, NextOp(t).k)
+-  IF Queued(t) THEN Conflicting(t, Footprint(t)) \cup EscrowBlockers(t) \cup OlderQueued(t)
 -  ELSE {}
-+  ELSE IF ~Running(t) THEN {}
++  IF ~Running(t) THEN {}
 +  ELSE LET C == Conflicting(t, Need(NextOp(t), View(t))) IN
 +       IF C # {} THEN C
 +       ELSE IF AllowanceBlocks(t, NextOp(t)) THEN DrawHolders(t, NextOp(t).k)
@@ -23,13 +59,21 @@
  
  Changed(t, v) == {k \in Keys : v[k] # View(t)[k]}
  
-@@ -278,7 +281,8 @@
-              /\ held' = [held EXCEPT ![t] = {}]
+@@ -349,6 +365,7 @@
+    survives. *)
+ DoOp(t) ==
+   /\ Running(t)
++  /\ WaitsOn(t) = {}
+   /\ LET op == NextOp(t)
+          v == OpView(t, op)
+          r == ApplyOp(op, v) IN
+@@ -360,7 +377,8 @@
+              /\ reserved' = [reserved EXCEPT ![t] = NoReservation]
               /\ wr' = [wr EXCEPT ![t] = NoWrites]
               /\ draws' = [draws EXCEPT ![t] = NoDraws]
--        ELSE /\ UNCHANGED <<status, held>>
+-        ELSE /\ UNCHANGED <<status, held, reserved>>
 +        ELSE /\ held' = [held EXCEPT ![t] = @ \cup Need(op, View(t))]
-+             /\ UNCHANGED status
-              /\ IF op.op = "Buy"
++             /\ UNCHANGED <<status, reserved>>
+              /\ IF Draws(op)
                  THEN /\ draws' = [draws EXCEPT ![t][op.k] =
-                                    [bal |-> @.bal + op.a, val |-> @.val + 1]]
+                                    [bal |-> @.bal + (v[op.k].bal - r.db[op.k].bal),
