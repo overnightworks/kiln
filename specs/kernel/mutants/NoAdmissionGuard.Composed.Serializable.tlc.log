@@ -1,10 +1,10 @@
 TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
 Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 0 and seed -6356257166282711245 with 1 worker on 12 cores with 15518MB heap and 64MB offheap memory [pid: 48191] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
-Starting... (2026-10-16 00:12:31)
+Running breadth-first search Model-Checking with fp 0 and seed -2653920720592573587 with 1 worker on 12 cores with 15518MB heap and 64MB offheap memory [pid: 627320] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-10-16 00:45:09)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-16 00:12:31.
+Finished computing initial states: 1 distinct state generated at 2026-10-16 00:45:09.
 Error: Invariant Serializable is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
@@ -32,7 +32,7 @@ State 1: <Initial predicate>
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 2: <Dispatch line 349, col 3 to line 351, col 75 of module Kernel>
+State 2: <Dispatch line 350, col 3 to line 352, col 75 of module Kernel>
 /\ seq = [t1 |-> 1, t2 |-> 0, t3 |-> 0]
 /\ resp = [t1 |-> <<>>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
@@ -57,7 +57,7 @@ State 2: <Dispatch line 349, col 3 to line 351, col 75 of module Kernel>
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 3: <Acquire line 362, col 3 to line 370, col 51 of module Kernel>
+State 3: <Acquire line 363, col 3 to line 371, col 51 of module Kernel>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ resp = [t1 |-> <<>>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
@@ -87,7 +87,7 @@ State 3: <Acquire line 362, col 3 to line 370, col 51 of module Kernel>
   t3 |-> {} ]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 4: <DoOp line 382, col 3 to line 405, col 35 of module Kernel>
+State 4: <DoOp line 383, col 3 to line 406, col 35 of module Kernel>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ resp = [t1 |-> <<"ok">>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 1, t2 |-> 0, t3 |-> 0]
@@ -117,7 +117,7 @@ State 4: <DoOp line 382, col 3 to line 405, col 35 of module Kernel>
   t3 |-> {} ]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 5: <DoOp line 382, col 3 to line 405, col 35 of module Kernel>
+State 5: <DoOp line 383, col 3 to line 406, col 35 of module Kernel>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ resp = [t1 |-> <<"ok", "ok">>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 2, t2 |-> 0, t3 |-> 0]
@@ -149,7 +149,7 @@ State 5: <DoOp line 382, col 3 to line 405, col 35 of module Kernel>
   t2 |-> << >>,
   t3 |-> << >> ]
 
-State 6: <Dispatch line 349, col 3 to line 351, col 75 of module Kernel>
+State 6: <Dispatch line 350, col 3 to line 352, col 75 of module Kernel>
 /\ seq = [t1 |-> 0, t2 |-> 1, t3 |-> 0]
 /\ resp = [t1 |-> <<"ok", "ok">>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 2, t2 |-> 0, t3 |-> 0]
@@ -181,7 +181,7 @@ State 6: <Dispatch line 349, col 3 to line 351, col 75 of module Kernel>
   t2 |-> << >>,
   t3 |-> << >> ]
 
-State 7: <Acquire line 362, col 3 to line 370, col 51 of module Kernel>
+State 7: <Acquire line 363, col 3 to line 371, col 51 of module Kernel>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ resp = [t1 |-> <<"ok", "ok">>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 2, t2 |-> 0, t3 |-> 0]
@@ -213,7 +213,7 @@ State 7: <Acquire line 362, col 3 to line 370, col 51 of module Kernel>
   t2 |-> << >>,
   t3 |-> << >> ]
 
-State 8: <DoOp line 382, col 3 to line 405, col 35 of module Kernel>
+State 8: <DoOp line 383, col 3 to line 406, col 35 of module Kernel>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ resp = [t1 |-> <<"ok", "ok">>, t2 |-> <<"ok">>, t3 |-> <<>>]
 /\ pc = [t1 |-> 2, t2 |-> 1, t3 |-> 0]
@@ -245,7 +245,7 @@ State 8: <DoOp line 382, col 3 to line 405, col 35 of module Kernel>
   t2 |-> << >>,
   t3 |-> << >> ]
 
-State 9: <DoOp line 382, col 3 to line 405, col 35 of module Kernel>
+State 9: <DoOp line 383, col 3 to line 406, col 35 of module Kernel>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ resp = [t1 |-> <<"ok", "ok">>, t2 |-> <<"ok", "ok">>, t3 |-> <<>>]
 /\ pc = [t1 |-> 2, t2 |-> 2, t3 |-> 0]
@@ -277,7 +277,7 @@ State 9: <DoOp line 382, col 3 to line 405, col 35 of module Kernel>
   t2 |-> (3 :> [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0]),
   t3 |-> << >> ]
 
-State 10: <Commit line 434, col 3 to line 441, col 41 of module Kernel>
+State 10: <Commit line 435, col 3 to line 442, col 41 of module Kernel>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ resp = [t1 |-> <<"ok", "ok">>, t2 |-> <<"ok", "ok">>, t3 |-> <<>>]
 /\ pc = [t1 |-> 2, t2 |-> 2, t3 |-> 0]
@@ -306,7 +306,7 @@ State 10: <Commit line 434, col 3 to line 441, col 41 of module Kernel>
   t2 |-> (3 :> [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0]),
   t3 |-> << >> ]
 
-State 11: <Commit line 434, col 3 to line 441, col 41 of module Kernel>
+State 11: <Commit line 435, col 3 to line 442, col 41 of module Kernel>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ resp = [t1 |-> <<"ok", "ok">>, t2 |-> <<"ok", "ok">>, t3 |-> <<>>]
 /\ pc = [t1 |-> 2, t2 |-> 2, t3 |-> 0]
@@ -334,4 +334,4 @@ State 11: <Commit line 434, col 3 to line 441, col 41 of module Kernel>
 368 states generated, 177 distinct states found, 24 states left on queue.
 The depth of the complete state graph search is 11.
 The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 3 and the 95th percentile is 3).
-Finished in 00s at (2026-10-16 00:12:31)
+Finished in 00s at (2026-10-16 00:45:09)

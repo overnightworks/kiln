@@ -599,6 +599,18 @@ not — is specified precisely in §9.2; this document's architecture-level
 commitment is a single append-only commit log per store, with recovery
 replaying only commit groups that validate completely.
 
+**Status: checked within bounds** — the unknown-outcome rule above is
+checked on the kernel model (`Durable.tla`, `specs/README.md`): an `fsync`
+failure answers `unknown`, the transaction keeps its footprint and
+reservations (each exactly as held when the flush failed) until recovery,
+recovery resolves it to whatever the log shows, and mutants that answer an
+abort and release the reservations, or release part of one, are refuted.
+Bounds: 3 transactions, one log, at most two failures; the publication
+pointer (§9.1) and torn writes are not modelled. Not proved: that a caller
+is eventually acknowledged or that recovery eventually runs (fairness
+covers neither, and recovery discards queued requests; only undispatched
+ones stay runnable).
+
 ## 6. Trust model
 
 AI agents may propose new specializations — a new reservation type, a new
@@ -728,10 +740,24 @@ truthful-flush assumption
 makes for the same reason. Because an `fsync` failure here does not tell
 the engine whether the bytes actually reached storage, it leaves the
 transaction's commit outcome unknown rather than a known abort; §5 states
-the resulting reservation-release and recovery contract. **Status: not yet
-specified** — the exact extent
-size, the allocation and reclaim policy, and the checkpoint layout that
-make "never overwrite acknowledged bytes" concrete are engine-phase work.
+the resulting reservation-release and recovery contract. **Status: checked within bounds, layout not yet specified** — TLC checks
+the commit, crash and recovery contract on the kernel model with up to two
+crashes or `fsync` failures at any step of 3 transactions and one log:
+every acknowledged commit is in the recovered history, the recovered history
+is a prefix of the log's commit order (and the whole log once the engine
+serves again), an `fsync` failure is answered `unknown` and never as an
+abort, and recovered histories are serializable with exact responses,
+including responses that depend on a predecessor whose commit is durable
+but unacknowledged (`specs/README.md`, `Durable.tla`). Mutants (an `fsync`
+failure answered as an abort or shrinking a reservation, an acknowledgement
+before the flush, a recovery that drops a durable record, locks released
+before the flush, tentative effects shown to a dependent whose record then
+survives a crash without its predecessor's) are each refuted. Eventual acknowledgement and eventual
+recovery are not proved. That is a bounded check of an
+abstract log, not of bytes, framing, checksums or a device that lies; the
+visible-version pointer (§9.1) is not covered. The exact extent size, the
+allocation and reclaim policy, and the checkpoint layout that make "never
+overwrite acknowledged bytes" concrete are engine-phase work.
 
 ### 9.3 Migration watermark and rollback window
 
