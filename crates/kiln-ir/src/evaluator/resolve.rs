@@ -43,7 +43,7 @@ impl From<ResolveError> for AbortReason {
 
 /// Resolves an expression to a concrete value: a constant, the argument
 /// bound to a declared parameter (its arity was checked before the call ran),
-/// a column projected from an earlier read's row, or an arithmetic operation
+/// a column or the primary key projected from an earlier read's row, or an arithmetic operation
 /// over two such values.
 ///
 /// Arithmetic here is checked at `i64`'s own width and returns
@@ -77,13 +77,20 @@ pub(super) fn resolve(
             let Some(Binding::Row(Some(row))) = bindings.get(slot) else {
                 return Err(ResolveError::ProjectionSourceAbsent { slot: *slot });
             };
-            row.columns
+            row.row
+                .columns
                 .get(column)
                 .cloned()
                 .ok_or_else(|| ResolveError::MissingColumn {
                     slot: *slot,
                     column: column.clone(),
                 })
+        }
+        Expr::PrimaryKey { slot } => {
+            let Some(Binding::Row(Some(row))) = bindings.get(slot) else {
+                return Err(ResolveError::ProjectionSourceAbsent { slot: *slot });
+            };
+            Ok(row.key.clone())
         }
         Expr::Arithmetic(op, lhs, rhs) => {
             let lhs = as_integer(resolve(lhs, ctx, bindings)?)?;

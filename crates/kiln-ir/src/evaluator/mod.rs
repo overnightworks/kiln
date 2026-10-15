@@ -18,10 +18,9 @@ use std::collections::HashMap;
 use crate::call::Call;
 use crate::identifiers::{AbortName, ColumnName, IndexName, ParameterName, TableName};
 use crate::ir::{
-    CheckConstraint, ForeignKey, Parameter, Program, Row, SchemaError, Slot, UniqueConstraint,
-    Value,
+    CheckConstraint, ForeignKey, Parameter, Program, SchemaError, Slot, UniqueConstraint, Value,
 };
-use crate::store::Store;
+use crate::store::{KeyedRow, Store};
 
 mod check;
 mod constraints;
@@ -245,13 +244,14 @@ struct CallContext<'a> {
 }
 
 /// What a [`Slot`] holds once the effect that bound it has run: a single
-/// row or its absence (`Effect::Read`), or the ordered sequence of rows a
-/// range matched (`Effect::ReadRange`). [`Condition::RowPresent`](crate::ir::Condition::RowPresent) reads
+/// keyed row or its absence (`Effect::Read`), or the ordered sequence of
+/// keyed rows a range matched (`Effect::ReadRange`,
+/// `Effect::ReadIndexRange`). [`Condition::RowPresent`](crate::ir::Condition::RowPresent) reads
 /// either kind as one branchable fact — "did this read find anything" —
 /// without the rest of `run` needing to know which effect produced it.
 enum Binding {
-    Row(Option<Row>),
-    Range(Vec<Row>),
+    Row(Option<KeyedRow>),
+    Range(Vec<KeyedRow>),
 }
 
 impl Binding {

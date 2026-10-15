@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::identifiers::{ColumnName, IndexName, TableName};
 use crate::ir::{Block, Effect, Expr, Row, Slot, Terminal, Value};
-use crate::store::Store;
+use crate::store::{KeyedRow, Store};
 
 use super::resolve::{resolve, resolve_for_write, WriteOverflow};
 use super::{
@@ -129,7 +129,10 @@ fn apply_read(
         Ok(key) => key,
         Err(outcome) => return Some(outcome),
     };
-    let row = store.row(table, &key).cloned();
+    let row = store.row(table, &key).map(|row| KeyedRow {
+        key: key.clone(),
+        row: row.clone(),
+    });
     access_log.push(AccessLogEntry {
         table: table.clone(),
         kind: AccessKind::PointRead,
@@ -217,7 +220,7 @@ fn resolve_bound(
 fn bind_within_bound(
     table: &TableName,
     bound: i64,
-    rows: Vec<Row>,
+    rows: Vec<KeyedRow>,
     into: Slot,
     bindings: &mut HashMap<Slot, Binding>,
 ) -> Option<Outcome> {
@@ -307,13 +310,16 @@ fn resolve_all(
         .collect()
 }
 
-/// Runs `body` once for each row `source` bound, in key order, binding the
-/// current row to `row` so the body's own effects and expressions can use
-/// it (`Effect::Iterate`, `docs/concept.md` §2.1 "bounded iteration", §2.2
-/// D6: "bounded iteration proceeds in key order").
+/// Runs `body` once for each row `source` bound, in the order the read
+/// bound them, binding the current keyed row to `row` so the body's own
+/// effects and expressions can use it (`Effect::Iterate`,
+/// `docs/concept.md` §2.1 "bounded iteration", §2.2 D6: key order for a
+/// primary-key range, index order, narrowed to the indexed columns, for an
+/// index range).
 ///
-/// `source` must already be bound by an [`Effect::ReadRange`] in the same
-/// body: that read already resolved and bound-checked its range, so
+/// `source` must already be bound by an [`Effect::ReadRange`] or
+/// [`Effect::ReadIndexRange`] in the same body: that read already resolved
+/// and bound-checked its range, so
 /// `Iterate` re-reads nothing and checks no bound of its own. When the loop
 /// ends, the row slot and every slot the body bound read as absent. Panics if
 /// `source` is unbound or was bound by a point read instead — a contract

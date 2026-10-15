@@ -35,4 +35,4 @@ pub use ir::{
     Row, Schema, SchemaError, Slot, Table, Terminal, UniqueConstraint, Value,
 };
 pub use replay::replay;
-pub use store::Store;
+pub use store::{KeyedRow, Store};

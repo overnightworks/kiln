@@ -386,7 +386,16 @@ pub enum ArithmeticOp {
 pub enum Expr {
     Literal(Value),
     Parameter(ParameterName),
-    Projection { slot: Slot, column: ColumnName },
+    Projection {
+        slot: Slot,
+        column: ColumnName,
+    },
+    /// The primary key of the row bound to `slot`: the key a point read
+    /// used, or the store key of a range or index row. Resolves like a
+    /// projection from an absent slot when no row is bound.
+    PrimaryKey {
+        slot: Slot,
+    },
     Arithmetic(ArithmeticOp, Box<Expr>, Box<Expr>),
 }
 

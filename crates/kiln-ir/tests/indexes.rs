@@ -1,5 +1,5 @@
 //! Declared secondary indexes and indexed range reads, driven through
-//! `kiln_ir::run` (`specs/kiln-ir.spec.md`, KILN-IR-65 to KILN-IR-71).
+//! `kiln_ir::run` (`specs/kiln-ir.spec.md`, KILN-IR-65 to KILN-IR-72).
 
 mod support;
 
@@ -87,10 +87,7 @@ fn visit_each_row_into_visited() -> Effect {
         row: Slot(1),
         body: vec![Effect::Insert {
             table: table("visited"),
-            key: Expr::Projection {
-                slot: Slot(1),
-                column: column("id"),
-            },
+            key: Expr::PrimaryKey { slot: Slot(1) },
             columns: Default::default(),
         }],
     }
@@ -498,10 +495,7 @@ mod kiln_ir_71 {
             row: Slot(1),
             body: vec![Effect::Read {
                 table: table("people"),
-                key: Expr::Projection {
-                    slot: Slot(1),
-                    column: column("id"),
-                },
+                key: Expr::PrimaryKey { slot: Slot(1) },
                 into: Slot(2),
             }],
         }
@@ -530,6 +524,64 @@ mod kiln_ir_71 {
         );
 
         assert_eq!(kinds, vec![AccessKind::IndexRangeRead]);
+    }
+
+    #[test]
+    fn projecting_a_column_outside_the_index_from_an_index_row_aborts_with_missing_column() {
+        let store = people_store(&[(1, "a", 30)]);
+
+        let execution = run_effects(
+            vec![
+                index_range_read("by_last", vec![text("a")], vec![text("a")], 10),
+                Effect::Iterate {
+                    source: Slot(0),
+                    row: Slot(1),
+                    body: vec![Effect::Insert {
+                        table: table("visited"),
+                        key: Expr::Projection {
+                            slot: Slot(1),
+                            column: column("age"),
+                        },
+                        columns: Default::default(),
+                    }],
+                },
+            ],
+            &store,
+        );
+
+        assert_eq!(
+            aborted_reason(&execution),
+            &AbortReason::MissingColumn {
+                slot: Slot(1),
+                column: column("age"),
+            }
+        );
+    }
+
+    #[test]
+    fn projecting_an_indexed_column_from_an_index_row_yields_its_value() {
+        let store = people_store(&[(1, "a", 30)]);
+
+        let execution = run_effects(
+            vec![
+                index_range_read("by_age", vec![integer(0)], vec![integer(99)], 10),
+                Effect::Iterate {
+                    source: Slot(0),
+                    row: Slot(1),
+                    body: vec![Effect::Insert {
+                        table: table("visited"),
+                        key: Expr::Projection {
+                            slot: Slot(1),
+                            column: column("age"),
+                        },
+                        columns: Default::default(),
+                    }],
+                },
+            ],
+            &store,
+        );
+
+        assert_eq!(visited_ids(&execution), vec![30]);
     }
 
     #[test]
@@ -566,5 +618,88 @@ mod kiln_ir_71 {
             ]
         );
         assert_eq!(point_keys, vec![integer(1), integer(2)]);
+    }
+}
+
+mod kiln_ir_72 {
+    use super::*;
+
+    fn primary_key_of_point_read(key: i64) -> Execution {
+        let store = people_store(&[(7, "a", 1)]);
+        let program = program_with_schema(
+            indexed_schema(),
+            vec![],
+            vec![Effect::Read {
+                table: table("people"),
+                key: Expr::Literal(integer(key)),
+                into: Slot(0),
+            }],
+            Terminal::Return(Expr::PrimaryKey { slot: Slot(0) }),
+        );
+        run_ok(&program, &call_under_test(vec![]), &store)
+    }
+
+    #[test]
+    fn a_point_read_slot_yields_the_key_the_read_used() {
+        let execution = primary_key_of_point_read(7);
+
+        assert_eq!(committed_response(&execution), &integer(7));
+    }
+
+    #[test]
+    fn a_point_read_that_found_no_row_aborts_with_projection_source_absent() {
+        let execution = primary_key_of_point_read(8);
+
+        assert_eq!(
+            aborted_reason(&execution),
+            &AbortReason::ProjectionSourceAbsent { slot: Slot(0) }
+        );
+    }
+
+    #[test]
+    fn a_primary_key_range_row_yields_its_store_key() {
+        let store = people_store(&[(3, "a", 1), (1, "b", 2), (2, "c", 3)]);
+
+        let execution = run_effects(
+            vec![
+                Effect::ReadRange {
+                    table: table("people"),
+                    start: Expr::Literal(integer(1)),
+                    end: Expr::Literal(integer(3)),
+                    bound: Expr::Literal(integer(10)),
+                    into: Slot(0),
+                },
+                visit_each_row_into_visited(),
+            ],
+            &store,
+        );
+
+        assert_eq!(visited_ids(&execution), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn an_index_row_yields_its_store_key() {
+        let store = people_store(&[(5, "b", 1), (4, "a", 2)]);
+
+        let ids = ids_visited_in("by_last", vec![text("a")], vec![text("z")], &store);
+
+        assert_eq!(ids, vec![4, 5]);
+    }
+
+    #[test]
+    fn a_slot_no_read_has_bound_aborts_with_projection_source_absent() {
+        let program = program_with_schema(
+            indexed_schema(),
+            vec![],
+            vec![],
+            Terminal::Return(Expr::PrimaryKey { slot: Slot(4) }),
+        );
+
+        let execution = run_ok(&program, &call_under_test(vec![]), &Store::empty());
+
+        assert_eq!(
+            aborted_reason(&execution),
+            &AbortReason::ProjectionSourceAbsent { slot: Slot(4) }
+        );
     }
 }
