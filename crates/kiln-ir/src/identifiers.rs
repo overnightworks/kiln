@@ -12,6 +12,10 @@ pub struct TableName(pub String);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ColumnName(pub String);
 
+/// The name of a secondary index declared in a [`Schema`](crate::ir::Schema).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct IndexName(pub String);
+
 /// The name of a transaction function declared on a [`Program`](crate::ir::Program).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FunctionName(pub String);

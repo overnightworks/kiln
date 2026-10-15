@@ -119,9 +119,17 @@ this meaning, one slice at a time.
 - **D1 Declarations.** A `Program` is one `Schema` — tables, each with
   typed columns that declare an integer width and an optional numeric
   domain, plus the schema's unique constraints, foreign keys, and check
-  constraints — together with the program's named transaction `Function`s.
-  A constraint lives only in the schema; a transaction function's own body
-  has no Constraint node to write.
+  constraints, and secondary indexes — together with the program's named
+  transaction `Function`s. A constraint lives only in the schema; a
+  transaction function's own body has no Constraint node to write. A
+  secondary index is a named declaration of one table, one or more of its
+  integer or text columns, and whether it is unique; it orders the table's
+  rows by those columns' values, ties broken by primary key, leaves out a
+  row lacking any of them, and enforces nothing (uniqueness is a constraint).
+  An indexed range read gives one bound per indexed column, compares them
+  lexicographically and inclusively, binds the matched rows in index order
+  like a primary-key range read — empty when the start sorts after the end,
+  aborting past its bound — and may be iterated.
   *Example.* `accounts.email` carries `unique(accounts.email)` in the
   schema; no `transfer` or `sign_up` function states that rule inline, and
   nothing in a function body could restate it even if it tried.
@@ -172,7 +180,11 @@ this meaning, one slice at a time.
   own logic, or a constraint check). A constraint check logs only the
   accesses it logically needs — a uniqueness check is a point read on the
   unique key, never a table scan — and an aborted call keeps every access
-  it attempted.
+  it attempted. An indexed range read is its own kind of range read,
+  distinct from a primary-key range read: it logs one entry naming the
+  index and both bounds, and every row reached from its result is accessed
+  by an ordinary point read. A call that stops at the index and one that
+  follows it to base rows therefore leave different evidence.
   *Example.* `sign_up(email)` inserting a duplicate email logs the insert
   attempt and the uniqueness check's point read on that email, both kept
   in the log even though the call aborts.
@@ -183,7 +195,8 @@ this meaning, one slice at a time.
   absent row aborts — there is no implicit insert-on-update or
   no-op-on-delete. An absent key is itself a branchable value a
   transaction may test and branch on, the same as any other value. Bounded
-  iteration proceeds in key order. Write effects apply in program order
+  iteration proceeds in key order for a primary-key range and in index
+  order for an index range. Write effects apply in program order
   within one transaction. An abort discards every effect the transaction
   produced before it, not only the operation that triggered it. A
   successful call returns exactly the function's declared response.

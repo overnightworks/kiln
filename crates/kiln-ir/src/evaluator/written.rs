@@ -45,7 +45,7 @@ fn point_keys(
         .filter(|entry| &entry.table == table && selects(entry))
         .filter_map(|entry| match &entry.target {
             AccessTarget::Point(key) => Some(key.clone()),
-            AccessTarget::Range { .. } => None,
+            AccessTarget::Range { .. } | AccessTarget::IndexRange { .. } => None,
         })
         .collect()
 }
