@@ -98,6 +98,23 @@ mod kiln_e1_28 {
     }
 
     #[test]
+    fn a_presence_test_within_one_argument_arm_still_selects_targets() {
+        let presence_selecting = branch_on_presence(vec![], 0, by_customer_id(), by_order_id());
+        let body = branch_on_equality(
+            vec![read("orders", param("id"), 0)],
+            (param("kind"), literal(0)),
+            presence_selecting,
+            by_order_id(),
+        );
+        assert_unknown(
+            body,
+            UnknownCause::DataSelectedTargets {
+                selector: "f/body/effects[0]".to_owned(),
+            },
+        );
+    }
+
+    #[test]
     fn nested_argument_selected_branches_classify_each_path() {
         let inner = by_argument(by_customer_id(), by_order_id());
         let body = branch_on_equality(
