@@ -244,36 +244,73 @@ runtime: enumeration is structural, over the source text, never a runtime
 trace.
 
 **S4 — non-database candidates.** The analyzers (S1) define the candidate
-set, not the final denominator. A candidate S1 reports whose lowering into
-the IR shows it performs no database access — its receiver resolves to a
-non-ORM object, for example an unannotated Django `request` parameter that
-mypy infers as `Any` rather than as a manager or queryset — is classified
-"not a database operation" and leaves the denominator. This is a
-classification outcome decided by the lowering (`docs/concept.md` §2.1),
-never a second hand-maintained name list applied on top of S1's output:
-`request.POST.get(...)` and `request.GET.get(...)` (§3.1 below) are exactly
-this case, reported by `splinter-mypy` only because an unannotated `request`
-resolves to `Any`, not because `QueryDict.get` touches a database. Each
-application's report states the count of such exclusions next to its
-coverage percentage, so a dropped non-database candidate never silently
-shrinks the denominator unreported. The lowering audit's sample
-(`docs/experiments.md`, "Audits") draws from excluded candidates as well as
-from included units, so an exclusion is itself checked against the source,
-never merely asserted.
+set, not the final denominator. S4 requires affirmative evidence: a
+candidate S1 reports leaves the denominator only when the lowering shows
+*positively* that it performs no database access — its receiver resolves to
+a concrete non-ORM type, and that type's called method has no path to an
+ORM operation, for example Django's `QueryDict.get` resolved via the
+framework's own documented type for the `HttpRequest` view argument
+(`request.GET`/`request.POST` are `QueryDict`, and `QueryDict.get` is a
+dict-like lookup TypeORM's and Django's own ORMs never implement). A
+candidate whose receiver mypy cannot resolve to a concrete type — reported
+as `Any` — or whose called method could reach the ORM, stays in the
+denominator; an unresolvable one classifies **Unknown**, the same as any
+other candidate the classifier cannot determine. An unannotated Django
+`request` parameter that mypy infers as `Any` is exactly the unresolved
+case, not the affirmative one: `Any` is the absence of a resolved type, not
+evidence that the resolved type is non-ORM, so a candidate reported this way
+does not, by itself, qualify for S4 exclusion — see the worked
+`TimerAddQuick.post` example in §3.1 for what evidence would be needed to
+decide sites 2 and 7 either way. This is a classification outcome decided by
+the lowering (`docs/concept.md` §2.1), never a second hand-maintained name
+list applied on top of S1's output. Each application's report states the
+count of S4 exclusions next to its coverage percentage, together with the
+affirmative evidence recorded for each one (the excluded site, its resolved
+receiver type, and the called method's documented absence of an ORM path),
+so a dropped non-database candidate never silently shrinks the denominator
+unreported or unverifiable.
+
+**S4 audit sample.** The lowering audit's sample (`docs/experiments.md`,
+"Audits") is drawn, per application, by a frozen rule: a seeded uniform
+random sample, without replacement, of `max(20, 10%)` of that application's
+included units and, separately, `max(20, 10%)` of that application's
+excluded S4 candidates — or every excluded candidate, if the application
+has fewer than 20. The generator is Python's `random.Random(seed)`, seed
+`17` (this item's own number), calling `.sample(population, k)` once per
+application per population (included units, excluded candidates), with
+`population` ordered by each site's `(file_path, line, column)` as reported
+by the analyzer, so the sample is reproducible from the analyzer's own
+output alone. This proves each exclusion against the source, rather than
+merely asserting it, and the included-unit sample proves the included side
+of the same audit at the same time.
 
 **S5 — TypeORM QueryBuilder chains.** A TypeORM `QueryBuilder` chain —
 `repository.createQueryBuilder()` followed by any sequence of builder
 methods and ending in a terminal execution call (`getOne`, `getMany`,
 `getCount`, `getRawOne`, `getRawMany`, `stream`, `execute`, or no terminal
 at all) — is one unit, represented by its `createQueryBuilder()` site (S1,
-"other"), whatever terminal methods follow. This closes the structural gap
-the pinned analyzer otherwise leaves: no terminal method is in any of its
+"other"). S5 absorbs **every** analyzer-reported site in that same chain,
+not only the terminal: an intermediate builder method that happens to match
+one of the analyzer's own four name lists (for example `.insert()`, matched
+under "write" the same as a direct `repository.insert(...)` call) is still
+part of the one chain unit, never a second, separate S1 site. This closes
+two structural gaps at once: no terminal method is in any of the analyzer's
 four lists (§3.1's `CloudDBService.data`, the `getMany`/`getCount` pair), so
 without S5 a chain's terminal call would be invisible to enumeration
-entirely, rather than represented once by the chain's own
-`createQueryBuilder()` site. S5 does not add a second unit for the
-terminal — it confirms that the one site S1 already reports for the chain
-is the whole chain's unit, not merely its construction step.
+entirely; and an intermediate method the analyzer *does* report would
+otherwise double-count the same chain as two units instead of one. Neither
+gap adds a second unit — S5 confirms that whatever the analyzer reports
+anywhere along the chain, terminal or intermediate, recognized or not,
+collapses into the one unit at `createQueryBuilder()`.
+
+**S5's precedence against S2 and S3.** S2 takes precedence over S5
+lexically: a chain written inside an explicit transaction's own lexical
+body contributes no unit of its own — every site in it, `createQueryBuilder()`
+included, is absorbed into that transaction's one S2 unit, the same as any
+other S1 site inside it. Outside an explicit transaction, S5 takes
+precedence over S3: a chain is one S5 unit, not one S3 unit per site it
+contains — S3's "each S1 site is its own one-shot unit" default applies
+only to a site that is not part of any S5 chain.
 
 **Django analyzer: `splinter-mypy`.**
 `github.com/umd-dslam/splinter-mypy` @
@@ -314,10 +351,37 @@ commit unedited (exact versions: `mypy==1.9.0`, `django==5.0.3`,
 `django-filter-stubs==0.1.3`, `djangorestframework-stubs==3.14.5`, plus
 their own pinned transitive stub packages), then
 `pip install --no-deps -e <checkout of f8057cae6c2faae19e7cf97f3026a4fbebd4f9cc>`.
-Command: `python -m splinter <application-root> --output messages.json`,
-adding one `--exclude <glob>` per path this document's "Exclusions" below
-names (migrations, management commands, test directories, vendored or
-virtualenv directories) — the default already excludes `**/venv/**`.
+
+**Django file-selection rule, frozen identically for every one of the 78
+Django applications, no per-application choice left:** every tracked
+`*.py` file, excluding any path with a directory component named `tests`,
+`test`, `migrations`, `node_modules`, `venv`, `.venv`, `docs`, or
+`site-packages`, and excluding any file named `test_*.py`, `*_test.py`, or
+`conftest.py`. The one command line below realizes that rule, unchanged
+across all 78 applications; `<application-root>` is not a discretionary
+choice but a mechanical binding — the repository checked out at the
+`commit_sha_full` its own row of `corpus-manifest.csv` names, one
+invocation per row:
+
+```
+python -m splinter <application-root> \
+  --exclude '**/migrations/**' \
+  --exclude '**/tests/**' \
+  --exclude '**/test/**' \
+  --exclude '**/node_modules/**' \
+  --exclude '**/venv/**' \
+  --exclude '**/.venv/**' \
+  --exclude '**/docs/**' \
+  --exclude '**/site-packages/**' \
+  --exclude '**/test_*.py' \
+  --exclude '**/*_test.py' \
+  --exclude '**/conftest.py' \
+  --output messages.json
+```
+
+No output filtering beyond S2-S5 is applied to this command's `messages.json`:
+enumeration reads every reported message, classified by S2-S5 as above,
+with no additional hand-picked inclusion or exclusion of any reported site.
 
 **TypeORM analyzer: `@ctring/splinter-eslint` + `@ctring/eslint-plugin-typeorm`.**
 Published to npm only (no public source repository exists for either
@@ -366,17 +430,53 @@ which `@typescript-eslint/parser@7.3.1` cannot parse — observed firsthand:
 package, but present in its `devDependencies`) build was written against.
 The target application must have its own dependencies installed in place
 (an ordinary `npm install` inside its own clone) so the TypeScript checker
-resolves real types, rather than `any`, for most calls. Command:
-`node <splinter-eslint>/dist/index.js <directory containing the
-application's own tsconfig.json> --include '<glob under that root, e.g.
-src/**/*.ts>' --output messages.json`. The root passed must contain, or be
-an ancestor of, the project's own `tsconfig.json`, because
-`parserOptions.project` is resolved as `**/tsconfig.json` under that root:
-pointing the root directly at a subdirectory without the project's
-`tsconfig.json` breaks parser services for files outside that scope
-— observed firsthand against `cool-team-official/cool-admin-midway`'s
+resolves real types, rather than `any`, for most calls. The root passed
+must contain, or be an ancestor of, the project's own `tsconfig.json`,
+because `parserOptions.project` is resolved as `**/tsconfig.json` under
+that root: pointing the root directly at a subdirectory without the
+project's `tsconfig.json` breaks parser services for files outside that
+scope — observed firsthand against `cool-team-official/cool-admin-midway`'s
 `src/` directory: `Error: ... requires parserServices ... You must
 therefore provide a value for the "parserOptions.project" property`.
+
+**TypeORM file-selection rule, frozen identically for every one of the 32
+TypeORM applications, no per-application choice left:** the project of the
+`tsconfig.json` nearest the repository root — among every tracked
+`tsconfig.json` in the repository, the one with the shortest path from the
+root, ties broken by lexical order of that path. When one exists (every
+pinned TypeORM application in this corpus has at least one), its directory
+*is* the root passed to the analyzer, and no `--include` glob is passed at
+all: "the project" means whatever that `tsconfig.json`'s own `include`/
+`files`/`exclude` fields select, exactly as `@typescript-eslint/parser`
+resolves it to build the type-checker service — not a second, hand-built
+glob layered on top of the project's own file list.
+
+```
+node <splinter-eslint>/dist/index.js <directory of the repository's
+  shortest-path, lexically-first tsconfig.json> --output messages.json
+```
+
+If no `tsconfig.json` is tracked anywhere in the repository (not observed
+in this corpus, but frozen now rather than decided ad hoc if it occurs):
+every tracked `*.ts` file, excluding any path with a directory component
+named `node_modules`, `dist`, `build`, `test`, `tests`, or `__tests__`, and
+excluding any file named `*.spec.ts` or `*.test.ts`.
+
+```
+node <splinter-eslint>/dist/index.js <repository root> \
+  --include '**/*.ts' \
+  --output messages.json
+```
+
+realized by discarding, before enumeration, every message in this
+fallback command's `messages.json` whose `filePath` falls under an
+excluded directory or matches an excluded filename above — the mechanism
+"Exclusions" below already names for a path a glob cannot exclude
+cleanly, since `splinter-eslint` exposes only `--include`, never
+`--exclude`. No other output filtering is applied: the nearest-`tsconfig.json`
+command's `messages.json` is read in full, and the fallback command's is
+read in full after only that one path/filename discard — classification
+beyond that is S2-S5 alone.
 
 **An ORM persistence method that wraps several SQL statements in its own
 transaction is one unit — an ORM operation, not the SQL statements inside
@@ -408,18 +508,24 @@ separately from the aggregate coverage percentage — so a classifier cannot
 raise its reported coverage by silently failing to extract what it would
 have trouble with.
 
-**Exclusions.** Database migrations, management/CLI commands, test code,
-and seed/fixture generators are not enumerated — they are not part of the
-compiled application's own transaction surface (`docs/concept.md` §1's
-"complete set of queries, transaction functions" means what the running
-application exposes, not its build or test tooling). Under S1, this is
-implemented at invocation time, per application, by the `--exclude` glob
-(Django) or the `--include` glob (TypeORM) frozen into that application's
-command, or — where a path cannot be excluded by a glob cleanly — by
-discarding any analyzer output message whose `filePath` falls under an
-excluded path before enumeration; either way the exclusion is applied to
-the analyzer's raw output, never by hand-picking which of its reported
-sites to keep. Enumeration counts
+**Exclusions.** Database migrations, test code, vendored or virtualenv
+directories, and documentation directories are not enumerated, by the one
+frozen file-selection rule above (Django's `--exclude` globs; TypeORM's
+nearest-`tsconfig.json` project, or its fallback `--include` glob plus
+output discard) — the same rule for every application of that ORM, with no
+per-application variant and no further hand-picked inclusion or exclusion.
+This is not the whole of "the running application's own transaction
+surface" in the abstract (`docs/concept.md` §1) — a management/CLI command
+or a seed/fixture generator that does not happen to sit under one of the
+named excluded directories is enumerated like any other source file, since
+the frozen rule is a fixed directory/filename list, never a per-file
+judgment call about what a file is for. Under S1, the exclusion is applied
+either at invocation (the glob passed to the analyzer) or, where a path
+cannot be excluded by a glob cleanly, by discarding any analyzer output
+message whose `filePath` falls under an excluded path before enumeration;
+either way it is applied to the analyzer's raw output, never by
+hand-picking which of its reported sites to keep — no output filtering
+beyond S2-S5 is applied otherwise. Enumeration counts
 each S1 site once, where it is written, never once per caller of whatever
 function it sits in: a call expression appearing literally once in the
 source is one site, whether the function around it is called from one
@@ -474,7 +580,7 @@ rather than a hypothetical:
   `items`, regardless of its variable-length insert loop (bounded by
   `items.length`, satisfying `docs/concept.md` §2.1's bounded-iteration
   node kind).
-- **TypeORM, S3.** Same file, `insertOnce(recorded)`:
+- **TypeORM, S5.** Same file, `insertOnce(recorded)`:
   ```typescript
   public async insertOnce(recorded: Recorded): Promise<apid.RecordedId> {
       const queryBuilder = connection.createQueryBuilder().insert().into(Recorded).values(recorded);
@@ -484,14 +590,19 @@ rather than a hypothetical:
   ```
   Two S1 sites by the frozen TypeORM lists above — `createQueryBuilder()`
   ("other") and `.insert()` ("write") — `.into()`, `.values()`, and
-  `.execute()` match no name in any of the four lists, so neither is a
-  site (this corrects the previous draft's claim of one `.execute()` site
-  and no `createQueryBuilder()` site, the opposite of what the pinned
-  analyzer's own name lists say; this one is read directly off those lists
-  rather than re-run, since the task this freeze was revised under named
-  only the other two repositories for an actual tool run). No explicit
-  transaction wrapper, so S3 makes each of the two its own one-shot unit,
-  both parameterized by `recorded`.
+  `.execute()` match no name in any of the four lists (this corrects the
+  previous draft's claim of one `.execute()` site and no
+  `createQueryBuilder()` site, the opposite of what the pinned analyzer's
+  own name lists say; this one is read directly off those lists rather than
+  re-run, since the task this freeze was revised under named only the other
+  two repositories for an actual tool run). `.insert()` is a builder method
+  chained directly off `createQueryBuilder()`'s own return value, and the
+  chain terminates in `queryBuilder.execute()` — no explicit transaction
+  wrapper, so S5 applies, not S3: both reported sites are the same chain,
+  and collapse into **one** unit, represented by the `createQueryBuilder()`
+  site, parameterized by `recorded`. This is one unit, not two: treating
+  `.insert()` as its own one-shot S3 unit, as an earlier draft did, is
+  exactly the double-count S5 exists to prevent.
 
 ### 3.1 Worked examples: full unit counts against the frozen rule
 
@@ -607,17 +718,28 @@ document's previous draft claimed (which missed the two `request.GET`/
 eight (which credited the `super().get()` call as a site; the pinned
 analyzer does not and cannot see it, for the structural reason given above).
 
-**S4 applies to two of these seven candidates.** Sites 2 and 7 —
-`request.POST.get(...)` and `request.GET.get(...)` — are reported only
-because mypy infers the unannotated `request` parameter as `Any` (above),
-not because Django's `QueryDict` (what `HttpRequest.GET`/`.POST` actually
-is) is an ORM manager or queryset: reading a submitted form value performs
-no database access. Whether sites 2 and 7 are in fact classified "not a
-database operation" under S4 is decided by the lowering, audited — not
-asserted here. This document only identifies them as S4 candidates: of the
-7 analyzer-reported candidates, sites 1, 3, 4, 5, and 6 are database
-operations; sites 2 and 7 are S4 candidates, to be decided by the lowering,
-audited.
+**Sites 2 and 7 are S4 candidates, not S4 exclusions.** `request.POST.get(...)`
+and `request.GET.get(...)` are reported by `splinter-mypy` only because mypy
+infers the unannotated `request` parameter as `Any` (above) — this is the
+unresolved-receiver case S4 now names explicitly as *not* affirmative
+evidence, independent of what `HttpRequest.GET`/`.POST` actually is at
+runtime (Django's `QueryDict`, a dict-like lookup with no ORM path). Whether
+sites 2 and 7 are ultimately excluded under S4 therefore turns on evidence
+this document does not have and does not assert: the lowering would have to
+establish the receiver's concrete type some other way than mypy's local
+inference of this unannotated parameter — for example, by resolving
+`request`'s type from the Django view-class method signature it overrides
+(`django.views.generic.base.View.post` / the `TemplateResponseMixin`
+contract passes it the first positional argument typed `HttpRequest` in
+`django-stubs`), and then confirming `QueryDict.get` has no path to the ORM
+in that stub's own method signature — and record that chain as the
+exclusion's evidence. Until the lowering produces that affirmative evidence,
+sites 2 and 7 stay in the denominator, classified **Unknown** if the
+classifier cannot resolve their footprint by some other means. Of the 7
+analyzer-reported candidates, sites 1, 3, 4, 5, and 6 are database
+operations with no S4 question at all (their receivers resolve to a Manager
+or model instance); sites 2 and 7 are S4 candidates whose exclusion is
+undecided here, left to the lowering and its audit.
 
 **TypeORM — `cool-team-official/cool-admin-midway` @
 `edc13838439a0d6469abfe6263f51f2c987284bf`,

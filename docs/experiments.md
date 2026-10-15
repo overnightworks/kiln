@@ -140,16 +140,20 @@ against for any of the 110 applications.
   database operation from the denominator as a false "not a database
   operation" under S4 (`experiments/e1-classification-coverage/inputs.md`
   §3). Before the first result counts, and again on every change that
-  reclassifies transactions, a sample is re-checked that draws from both
-  the included, classified transactions and the candidates S4 excluded as
-  non-database operations: for an included transaction, that the IR the
-  front end produced for it is equivalent to the function's actual source
-  behavior, judged against the IR's reference meaning (`docs/concept.md`
-  §2.1) through the reference interpreter; for an S4-excluded candidate,
-  that its receiver genuinely resolves to a non-ORM object rather than
-  having been wrongly dropped from the denominator — not merely that the
-  classifier's own logic about its own IR, or its own exclusion, is
-  internally consistent.
+  reclassifies transactions, a sample — drawn by the frozen rule in
+  `experiments/e1-classification-coverage/inputs.md` §3 ("S4 audit
+  sample") — is re-checked from both the included, classified transactions
+  and the candidates S4 excluded as non-database operations: for an
+  included transaction, that the IR the front end produced for it is
+  equivalent to the function's actual source behavior, judged against the
+  IR's reference meaning (`docs/concept.md` §2.1) through the reference
+  interpreter; for an S4-excluded candidate, that the evidence recorded for
+  it is itself affirmative — that its receiver genuinely resolves to a
+  concrete non-ORM type whose called method has no path to an ORM
+  operation, never merely that the receiver is unresolved (`Any`) or that
+  the classifier's own logic about its own exclusion is internally
+  consistent, so a candidate wrongly dropped from the denominator on
+  unresolved-receiver grounds alone is caught, not confirmed.
 - **Containment audit.** Independently of the lowering audit, and on the
   same before-first-result-and-every-reclassification schedule, confirm
   that the resources a classified transaction actually touched while
