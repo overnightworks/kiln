@@ -209,21 +209,31 @@ recovery *detects* the damage via the record's framing and surfaces it as a
 recovery failure, never silently skipping the damaged record or reporting a
 clean recovery over lost data. A lying flush (the device reports success
 for a write that did not actually reach storage) leaves no framing
-corruption for recovery to detect: the engine guarantees only that its
-recovered history is a prefix of its own acknowledged history, so the
-harness, which independently knows the full acknowledged set, checks
-prefix-ness itself and reports the loss.
+corruption for recovery to detect when the loss is clean (no bytes
+written); a lying flush can instead tear the new record's own bytes, which
+framing validation detects like any other torn write — only the clean,
+wholesale loss of an acknowledged append is framing-invisible and left to
+the external harness
+([SQLite's hardware assumptions](https://www.sqlite.org/atomiccommit.html#_hardware_assumptions)).
+The engine guarantees only that its recovered history is a prefix of its
+own recorded commit order, excluding any call still unresolved at the
+crash (§5); separately, the harness, which independently keeps its own
+ledger of acknowledged appends, compares that recovered prefix against it
+and reports any acknowledged append missing as a loss.
 
 After every injected crash, the harness checks: every commit the engine had
 already acknowledged is present, for every inside-the-contract fault; an
-outside-the-contract fault is surfaced as a detected recovery failure, never
-silently absorbed; no transaction is left half-applied; every declared
-invariant (uniqueness, foreign key, numeric bound) still holds; and the full
-history matches layer 3's **commit-order replay** contract, with each call
-in the trace carrying its engine outcome class: a semantic rejection
-replays normally, an infrastructure-forced abort (disk full, or an `fsync`
-failure resolved to abort) replays as a discarded no-op and the check is
-that the engine's final state shows no effect of it, and any outcome still
+outside-the-contract fault other than a clean lying-flush loss is surfaced
+as a detected recovery failure, never silently absorbed; a clean
+lying-flush loss is surfaced only by the external acknowledgment check
+(§9.2); no transaction is left half-applied; every declared invariant
+(uniqueness, foreign key, numeric bound) still holds; and full-history
+replay, scoped to calls not already reported missing by that check,
+matches layer 3's **commit-order replay** contract, with each call in the
+trace carrying its engine outcome class: a semantic rejection replays
+normally, an infrastructure-forced abort (disk full, or an `fsync` failure
+resolved to abort) replays as a discarded no-op and the check is that the
+engine's final state shows no effect of it, and any outcome still
 unresolved at the crash is compared only after recovery resolves it. An
 **Elle-style anomaly checker** — a tool that reconstructs the version
 history of each piece of data from what reads actually returned and reports
@@ -305,15 +315,17 @@ to simulate or crash-test — each is scoped, by its own protocol, to exclude
 exactly what layers 1, 2, 4, and 5 would check. Each uses a narrower,
 already-specified check instead:
 
-- **E1** uses the evidence requirement and the **lowering-correctness
-  audit** already defined in `docs/experiments.md`'s E1 section: the
-  classifier's output must carry checkable evidence, and any change that
-  increases the measured coverage number is audited by re-running a sample
-  of the newly reclassified transactions against the reference semantics of
-  `docs/concept.md` §6. This is a lighter, sampled form of layer 3
-  (differential checking against reference semantics) — lighter because E1
-  has no engine to run the classified transactions against beyond that
-  sample.
+- **E1** uses the evidence requirement and the **lowering** and
+  **containment audits** already defined in `docs/experiments.md`'s E1
+  section: the classifier's output must carry checkable evidence, and both
+  audits run before the first result counts and again on every change that
+  reclassifies transactions — the lowering audit re-checking a sample of
+  the newly reclassified transactions against the reference semantics of
+  `docs/concept.md` §2.1/§6, the containment audit confirming the
+  resources each one actually touched stay within its inferred footprint.
+  This is a lighter, sampled form of layer 3 (differential checking against
+  reference semantics) — lighter because E1 has no engine to run the
+  classified transactions against beyond that sample.
 - **E2** uses the **correctness-comparison** requirement already defined in
   `docs/experiments.md`'s E2 section: every call's response and the final
   state, compared element by element between the class-3 path and the
@@ -391,6 +403,7 @@ that any specific named scenario below actually occurs.
 | A specialization that matches its footprint but computes the wrong value | An AI-proposed specialization (for example, subtracting two instead of one) touches exactly its declared footprint, so the footprint-tag check passes, but its result differs from the reference semantics. | The specialization's response and resulting state equal the reference model's on every differential run; a passing footprint-tag check is never by itself treated as evidence of correctness. | §6 (trust model and certificate) |
 | Crash during an append | A crash lands while a new record is being appended, with an earlier record already acknowledged as durable sitting in the log. | A new record never lands inside a byte range already told to a caller as durable. | §9.2 (storage failure model) |
 | A bit flip in already-acknowledged bytes | A fault injector flips a byte inside a record already acknowledged as durable, after the acknowledgment, independent of any new write. | Recovery detects the corruption via the record's framing checksum and surfaces it as a recovery failure; the engine never silently serves, or silently skips, the corrupted record as if it were intact. | §9.2 (storage failure model) |
+| A lying flush loses an acknowledged append | The injector reports flush success for a targeted write that never reaches storage, then crashes. The harness keeps its own ledger of acknowledged appends. | The recovered history is a prefix of the recorded commit order; every present record passes framing validation (a torn record is a detected-corruption failure, not a loss); the only acknowledged appends missing are a contiguous suffix ending at the targeted write, which the harness reports as "detected loss, N appends", distinct from corruption. | §9.2 (storage failure model) |
 | A backfill missing a commit after the snapshot point | A migration's backfill replays the log to its recorded watermark, but a commit lands before the catch-up phase starts tracking it and is silently absent from the new structures. | After the barrier commit, the new structures reflect every commit up to and including the barrier, with none missing and none duplicated. | §9.3 (migration watermark) |
 | Rollback after a relaxed invariant | V2 relaxes `balance ≥ 0` and commits a negative balance; the operator then rolls back to V1, whose invariant forbids that balance. | Rollback is refused once a post-relaxation commit violates the old invariant, or is only offered inside the defined window before such a commit occurs — never a silent "switch back" that leaves an invalid committed row. | §9.3 (rollback window) |
 | Crash at every commit step | The fault injector crashes at every distinguishable point in the commit sequence: before log append, after append before fsync, after fsync before derived-structure install, mid-install, and after install before the visible-version pointer advances. | After each crash and recovery: every acknowledged commit is present, no transaction is partial, every invariant holds, and the full history is serializable. | §5, §9.1, §9.2 |
@@ -401,11 +414,14 @@ by each scenario's own "What happens" description above, not by a blanket
 count: lost update, write skew, the phantom from a range read against a
 reservation insert, both foreign-key-race presets, the uniqueness race,
 escrow at exactly zero, partial live publication of a multi-key commit, the
-specialization-correctness scenario, and rollback after a relaxed invariant
-all need no injected fault — each is caught by the invariant check named in
-its own row above, most of them via layer 3's commit-order replay; dirty
-read and read skew are caught primarily by layer 4's Elle-style checker;
-the remaining, fault-driven scenarios are caught primarily by layer 4's
+specialization-correctness scenario, the backfill race (an ordinary timing
+race in the catch-up phase, not a fault), and rollback after a relaxed
+invariant all need no injected fault — each is caught by the invariant
+check named in its own row above, most of them via layer 3's commit-order
+replay; dirty read and read skew are caught primarily by layer 4's
+Elle-style checker; the remaining, fault-driven scenarios (crash during an
+append, the bit flip, the lying flush, crash at every commit step, and
+crash in the middle of a migration) are caught primarily by layer 4's
 deterministic simulation. The kernel-ordering and publication-boundary
 scenarios are additionally modeled in layer 1 before any code exists, so a
 design flaw in those two is caught before it is ever implemented.

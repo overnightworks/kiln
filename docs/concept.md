@@ -538,12 +538,17 @@ model — for a torn write that does reach already-acknowledged bytes: the
 engine cannot repair that, and recovery surfaces the failure rather than
 silently skipping the damaged record. A device that lies about a flush is
 bounded differently: the engine guarantees only that its recovered history
-is a prefix of its own acknowledged history and detects framing-visible
+is a prefix of its own recorded commit order, excluding any call still
+unresolved at the crash (§5) — a commit can become durable before its
+acknowledgment reaches the caller, so recovery may legitimately contain
+commits the caller never saw acknowledged — and detects framing-visible
 corruption within that prefix; whether an entire acknowledged append was
 lost is not something the engine alone can see, so an external harness that
-independently knows the acknowledged set checks prefix-ness and reports the
-loss — the same truthful-flush assumption
-[SQLite's own atomic-commit documentation](https://www.sqlite.org/atomiccommit.html)
+independently knows the acknowledged set separately compares that
+recovered prefix against its own independently recorded acknowledgment set
+and reports any acknowledged append missing from it — the same
+truthful-flush assumption
+[SQLite's own atomic-commit documentation](https://www.sqlite.org/atomiccommit.html#_hardware_assumptions)
 makes for the same reason. Because an `fsync` failure here does not tell
 the engine whether the bytes actually reached storage, it leaves the
 transaction's commit outcome unknown rather than a known abort; §5 states
@@ -845,14 +850,9 @@ collisions named above — is checked synthesis of compact ordered
 transaction summaries (§3.3, tested by E2 and E3) plus *parametric*
 per-call footprint derivation, typed reservations, and ordered batch
 summaries under one logical-resource protocol, measured on real code
-rather than argued only by a correctness proof (§3): not the full six-part
-combination surveyed above, not a claim that invariant-driven coordination
-itself is novel, and no higher confidence than
-`notes/static_analysis_deterministic_scheduling.md`'s own phrase for it —
-plausible, not exhaustively proven — since the evidence map above states
-exactly what E1, E2, and E3 each measure, and that none measures this
-integrated protocol, individually or combined. The sharpest named
-collision for the
+rather than argued only by a correctness proof (§3), at the confidence the
+evidence map above states for what E1, E2, and E3 each measure,
+individually or combined. The sharpest named collision for the
 riskiest part of it (class 3, §3.3, E2/E3) is **TransactionMerger**
 (submitted January 2026): it already merges contended transactions and
 reconstructs per-caller results including allocated IDs, but its merged
