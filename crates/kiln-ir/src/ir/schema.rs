@@ -1,0 +1,315 @@
+use std::collections::HashSet;
+
+use crate::identifiers::{ColumnName, IndexName, TableName};
+
+use super::value::Value;
+
+/// The declared width of a column's checked-integer domain (D1). Arithmetic
+/// and literal writes targeting the column are checked against this width's
+/// representable range (D3): a declared value outside it overflows, and
+/// overflow aborts unless the column also declares a [`ClampDomain`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntegerWidth {
+    I8,
+    I16,
+    I32,
+    I64,
+}
+
+impl IntegerWidth {
+    /// The inclusive range this width can represent.
+    pub fn range(self) -> (i64, i64) {
+        match self {
+            IntegerWidth::I8 => (i8::MIN as i64, i8::MAX as i64),
+            IntegerWidth::I16 => (i16::MIN as i64, i16::MAX as i64),
+            IntegerWidth::I32 => (i32::MIN as i64, i32::MAX as i64),
+            IntegerWidth::I64 => (i64::MIN, i64::MAX),
+        }
+    }
+}
+
+/// A column's optional clamping domain (D1, D3): a computed or literal write
+/// targeting the column saturates to `[min, max]` instead of overflowing.
+///
+/// Distinct from a check constraint (a later slice): a check judges a
+/// transaction's end state and aborts on violation, where a clamp bounds
+/// every write's own value as it is made and never aborts
+/// (`docs/concept.md` §2.2, D3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClampDomain {
+    pub min: i64,
+    pub max: i64,
+}
+
+/// What a column holds: a checked integer at a declared width with an
+/// optional clamping domain, or text (D1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnType {
+    Integer {
+        width: IntegerWidth,
+        domain: Option<ClampDomain>,
+    },
+    Text,
+}
+
+/// A table's column declaration: its name and declared type (D1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Column {
+    pub name: ColumnName,
+    pub kind: ColumnType,
+}
+
+/// A unique constraint (D1): no two rows of `table` may hold the same value
+/// in `column` in a transaction's final state (D2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UniqueConstraint {
+    pub table: TableName,
+    pub column: ColumnName,
+}
+
+/// A foreign key (D1): every row of `table` that holds a value in `column`
+/// must, in a transaction's final state, name the key of a row of
+/// `references`, and a row of `references` may not be deleted while such a
+/// row still names its key (D2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignKey {
+    pub table: TableName,
+    pub column: ColumnName,
+    pub references: TableName,
+}
+
+/// A secondary index (D1): the rows of `table` ordered by the values they hold
+/// in `columns`, in that order, ties broken by primary key. A row lacking any
+/// of the columns is not in the index. `unique` only declares the index's
+/// intent; a unique constraint is a separate declaration and an index enforces
+/// nothing (D2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Index {
+    pub name: IndexName,
+    pub table: TableName,
+    pub columns: Vec<ColumnName>,
+    pub unique: bool,
+}
+
+/// How a check constraint compares a row's column with its operand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Comparison {
+    AtLeast,
+    AtMost,
+}
+
+impl ColumnType {
+    fn holds_kind_of(&self, value: &Value) -> bool {
+        matches!(
+            (self, value),
+            (ColumnType::Integer { .. }, Value::Integer(_)) | (ColumnType::Text, Value::Text(_))
+        )
+    }
+}
+
+impl Comparison {
+    fn holds(self, value: &Value, operand: &Value) -> bool {
+        match self {
+            Comparison::AtLeast => value >= operand,
+            Comparison::AtMost => value <= operand,
+        }
+    }
+}
+
+/// A check constraint (D1): in a transaction's final state, every row of
+/// `table` that holds a value in `column` must satisfy `comparison` against
+/// `operand`. It judges one row at a time, so it reads nothing but the row.
+///
+/// Distinct from a [`ClampDomain`]: a violated check aborts the call, where
+/// a clamp bounds every write's own value and never aborts (D3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckConstraint {
+    pub table: TableName,
+    pub column: ColumnName,
+    pub comparison: Comparison,
+    pub operand: Value,
+}
+
+impl CheckConstraint {
+    /// Whether a row holding `value` in the constrained column satisfies the
+    /// check.
+    pub fn accepts(&self, value: &Value) -> bool {
+        self.comparison.holds(value, &self.operand)
+    }
+}
+
+/// A table declaration: its name and the columns rows in it may carry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Table {
+    pub name: TableName,
+    pub columns: Vec<Column>,
+}
+
+/// The declared tables of a [`Program`] (D1).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Schema {
+    pub tables: Vec<Table>,
+    pub unique_constraints: Vec<UniqueConstraint>,
+    pub foreign_keys: Vec<ForeignKey>,
+    pub check_constraints: Vec<CheckConstraint>,
+    pub indexes: Vec<Index>,
+}
+
+impl Schema {
+    /// The declared column `column` of `table`, or `None` if either the
+    /// table or the column is not declared.
+    ///
+    /// An undeclared column carries no declared width or domain, so a write
+    /// to it resolves exactly as it always has outside this slice's reach —
+    /// schema declaration is additive, not a precondition every table or
+    /// column must meet yet.
+    pub fn column(&self, table: &TableName, column: &ColumnName) -> Option<&Column> {
+        self.tables
+            .iter()
+            .find(|candidate| &candidate.name == table)
+            .and_then(|table| {
+                table
+                    .columns
+                    .iter()
+                    .find(|candidate| &candidate.name == column)
+            })
+    }
+
+    /// The declared index named `name`, or `None` if the schema declares none.
+    pub fn index(&self, name: &IndexName) -> Option<&Index> {
+        self.indexes
+            .iter()
+            .find(|candidate| &candidate.name == name)
+    }
+
+    fn has_table(&self, table: &TableName) -> bool {
+        self.tables.iter().any(|candidate| &candidate.name == table)
+    }
+
+    /// Rejects a schema whose own declarations cannot jointly hold: a
+    /// column's clamping domain, when it declares one, must have `min <=
+    /// max` and must lie inside that same column's declared width — a
+    /// domain reaching outside its column's width could clamp a write to a
+    /// value the width itself forbids, silently defeating D3's width check
+    /// (`docs/concept.md` §2.2, D3). `run` calls this before executing any
+    /// call, so a schema this rejects never reaches the evaluator at all.
+    /// A unique constraint, foreign key or check constraint must likewise
+    /// name declared tables and columns.
+    pub fn validate(&self) -> Result<(), SchemaError> {
+        for table in &self.tables {
+            for column in &table.columns {
+                if let ColumnType::Integer {
+                    width,
+                    domain: Some(domain),
+                } = column.kind
+                {
+                    validate_domain(&table.name, &column.name, width, domain)?;
+                }
+            }
+        }
+        for constraint in &self.unique_constraints {
+            if self.column(&constraint.table, &constraint.column).is_none() {
+                return Err(SchemaError::UnknownUniqueTarget(constraint.clone()));
+            }
+        }
+        for foreign_key in &self.foreign_keys {
+            let child = self.column(&foreign_key.table, &foreign_key.column);
+            let Some(child) = child.filter(|_| self.has_table(&foreign_key.references)) else {
+                return Err(SchemaError::UnknownForeignKeyTarget(foreign_key.clone()));
+            };
+            if child.kind == ColumnType::Text {
+                return Err(SchemaError::ForeignKeyTypeMismatch(foreign_key.clone()));
+            }
+        }
+        for constraint in &self.check_constraints {
+            let Some(constrained) = self.column(&constraint.table, &constraint.column) else {
+                return Err(SchemaError::UnknownCheckTarget(constraint.clone()));
+            };
+            if !constrained.kind.holds_kind_of(&constraint.operand) {
+                return Err(SchemaError::CheckOperandTypeMismatch(constraint.clone()));
+            }
+        }
+        self.validate_indexes()
+    }
+
+    fn validate_indexes(&self) -> Result<(), SchemaError> {
+        let mut names = HashSet::new();
+        for index in &self.indexes {
+            if index.columns.is_empty() {
+                return Err(SchemaError::IndexWithoutColumns(index.clone()));
+            }
+            let all_declared = index
+                .columns
+                .iter()
+                .all(|column| self.column(&index.table, column).is_some());
+            if !all_declared {
+                return Err(SchemaError::UnknownIndexTarget(index.clone()));
+            }
+            if !names.insert(&index.name) {
+                return Err(SchemaError::DuplicateIndexName(index.name.clone()));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_domain(
+    table: &TableName,
+    column: &ColumnName,
+    width: IntegerWidth,
+    domain: ClampDomain,
+) -> Result<(), SchemaError> {
+    if domain.min > domain.max {
+        return Err(SchemaError::ReversedDomain {
+            table: table.clone(),
+            column: column.clone(),
+            min: domain.min,
+            max: domain.max,
+        });
+    }
+    let (width_min, width_max) = width.range();
+    if domain.min < width_min || domain.max > width_max {
+        return Err(SchemaError::DomainExceedsWidth {
+            table: table.clone(),
+            column: column.clone(),
+        });
+    }
+    Ok(())
+}
+
+/// Why a [`Schema`] fails [`Schema::validate`]: one column's own
+/// declarations cannot jointly hold (D3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemaError {
+    /// `column`'s clamping domain has `min` above `max`.
+    ReversedDomain {
+        table: TableName,
+        column: ColumnName,
+        min: i64,
+        max: i64,
+    },
+    /// `column`'s clamping domain reaches outside its own declared width.
+    DomainExceedsWidth {
+        table: TableName,
+        column: ColumnName,
+    },
+    /// A unique constraint names a table or column the schema does not declare.
+    UnknownUniqueTarget(UniqueConstraint),
+    /// A foreign key names a table or column, or references a table, the
+    /// schema does not declare.
+    UnknownForeignKeyTarget(ForeignKey),
+    /// A check constraint names a table or column the schema does not declare.
+    UnknownCheckTarget(CheckConstraint),
+    /// A foreign key sits on a column that is not an integer, but tables are
+    /// keyed by integers, so no value of that column could name a parent.
+    ForeignKeyTypeMismatch(ForeignKey),
+    /// A check constraint compares its column with an operand of the other
+    /// type (integer or text), so the comparison would not depend on the data.
+    CheckOperandTypeMismatch(CheckConstraint),
+    /// An index names a table or a column the schema does not declare.
+    UnknownIndexTarget(Index),
+    /// An index declares no column, so it would order nothing.
+    IndexWithoutColumns(Index),
+    /// Two indexes share a name, so a read could not say which it means.
+    DuplicateIndexName(IndexName),
+}
