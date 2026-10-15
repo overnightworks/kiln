@@ -2,223 +2,188 @@
 
 Verification layer 1 of `docs/verification.md` (design proofs, checked with
 TLC). This is slice 1 (issue #16, cut from #6): resources, admission and
-typed reservations. Crash, recovery and publication are slice 2; liveness
-under stated fairness is slice 3.
+typed reservations in one composed state space. Crash, recovery and
+publication are slice 2; liveness under stated fairness is slice 3.
 
 ## Tool
 
-TLC from the `tla2tools.jar` release bundled by the TLA+ Foundation.
+TLC from the `tla2tools.jar` release bundled by the TLA+ Foundation,
+fetched outside the repository and verified by checksum before use.
 
 - Version: TLC2 2.19 of 08 August 2024 (rev: 5a47802)
 - SHA-256: `936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88`
 - Runtime: Java 21 (Temurin 21.0.12.1)
 
-Run a model from `specs/kernel/`:
+Run a scenario from anywhere (`-workers 4` is the repository's cap; TLC's
+default deadlock check stays on):
 
 ```sh
-java -jar /path/to/tla2tools.jar -workers 4 -config <Module>.cfg <Module>.tla
+export TLA2TOOLS=/path/to/tla2tools.jar
+specs/kernel/check.sh Composed                          # -> Composed.tlc.log
+specs/kernel/check.sh Phantom Phantom.witness.PhantomUnreached.cfg
+specs/kernel/mutants/run.sh NoAdmissionGuard Composed Serializable
 ```
 
-`-workers` is capped at 4 per the repository's machine-load rule. Each run's
-log (including its final state count) is committed next to its module as
-`<Module>.tlc.log`.
+Every log is committed next to its configuration.
 
-## specs/kernel/Resources.tla — resources and admission
+## specs/kernel/Kernel.tla — the model
 
-Models `docs/concept.md` §4's resource namespace and admission protocol in
-isolation, before any typed reservation exists.
+One module holds the protocol; a scenario module (`Composed.tla`,
+`Phantom.tla`, ...) instantiates its two constants, `Prog` (each
+transaction's fixed program) and `InitDb` (the committed rows before any
+transaction runs).
 
-**Abstractions and bounds:**
+**One namespace, one table.** Keys `1..3` name rows of a single table
+whose row carries `val` (a plain column, e.g. tickets sold), `bal` (the
+escrow-guarded quantity, e.g. remaining quota) and `parent` (a foreign key
+into the same table, 0 for none). The reverse-reference set of §5 is
+derived from the rows (`Refs`), so it is durable exactly as long as the
+child row exists.
 
-- One resource namespace, 3 keys (`1..3`), 3 transactions (`t1`, `t2`,
-  `t3`) — the "2-3 transactions, 2-3 keys" bound from issue #6/#16.
-- A resource's compatibility is modeled purely by the set of keys it
-  covers (`Overlaps(a, b) == a \cap b # {}`): a point is a singleton, a
-  range an interval, a table the whole key space. §4's three named rules
-  ("equal keys conflict"; "a point conflicts with any range or table
-  resource covering it") are the two instances of this one coverage-
-  intersection rule that this model's scenario exercises directly; the
-  table case is the same rule at `Coverage = Keys` and is not given its
-  own transaction in this 3-transaction scenario, since the compatibility
-  operator does not distinguish it from any other covering range.
-- All resources are acquired in exclusive mode. The model does not
-  represent shared/read-mode locks; every stated compatibility question
-  for this slice is about key overlap, not read/write mode, so collapsing
-  to one exclusive mode is sound for what §4 and §5 ask this slice to
-  check.
-- `t1`'s footprint is `<<{1}, {2,3}>>` (point key 1, then the range
-  covering keys 2-3) — acquired in two steps, in ascending canonical
-  order. `t2` and `t3` both need only the point on key 2: identical
-  footprints, so they exercise "equal keys conflict" directly against each
-  other, and both race `t1`'s pending range acquisition the moment `t1`
-  has acquired its point and is trying to acquire the range that covers
-  key 2 — this is the dispatch-time race named in #16 ("a point
-  registration while a covering range is being acquired").
-- Canonical order is checked by an `ASSUME` that every footprint is sorted
-  ascending by its minimal key, rather than computed at runtime; a real
-  engine computes this order from the resources a call's arguments name,
-  this model fixes it once per scenario.
-- Commit releases a transaction's resources instantly (strict two-phase
-  locking: held from acquisition through commit, nothing held after). The
-  model has no abort path in this slice — a transaction's resources are
-  never released early — because admission and ordering, not recovery, are
-  what this module checks; abort appears in `Reservations.tla` where a
-  typed reservation's tentative/committed distinction makes it meaningful.
+**Resources.** `[kind, cov]`, where `cov` is the set of keys covered: a
+point `{k}`, a range `lo..hi`, the whole key space for a table resource.
+Kinds: `S` and `X` point locks, `RS` shared range/table lock, `CLAIM`
+(unique insert), `PIN` (foreign-key reference), `DEL` (exclusive against a
+parent's reverse-reference set), `DRAW` (escrow). Two resources with
+disjoint coverage never contend; with overlapping coverage (equal keys, or
+a point under a covering range or table resource) only these pairs are
+compatible: `S`/`S`, `S`/`RS`, `RS`/`RS`, `PIN`/`PIN`, `DRAW`/`DRAW`. Every
+other overlapping pair conflicts. §4 and §5 state the rules this encodes:
+equal keys conflict, a point conflicts with a covering range or table
+resource, a claim is checked against any range covering the point it
+inserts into, pins count references and so coexist, draws share an
+allowance, a delete is incompatible with the pins on the parent. Where the
+concept is silent the rule is conflict (see "Concept gaps").
 
-**Serializability method.** A `precedes` relation records a happens-before
-edge `u -> t` exactly when `t`'s acquisition of a resource overlapping one
-of `u`'s could only have succeeded because `u` had already committed and
-released it (`MutualExclusion` rules out any other way an overlap
-resolves). The `Serializable` invariant checks this relation never closes a
-cycle through its transitive closure: an acyclic happens-before graph over
-every pair of transactions whose footprints actually overlapped is the
-standard conflict-serializability certificate — commit order is a valid
-serial order for every such pair. This slice has no read/write values or
-caller-visible responses (that starts in `Reservations.tla`), so there is
-no separate "responses" dimension to check here; `Serializable` is the
-whole of what serializability means for pure resource admission.
+**Operations** (`ApplyOp`, one pure function used by both the live protocol
+and the serial reference): `Read(k)` under `S`; `Scan(lo, hi)` under `RS`,
+returning the present keys and values; `Update(k, val, bal)` under `X`,
+returning the previous row; `Insert(k, p)` under `CLAIM` on `k` plus `PIN`
+on `p`, rejected with `exists` or `noparent`; `Delete(k)` under `DEL` on
+`k` plus `PIN` on the row's own parent while it unlinks, rejected with
+`referenced`; `Buy(k, a)` under `DRAW`, drawing `a` from `bal` and adding
+one to `val`, rejected with `insufficient`.
 
-**Checked:** `TypeOK`, `MutualExclusion` (mutual exclusion of incompatible
-holders), `Serializable` (as above), and absence of deadlock (TLC's default
-deadlock check — no `-deadlock` flag is passed, and the spec adds an
-explicit `Terminating` self-loop so a finished run is never mistaken for a
-deadlock).
+**Protocol.** A transaction executes its program in order. `DoOp` registers
+the operation's resources atomically with the compatibility check (§4,
+"atomically at dispatch") and applies the operation to the transaction's
+view — committed rows overlaid with its own tentative writes and draws. A
+rejection is a constraint failure returned to the caller: the transaction
+ends as `rejected`, releases everything and leaves no effect (§5, known
+abort). `Commit` makes the view the committed state and releases every
+resource (strict two-phase locking). Escrow draws are deltas, not
+overwrites: two committed draws subtract twice. There is no other abort:
+the only ways a transaction ends are commit and constraint rejection.
 
-**Result:** no violation found. 66 states generated, 40 distinct, search
-depth 8, finished in under 1 second. Log: `specs/kernel/Resources.tlc.log`.
+**Waiting.** `WaitsOn(t)` is derived from the state: the live transactions
+holding a resource incompatible with the next operation's resources, or,
+for a draw that fits the committed balance but not the remaining
+allowance, the holders of the tentative draws on that key (§5: a tentative
+draw already reduces what a concurrent draw may reserve; §9.5: a
+non-exclusive wait). A transaction steps only when it waits on nobody, so
+a loser behind a tentative claim waits for the holder's outcome and is
+rejected with `exists` only once the holder has committed. `WaitFor` is
+the relation, `NoWaitCycle` its acyclicity. Programs must register in
+canonical order (non-decreasing lowest key; `ASSUME CanonicalOrder`); TLC
+refuses a scenario that violates it.
 
-## Typed reservations
+**Serializability, checked for real.** `Serializable`: for the transactions
+that have ended (committed or rejected), some permutation, executed
+serially from `InitDb` with the same `ApplyOp`, returns exactly the
+responses each caller received and produces exactly the committed state.
+A rejected transaction takes part with its failure response and no
+effect, so a premature failure (one no serial order would produce) is a
+violation. Permutations are enumerated (at most 6 for 3 transactions).
 
-`docs/concept.md` §3.2/§5's three reservation kinds are each modeled in
-their own small module rather than as one combined scenario, so that each
-mechanism's own contention case stays small enough to design and check on
-its own within the "2-3 transactions" bound. Each is a resource inside
-`Resources.tla`'s one namespace in the real design; this slice checks each
-kind's own compatibility and commit-effect rules in isolation, which is
-sound because §4 states those rules are the same kernel protocol
-end to end — nothing about acquiring a claim, a pin, or an escrow draw
-changes how acquisition, waiting, and release work, only what a resource
-*is* and what committing it durably does.
+**Other properties.** `MutualExclusion` (no two live transactions hold
+incompatible resources), `Uniqueness` (per key, committed successful
+inserts never exceed committed deletes plus one), `ReferentialIntegrity`
+(a present row's parent is present), `BalanceNonNegative`, `TypeOK`, and
+TLC's deadlock check (a state with a live transaction and no enabled step;
+`Terminating` self-loops once every transaction has ended).
 
-**Serializability method for all three (claims, pins, escrow).** Each
-transaction in these scenarios holds exactly one reservation, so there is
-no multi-resource acquisition order to reason about the way
-`Resources.tla`'s `precedes` graph does; the serializability content
-collapses to "the committed set is consistent with some serial order",
-which each kind's own safety invariant already states directly: for a
-claim, at most one committed winner per value (`Uniqueness`); for a pin,
-no committed deletion coexists with a live reference, now or later
-(`ReferentialIntegrity`); for escrow, the sum of committed draws never
-exceeds the ceiling (`BalanceNonNegative`). Each of these is true in every
-reachable state exactly because every reservation is held exclusively (or,
-for escrow, within its admitted allowance) until it is released by commit
-or abort — strict two-phase locking, carried over unchanged from
-`Resources.tla`. A transaction that must wait on a tentative holder is not
-owed a position in the serial order at all if that holder aborts (concept
-§5: "the waiter proceeds as if the value had never been claimed"), so no
-precedence edge is recorded for it, unlike a `Resources.tla` acquisition
-that always eventually succeeds against a releasing holder.
+**Bounds.** 2-3 transactions with programs of 1-2 operations, 2-3 keys,
+fixed programs per scenario. Not covered: longer programs, lock upgrades
+(a program takes the strongest mode it needs at a key's first touch, as
+§4's "covering resource before access" prescribes), more than one table,
+crash and recovery, any liveness.
 
-### specs/kernel/Claims.tla — unique claim
+## Scenarios and results
 
-**Abstractions and bounds:**
+All properties above are checked in every scenario; TLC found no violation
+and no deadlock. Each run finished in under one second with 4 workers.
 
-- 3 transactions, 2 claim values (`"x"`, `"y"`). `t1` and `t2` both claim
-  `"x"` (direct contention); `t3` claims the independent `"y"`.
-- A value already in `committedValues` can never be acquired again — a
-  claim's uniqueness is permanent, unlike a `Resources.tla` lock, which
-  frees the moment its holder commits.
-- A claim's permanent failure (value already committed by someone else)
-  is not modeled as a distinct error transition; it forces that
-  transaction toward the model's general "abort for any reason" action
-  (concept §5), since the specific claim can then never be acquired.
-  Distinguishing the error payload a caller would see is out of scope
-  (this model has no response/payload type at all).
-- No abort reason is distinguished from any other (all aborts are the one
-  `AbortClaim` action) — this slice does not model *why* a transaction
-  aborts, only that it may, at any time, for any reason.
+| Scenario | What runs | Distinct states | Depth | Log |
+|---|---|---|---|---|
+| `Composed` | t1: `Update(1,0,0)`, `Scan(2,3)`; t2: `Buy(1,1)`, `Insert(2,1)`; t3: `Delete(3)`, `Scan(1,3)` (table) — X meets DRAW on key 1, PIN meets PIN, CLAIM and DEL meet a range and a table scan | 39 | 10 | `Composed.tlc.log` |
+| `Phantom` | t1: `Scan(2,3)` twice; t2: `Insert(2,0)` — round-1 phantom | 11 | 6 | `Phantom.tlc.log` |
+| `EventClose` | t1: `Update(1,10,0)` on the event row (sold 10, quota 1); t2, t3: `Buy(1,1)` | 20 | 6 | `EventClose.tlc.log` |
+| `ClaimAbort` | t1: `Insert(2,0)`, `Buy(3,1)` against an empty escrow; t2, t3: `Insert(2,0)` — tentative claim whose holder is rejected while claimants wait | 19 | 6 | `ClaimAbort.tlc.log` |
+| `ParentDelete` | t1: `Delete(1)`; t2: `Insert(2,1)` — parent delete concurrent with child insert | 7 | 4 | `ParentDelete.tlc.log` |
+| `OutOfOrder` | t1: `Buy(1,1)`, `Insert(2,0)`; t2: `Insert(2,0)`, `Buy(1,1)` — only runs under the `NoCanonicalOrder` mutant | refused by `ASSUME CanonicalOrder` | – | `OutOfOrder.tlc.log` |
 
-**Checked:** `TypeOK`, `Uniqueness`, `MutualExclusion` (no two active
-transactions tentatively hold the same value), no deadlock.
+**Reachability witnesses.** Each scenario names a negated state predicate
+(`*Unreached`); TLC's counterexample is the proof that the scenario's
+decisive state is reachable. Logs: `<Scenario>.witness.<Predicate>.tlc.log`.
 
-**Result:** no violation found. 297 states generated, 105 distinct, search
-depth 7, finished in under 1 second. Log: `specs/kernel/Claims.tlc.log`.
+| Witness | State reached | Trace length |
+|---|---|---|
+| `PhantomUnreached` | t1 holds `RS 2..3`, t2's claim on 2 waits on t1 | 2 |
+| `EventCloseUnreached` | t2 holds its tentative draw; t1's X lock and t3's draw both wait on t2 | 2 |
+| `ClaimAbortWaitUnreached` | t1 holds the tentative claim on 2, t2 waits on it | 2 |
+| `ClaimAbortUnreached` | t1 answered `ok, insufficient` (claim released by the rejection), t2 committed key 2, t3 was told `exists` | 6 |
+| `ParentDeleteUnreached` | t2 holds its pin on 1, t1's delete waits on it | 2 |
 
-### specs/kernel/Pins.tla — foreign-key pin
+## Mutants (specs/kernel/mutants/)
 
-**Abstractions and bounds:**
+Each mutant is a patch against `Kernel.tla` that removes one named guard;
+`run.sh` applies it to a temporary copy and checks exactly one property.
+TLC refutes every one; the log is `<Mutant>.<Scenario>.<Property>.tlc.log`.
 
-- 3 transactions, 1 parent. `c1` and `c2` each insert a child row pinning
-  that parent (concurrent pins must not conflict with each other); `d1`
-  deletes it (a delete must conflict with every pin on it, tentative or
-  durable).
-- The reverse-reference set (`liveChildren`) never shrinks in this model
-  — there is no child-deletion action — because the property under test
-  is whether a live reference blocks a parent's deletion, not child
-  lifecycle; a child is never removed once it commits.
-- A separate `parentDeleted` flag marks the parent gone for good once its
-  deletion commits. **This was added after TLC found a real gap in the
-  first version of this model**, not a concept defect: the first version
-  only checked `status = "active"` to decide whether a delete or a pin
-  was "held", so once `d1` *committed*, nothing stopped a brand-new child
-  from acquiring a pin referencing the now-deleted parent — `d1` aborted,
-  `c1` aborted, `d1` acquired and committed its deletion, and only then
-  did `c2` acquire and commit a pin on the deleted parent, violating
-  `ReferentialIntegrity` (trace: `Init` → `AbortChild(c1)` →
-  `AcquireDelete(d1)` → `CommitDelete(d1)` → `AcquirePin(c2)` →
-  `CommitChild(c2)`). `docs/concept.md` §3.2/§5 only specifies that a pin
-  blocks deletion while live, not that a deleted parent can never be
-  referenced again; that second half is ordinary foreign-key semantics my
-  first pass simply forgot to encode, not something the concept gets
-  wrong, so the model was fixed (not the concept) by adding `parentDeleted`
-  and gating `AcquirePin` on it.
-- This model does not check that a parent exists *before* any pin is ever
-  taken on it (there is no "parent created" transaction) — only that an
-  already-committed deletion is never followed by a new live reference.
+| Mutant (guard removed) | Scenario | Property refuted | Trace length |
+|---|---|---|---|
+| `NoAdmissionGuard` — `Conflicting` is empty, nothing ever waits | `Composed` | `Serializable` (t2 draws tentatively, t1 observes quota 1 and closes, both commit: no serial order yields both responses) | 7 |
+| `NoAdmissionGuard` | `Composed` | `MutualExclusion` | 3 |
+| `RangeCompatibleWithClaim` — `RS`/`CLAIM` compatible | `Phantom` | `Serializable` (second scan sees the inserted key) | 6 |
+| `DrawCompatibleWithX` — `X`/`DRAW` compatible | `EventClose` | `Serializable` | 5 |
+| `DrawIgnoresTentative` — allowance ignores live draws | `EventClose` | `BalanceNonNegative` (quota −1) | 5 |
+| `ClaimCompatibleWithClaim` | `ClaimAbort` | `Uniqueness` (two committed inserts of key 2) | 7 |
+| `ClaimLoserTrustsTentativeHolder` — the loser sees the tentative row and fails at once | `ClaimAbort` | `Serializable` (`exists` returned though no serial order produces it) | 3 |
+| `PinCompatibleWithDelete` — `PIN`/`DEL` compatible | `ParentDelete` | `ReferentialIntegrity` | 5 |
+| `NoCanonicalOrder` — `ASSUME CanonicalOrder` dropped | `OutOfOrder` | `NoWaitCycle` (t1 waits on t2's claim, t2 waits on t1's draw) | 3 |
+| `NoCanonicalOrder` | `OutOfOrder` | TLC deadlock check | 3 |
 
-**Checked:** `TypeOK`, `ReferentialIntegrity` (a committed deletion never
-coexists with a live reference, and none ever reappears after),
-`NoConflictingHolds` (a delete reservation and a pin on the same parent
-are never both held), no deadlock.
+`TypeOK` has no mutant: it is a typing check with no protocol content.
 
-**Result:** first run found the gap above; after adding `parentDeleted`,
-no violation found. 207 states generated, 93 distinct, search depth 7,
-finished in under 1 second. Log: `specs/kernel/Pins.tlc.log`.
+## Concept gaps and findings (for the head to route)
 
-### specs/kernel/Escrow.tla — numeric bound
+Found while encoding, not by a violation; the model takes the conservative
+side of each silence and the concept should say which it means.
 
-**Abstractions and bounds:**
+1. **Silent compatibility pairs.** §4/§5 do not state whether a `PIN` or a
+   `DRAW` is compatible with an `S` point lock on the same key, whether a
+   `PIN` is compatible with an `X` update of the parent row that is not a
+   delete, or whether a `PIN` and a `DRAW` on one key are compatible. The
+   model conflicts in all four cases. Any of them could be relaxed with a
+   corresponding mutant run showing the properties still hold.
+2. **Escrow wait versus failure.** §5 says a tentative draw reduces what a
+   concurrent draw may reserve and that only committed state may justify a
+   failure, but not what a draw does when the committed balance suffices
+   and the live tentative draws exhaust it. The model waits on those
+   holders (the same rule as a claim loser) and rejects only when the
+   committed balance is short. If the concept intends immediate rejection
+   there, that is a different protocol.
+3. **A child delete's resource on its parent.** §5 ties the reverse
+   reference to the child row's lifetime but names no resource for the
+   unlink. The model takes a `PIN` on the parent while deleting the child.
+4. **§9.5 within these bounds.** With draws registered in canonical order
+   like every other keyed resource, no wait cycle and no deadlock arose in
+   any scenario where draws wait on tentative holders (`EventClose`,
+   `Composed`, `ClaimAbort`); the cycle §9.5 fears appears exactly when
+   canonical order is dropped (`OutOfOrder` under `NoCanonicalOrder`). That
+   is evidence for "canonical order extends to escrow", not a proof: two
+   transactions, two keys, and no fairness (slice 3).
 
-- 3 transactions drawing against one shared ceiling of 3: amounts 2, 2,
-  and 1. Any two of the three can exceed or exactly exhaust the ceiling
-  (2+2=4, 2+1=3), forcing real admission contention within the bound.
-- Admission is pessimistic: a draw is granted tentatively only if the
-  ceiling still has room for every other currently-admitted draw plus
-  this one, so a concurrent draw already sees the reduced remaining
-  allowance before either commits (concept §5).
-- A committed draw is never released back to the pool in this model
-  (there is no refund/rollback-of-a-committed-draw action) - the same
-  "committed is forever" durability as `Claims.committedValues` and
-  `Pins.parentDeleted`. An aborted draw's tentative hold is released.
-- Only one draw per transaction; the model does not represent a
-  transaction drawing against more than one escrow or adjusting its draw
-  amount after acquiring it.
-
-**Checked:** `TypeOK`, `BalanceNonNegative` (the ceiling never lets the
-sum of committed allowances exceed it - the check constraint itself),
-`NoOveradmission` (the stronger invariant that tentative holds are also
-never admitted past the ceiling), no deadlock.
-
-**Result:** no violation found. 297 states generated, 105 distinct,
-search depth 7, finished in under 1 second. Log:
-`specs/kernel/Escrow.tlc.log`.
-
-## Not covered by this slice
-
-Crash, recovery and atomic publication (slice 2, docs/concept.md §9.1,
-§9.2); the migration watermark protocol (§8, §9.3); and liveness - whether
-every tentative-reservation waiter eventually proceeds under a stated
-fairness assumption (§9.5, slice 3). This slice's models also do not
-represent read/write lock modes (every resource is exclusive), multiple
-reservations per transaction for the typed-reservation kinds, or any
-caller-visible response payload.
+No concept defect was found: every TLC violation during the build was a
+model error (a row overwrite where the concept says delta; a witness
+predicate satisfiable by an unintended route) and was fixed in the model.
