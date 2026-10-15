@@ -1,12 +1,13 @@
 ---------------------------- MODULE ScanUpgrade ----------------------------
-(* Refused scenario (review finding 6): t1 and t2 each scan keys 1..2 and
-   then update a different key the scan covers. The two range locks are
-   compatible, so both scans run; each update then wants an X lock on a
-   key the other's range covers, and the two wait on each other. The
-   programs are in key order, but each needs a stronger mode (X) on a key
-   it already holds in a weaker one (RS): TLC refuses the scenario at
-   `ASSUME NoUpgrade`; the log is the proof. Whether the protocol detects,
-   restarts or forbids such an upgrade is decided in #24. *)
+(* Review finding 6: t1 and t2 each scan keys 1..2 and then update a
+   different key the scan covers. Registered per operation, the two range
+   locks coexist and each update then wants an X lock on a key the
+   other's range covers: the lock-upgrade deadlock, which the
+   PerOperationAcquisition mutant reproduces. With the complete footprint
+   acquired at dispatch each transaction takes its range lock and its X
+   lock together; the X lock conflicts with the other's range, so the
+   programs serialize. The restart rule for a class-4 call whose covering
+   resource must widen mid-execution (§4) is outside this slice. *)
 
 EXTENDS Kernel
 

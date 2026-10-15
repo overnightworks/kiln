@@ -1,6 +1,6 @@
 --- Kernel.tla
 +++ Kernel.tla
-@@ -197,12 +197,16 @@
+@@ -213,12 +213,16 @@
    [row EXCEPT !.bal = @ + draws[t][k].bal, !.val = @ - draws[t][k].val]
  
  View(t) ==

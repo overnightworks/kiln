@@ -7,8 +7,8 @@
    looked ordered (1 before 2) and upgrade-free, and after both deletes
    t1 held DEL 2 wanting PIN 1 while t2 held DEL 1 wanting X 2: an
    exclusive-resource deadlock the ordering assumptions admitted. With the
-   complete footprint acquired before the first operation the two programs
-   serialize. *)
+   complete footprint acquired at dispatch the two programs serialize;
+   the PerOperationAcquisition mutant reproduces the deadlock. *)
 
 EXTENDS Kernel
 

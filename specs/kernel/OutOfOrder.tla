@@ -1,10 +1,12 @@
 ---------------------------- MODULE OutOfOrder ----------------------------
-(* Scenario for the deadlock mutant: t2 registers its resources against
-   canonical order (claim on 2, then a draw on 1). With key 1's quota at
-   1, t1's tentative draw exhausts the allowance t2's draw needs while t1
-   waits on t2's claim: a wait cycle through a non-exclusive escrow
-   holder (§9.5). The unmodified Kernel rejects this program through its
-   CanonicalOrder assumption; only the NoCanonicalOrder mutant runs it. *)
+(* t2's program touches key 2 before key 1 while t1's touches 1 before 2.
+   Registered per operation, t1's tentative draw exhausts the allowance
+   t2's draw needs (quota 1) while t1 waits on t2's claim: a wait cycle
+   through a non-exclusive escrow holder (§9.5), which the
+   PerOperationAcquisition mutant reproduces. With the complete footprint
+   acquired at dispatch the order of a program's operations is
+   immaterial: the two claims on 2 conflict, so the programs serialize
+   and the second draw is rejected with "insufficient". *)
 
 EXTENDS Kernel
 

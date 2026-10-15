@@ -1,7 +1,7 @@
 --- Kernel.tla
 +++ Kernel.tla
-@@ -70,7 +70,8 @@
-    conservative rule is incompatible; specs/README.md lists these gaps. *)
+@@ -72,7 +72,8 @@
+ Kinds == {"S", "RS", "X", "CLAIM", "PIN", "DEL", "DRAW"}
  CompatibleKinds ==
    {<<"S", "S">>, <<"S", "RS">>, <<"RS", "S">>, <<"RS", "RS">>,
 -   <<"PIN", "PIN">>, <<"DRAW", "DRAW">>}

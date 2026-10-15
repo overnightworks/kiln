@@ -1,6 +1,6 @@
 --- Kernel.tla
 +++ Kernel.tla
-@@ -213,7 +213,7 @@
+@@ -229,7 +229,7 @@
  RECURSIVE SumDraws(_, _)
  SumDraws(U, k) ==
    IF U = {} THEN 0

@@ -12,7 +12,7 @@ EXTENDS Kernel
 
 RangePointProg ==
   [t \in {"t1", "t2", "t3"} |->
-    CASE t = "t1" -> <<Scan(1, 3)>>
+    CASE t = "t1" -> <<Scan(1, 2)>>
       [] t = "t2" -> <<Read(2), Buy(3, 1)>>
       [] t = "t3" -> <<Update(2, 1, 0)>>]
 
@@ -22,10 +22,10 @@ RangePointInitDb ==
       [] OTHER -> [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0]]
 
 (* Witness (negated; TLC's counterexample is the reachability proof): the
-   scan and the read are both live, the update waits on both, and the draw
-   waits on the scan. *)
+   range scan and the point read are both live, with the draw on 3
+   outside the range, and the update waits on both. *)
 RangePointUnreached ==
-  ~(Res("RS", 1..3) \in held["t1"] /\ Res("S", {2}) \in held["t2"]
-    /\ WaitsOn("t3") = {"t1", "t2"} /\ WaitsOn("t2") = {"t1"})
+  ~(Res("RS", 1..2) \in held["t1"] /\ Res("S", {2}) \in held["t2"]
+    /\ Res("DRAW", {3}) \in held["t2"] /\ WaitsOn("t3") = {"t1", "t2"})
 
 ============================================================================

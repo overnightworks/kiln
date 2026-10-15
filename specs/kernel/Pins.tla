@@ -32,7 +32,7 @@ PinsConcurrentUnreached ==
   ~(Res("PIN", {1}) \in held["t2"] /\ Res("PIN", {1}) \in held["t3"]
     /\ WaitsOn("t1") = {"t2", "t3"})
 
-(* t1 holds the table scan after its delete; both claims wait on it. *)
+(* t1 holds the table scan with its delete; both claims wait on it. *)
 PinsTableUnreached ==
   ~(Res("RS", 1..3) \in held["t1"]
     /\ WaitsOn("t2") = {"t1"} /\ WaitsOn("t3") = {"t1"})

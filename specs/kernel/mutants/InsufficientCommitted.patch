@@ -1,6 +1,6 @@
 --- Kernel.tla
 +++ Kernel.tla
-@@ -281,7 +281,7 @@
+@@ -274,7 +274,7 @@
       /\ pc' = [pc EXCEPT ![t] = @ + 1]
       /\ resp' = [resp EXCEPT ![t] = Append(@, r.resp)]
       /\ IF r.rejected

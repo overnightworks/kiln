@@ -1,6 +1,6 @@
 --- Kernel.tla
 +++ Kernel.tla
-@@ -201,8 +201,7 @@
+@@ -217,8 +217,7 @@
  
  (* Admission guard: every registered resource must be compatible with
     every resource a live transaction holds. *)

@@ -1,12 +1,13 @@
 ------------------------------ MODULE Kernel ------------------------------
 (* Kernel model, slice 1 (issue #16, parent #6): docs/concept.md §4's one
-   resource namespace with its admission protocol (strict two-phase
-   locking, canonical order), §3.2/§5's typed reservations (unique claim,
-   foreign-key pin with a durable reverse reference, escrow draw under
-   balance >= 0) composed with ordinary point, range and table locks over
-   the same keys, and real transactions whose observations and responses
-   are checked against a serial execution. Scenarios instantiate `Prog`
-   and `InitDb`; see specs/README.md for bounds, rules and results. *)
+   resource namespace with its admission protocol (the complete footprint
+   acquired at dispatch, held through commit: strict two-phase locking),
+   §3.2/§5's typed reservations (unique claim, foreign-key pin with a
+   durable reverse reference, escrow draw under balance >= 0) composed
+   with ordinary point, range and table locks over the same keys, and
+   real transactions whose observations and responses are checked against
+   a serial execution. Scenarios instantiate `Prog` and `InitDb`; see
+   specs/README.md for bounds, rules and results. *)
 
 EXTENDS Integers, Sequences, FiniteSets, TLC
 
@@ -49,7 +50,7 @@ Buy(k, a) == [op |-> "Buy", k |-> k, a |-> a]
 
 Res(kind, cov) == [kind |-> kind, cov |-> cov]
 
-(* The resources an operation registers, computed against the view it
+(* The resources an operation relies on, computed against the view it
    runs on (a delete's pin depends on the parent the row names). *)
 Need(op, v) ==
   CASE op.op = "Read"   -> {Res("S", {op.k})}
@@ -68,6 +69,7 @@ Need(op, v) ==
    table resource - only these pairs are compatible. Where the concept is
    silent (a pin or a draw against an S lock, a pin against a draw) the
    conservative rule is incompatible; specs/README.md lists these gaps. *)
+Kinds == {"S", "RS", "X", "CLAIM", "PIN", "DEL", "DRAW"}
 CompatibleKinds ==
   {<<"S", "S">>, <<"S", "RS">>, <<"RS", "S">>, <<"RS", "RS">>,
    <<"PIN", "PIN">>, <<"DRAW", "DRAW">>}
@@ -146,55 +148,30 @@ Perms(S) ==
   ELSE UNION {{<<x>> \o p : p \in Perms(S \ {x})} : x \in S}
 
 ----------------------------------------------------------------------------
-(* Canonical order (§4) over a program's complete acquisition footprint.
-   Only a delete's resources depend on the view (the parent its row
-   names), and a parent is set by InitDb or by an Insert in some program,
-   so the static footprint pins every parent the row can have: an
-   over-approximation that can only refuse a program, never admit one
-   out of order. *)
+(* The complete footprint (§4): every resource a program needs, computed
+   statically from the program and InitDb. Only a delete's resources
+   depend on the view (the pin on the parent its row names), and a parent
+   is set by InitDb or by an Insert in some program, so the footprint pins
+   every parent the row can have. The over-approximation costs at most a
+   spurious conflict; `FootprintCovers` checks that it never misses a
+   resource an operation turns out to need. *)
 Ops == UNION {{Prog[t][i] : i \in DOMAIN Prog[t]} : t \in Txns}
 PossibleParents(k) ==
   ({InitDb[k].parent} \cup {op.p : op \in {op \in Ops : op.op = "Insert" /\ op.k = k}})
   \ {0}
-Footprint(op) ==
+OpFootprint(op) ==
   IF op.op = "Delete"
   THEN {Res("DEL", {op.k})} \cup {Res("PIN", {p}) : p \in PossibleParents(op.k)}
   ELSE Need(op, InitDb)
-KeysOf(R) == UNION {r.cov : r \in R}
-Before(t, i) == UNION {Footprint(Prog[t][j]) : j \in 1..(i - 1)}
+Footprint(t) == UNION {OpFootprint(Prog[t][i]) : i \in DOMAIN Prog[t]}
 
-(* Every key an operation covers for the first time lies above every key
-   the program covered before it. A waiter then waits only on a holder
-   that is further along in key order, so (together with NoUpgrade) the
-   wait-for relation over exclusive resources is acyclic. *)
-CanonicalOrder ==
-  \A t \in Txns : \A i \in 2..Len(Prog[t]) :
-    \A k \in KeysOf(Footprint(Prog[t][i])) \ KeysOf(Before(t, i)) :
-      \A j \in KeysOf(Before(t, i)) : j < k
-
-(* A mode dominates another when every kind compatible with it is also
-   compatible with the other, so a request in the dominated mode on a key
-   already held in the dominating one can never be refused. A program that
-   needs a stronger mode on a key it already holds would acquire out of
-   order; it is refused here. Whether the protocol detects, restarts or
-   forbids such an upgrade is decided in #24. *)
-Kinds == {"S", "RS", "X", "CLAIM", "PIN", "DEL", "DRAW"}
-Dominates(m, w) ==
-  \A x \in Kinds : <<m, x>> \in CompatibleKinds => <<w, x>> \in CompatibleKinds
-NoUpgrade ==
-  \A t \in Txns : \A i \in 2..Len(Prog[t]) :
-    \A r \in Footprint(Prog[t][i]) : \A k \in r.cov \cap KeysOf(Before(t, i)) :
-      \E h \in Before(t, i) : k \in h.cov /\ Dominates(h.kind, r.kind)
-
-ASSUME CanonicalOrder
-ASSUME NoUpgrade
 ASSUME \A k \in Keys : InitDb[k] \in Row /\ (~InitDb[k].present => InitDb[k] = AbsentRow)
 
 ----------------------------------------------------------------------------
 VARIABLES
-  status,  \* [Txns -> {"active", "committed", "rejected"}]
+  status,  \* [Txns -> {"pending", "active", "committed", "rejected"}]
   pc,      \* [Txns -> Nat]: operations already executed
-  held,    \* [Txns -> SUBSET Resource]: resources registered, held to the end
+  held,    \* [Txns -> SUBSET Resource]: the footprint, held from dispatch to the end
   wr,      \* [Txns -> partial Keys -> Row]: tentative writes, applied at commit
   draws,   \* [Txns -> [Keys -> Draw]]: tentative escrow draws, deltas at commit
   resp,    \* [Txns -> Seq(response)]: what the caller has been told
@@ -212,7 +189,7 @@ Draw == [bal : Nat, val : Nat]
 NoDraws == [k \in Keys |-> [bal |-> 0, val |-> 0]]
 
 Init ==
-  /\ status = [t \in Txns |-> "active"]
+  /\ status = [t \in Txns |-> "pending"]
   /\ pc = [t \in Txns |-> 0]
   /\ held = [t \in Txns |-> {}]
   /\ wr = [t \in Txns |-> NoWrites]
@@ -220,7 +197,11 @@ Init ==
   /\ resp = [t \in Txns |-> <<>>]
   /\ db = InitDb
 
+(* A pending transaction is dispatched but holds nothing yet; an active
+   one holds its footprint. *)
+Pending(t) == status[t] = "pending"
 Active(t) == status[t] = "active"
+Live(t) == Pending(t) \/ Active(t)
 Running(t) == Active(t) /\ pc[t] < Len(Prog[t])
 NextOp(t) == Prog[t][pc[t] + 1]
 
@@ -257,22 +238,34 @@ AllowanceBlocks(t, op) ==
   /\ View(t)[op.k].bal >= op.a
   /\ View(t)[op.k].bal - SumDraws(DrawHolders(t, op.k), op.k) < op.a
 
-(* The wait-for relation: who a running transaction is waiting on right
-   now. Empty exactly when its next operation may execute. *)
+(* The wait-for relation: who a live transaction is waiting on right now.
+   A pending transaction waits on every holder its footprint conflicts
+   with; an active one holds its footprint and waits only for the escrow
+   allowance of its next draw. Empty exactly when its next step may run. *)
 WaitsOn(t) ==
-  IF ~Running(t) THEN {}
-  ELSE LET op == NextOp(t)
-           C == Conflicting(t, Need(op, View(t))) IN
-       IF C # {} THEN C
-       ELSE IF AllowanceBlocks(t, op) THEN DrawHolders(t, op.k)
-       ELSE {}
+  IF Pending(t) THEN Conflicting(t, Footprint(t))
+  ELSE IF Running(t) /\ AllowanceBlocks(t, NextOp(t)) THEN DrawHolders(t, NextOp(t).k)
+  ELSE {}
 
 Changed(t, v) == {k \in Keys : v[k] # View(t)[k]}
 
-(* Execute the next operation: register its resources (atomically with
-   the check, §4 "atomically at dispatch") and apply it to the view. A
-   constraint rejection ends the transaction with the caller's failure
-   response and releases everything it held; nothing it wrote survives. *)
+(* Acquire the complete footprint in one step, atomically with the
+   compatibility check (§4: registered "atomically at dispatch, held
+   through commit"; a covering resource is acquired "before any read or
+   write touches the underlying state"). The implementation acquires the
+   same set resource by resource in canonical order; the step abstracts
+   that sequence, so no partial footprint is ever held. *)
+Acquire(t) ==
+  /\ Pending(t)
+  /\ WaitsOn(t) = {}
+  /\ status' = [status EXCEPT ![t] = "active"]
+  /\ held' = [held EXCEPT ![t] = Footprint(t)]
+  /\ UNCHANGED <<pc, wr, draws, resp, db>>
+
+(* Execute the next operation on the view under the footprint already
+   held; it acquires nothing. A constraint rejection ends the transaction
+   with the caller's failure response and releases everything it held;
+   nothing it wrote survives. *)
 DoOp(t) ==
   /\ Running(t)
   /\ WaitsOn(t) = {}
@@ -285,7 +278,7 @@ DoOp(t) ==
              /\ held' = [held EXCEPT ![t] = {}]
              /\ wr' = [wr EXCEPT ![t] = NoWrites]
              /\ draws' = [draws EXCEPT ![t] = NoDraws]
-        ELSE /\ held' = [held EXCEPT ![t] = @ \cup Need(op, View(t))]
+        ELSE /\ UNCHANGED <<status, held>>
              /\ IF op.op = "Buy"
                 THEN /\ draws' = [draws EXCEPT ![t][op.k] =
                                    [bal |-> @.bal + op.a, val |-> @.val + 1]]
@@ -294,12 +287,11 @@ DoOp(t) ==
                                 [k \in DOMAIN @ \cup Changed(t, r.db) |->
                                    Undrawn(t, k, r.db[k])]]
                      /\ UNCHANGED draws
-             /\ UNCHANGED status
   /\ UNCHANGED db
 
 (* Commit applies the tentative writes and draws atomically - the view
    becomes the committed state - and releases every resource (strict
-   two-phase locking: held from registration to commit). *)
+   two-phase locking: held from dispatch to commit). *)
 Commit(t) ==
   /\ Active(t) /\ pc[t] = Len(Prog[t])
   /\ status' = [status EXCEPT ![t] = "committed"]
@@ -309,20 +301,20 @@ Commit(t) ==
   /\ draws' = [draws EXCEPT ![t] = NoDraws]
   /\ UNCHANGED <<pc, resp>>
 
-Finished == \A t \in Txns : ~Active(t)
+Finished == \A t \in Txns : ~Live(t)
 
 (* Self-loop once every transaction has ended, so only a state with a
    live transaction and no enabled step counts as the deadlock TLC's
    default check reports. *)
 Terminating == Finished /\ UNCHANGED Vars
 
-Next == (\E t \in Txns : DoOp(t) \/ Commit(t)) \/ Terminating
+Next == (\E t \in Txns : Acquire(t) \/ DoOp(t) \/ Commit(t)) \/ Terminating
 
 Spec == Init /\ [][Next]_Vars
 
 ----------------------------------------------------------------------------
 TypeOK ==
-  /\ status \in [Txns -> {"active", "committed", "rejected"}]
+  /\ status \in [Txns -> {"pending", "active", "committed", "rejected"}]
   /\ pc \in [Txns -> Nat]
   /\ \A t \in Txns : held[t] \subseteq Resource
   /\ \A t \in Txns : DOMAIN wr[t] \subseteq Keys /\ \A k \in DOMAIN wr[t] : wr[t][k] \in Row
@@ -333,6 +325,11 @@ TypeOK ==
 MutualExclusion ==
   \A t, u \in Txns : t # u /\ Active(t) /\ Active(u) =>
     \A a \in held[t], b \in held[u] : Compatible(a, b)
+
+(* An operation runs without acquiring anything: the footprint taken at
+   dispatch holds every resource it needs on the view it runs on. *)
+FootprintCovers ==
+  \A t \in Txns : Running(t) => Need(NextOp(t), View(t)) \subseteq held[t]
 
 RECURSIVE Closure(_, _)
 Closure(R, n) ==
@@ -349,7 +346,7 @@ NoWaitCycle == \A t \in Txns : <<t, t>> \notin Closure(WaitFor, Cardinality(Txns
    returned, exactly the terminal outcome each reached (committed, or
    rejected with its caller-visible failure as the last response), and
    exactly the committed state. *)
-Ended == {t \in Txns : ~Active(t)}
+Ended == {t \in Txns : ~Live(t)}
 
 Serializable ==
   \E perm \in Perms(Ended) :
