@@ -1,6 +1,7 @@
 import unittest
 
-from unit_fixtures import FILE, enumeration_of, marker, shape, site, units_of
+from analyzer_report import AnalyzerReportError
+from unit_fixtures import FILE, definition_marker, enumeration_of, marker, shape, site, units_of
 from unit_records import SiteLocation, SourcePosition
 
 DECORATED = """\
@@ -106,6 +107,22 @@ def show(user, other):
     print(f"{user.profile.count()} of {other}")
 """
 
+TWO_CALLS_IN_ONE_FSTRING = """\
+def view(left, right):
+    return f"{left.get()} {right.get()}"
+"""
+
+NESTED_IN_DECORATOR = """\
+def other(function):
+    return function
+
+
+@transaction.atomic() and other
+def view(a, b):
+    a.get()
+    b.get()
+"""
+
 UNREPORTED = """\
 def get(self, request):
     return super(View, self).get(request)
@@ -152,8 +169,8 @@ class TransactionUnitTests(unittest.TestCase):
         ]
         markers = [
             marker(DECORATED, "transaction.atomic(savepoint=False)"),
-            marker(DECORATED, "transaction.atomic\ndef bare", name="app.bare"),
-            marker(DECORATED, "transaction.atomic\ndef empty", name="app.empty"),
+            definition_marker(DECORATED, "transaction.atomic\ndef bare", "Order.objects.get(pk=order_id)", "app.bare"),
+            definition_marker(DECORATED, "transaction.atomic\ndef empty", "helper(order_id)", "app.empty"),
         ]
         units = units_of(DECORATED, sites, markers)
         self.assertEqual(
@@ -168,8 +185,8 @@ class TransactionUnitTests(unittest.TestCase):
     def test_kiln_e1dj_04_aliased_and_stacked_decorators_are_matched_by_the_analyzers_report(self):
         sites = [site(ALIASED, "Order.objects.get"), site(ALIASED, "Order.objects.last")]
         markers = [
-            marker(ALIASED, "tx\ndef aliased", name="app.aliased"),
-            marker(ALIASED, "tx\n@other", name="app.stacked"),
+            definition_marker(ALIASED, "other\n@tx\ndef aliased", "Order.objects.get(pk=a)", "app.aliased"),
+            definition_marker(ALIASED, "tx\n@other", "Order.objects.last(b)", "app.stacked"),
         ]
         units = units_of(ALIASED, sites, markers)
         self.assertEqual(
@@ -188,6 +205,15 @@ class TransactionUnitTests(unittest.TestCase):
         enumeration = enumeration_of(EXIT_STACK, sites, [marker(EXIT_STACK, "transaction.atomic")])
         self.assertEqual([shape(unit) for unit in enumeration.units], [("S3", 3, (), (3,))])
         self.assertEqual(enumeration.unmatched_markers, [SiteLocation(FILE, SourcePosition(2, 24))])
+
+    def test_kiln_e1dj_22_marker_nested_in_a_larger_decorator_expression_opens_no_unit(self):
+        sites = [site(NESTED_IN_DECORATOR, "a.get", receiver="a"), site(NESTED_IN_DECORATOR, "b.get", receiver="b")]
+        nested_marker = marker(NESTED_IN_DECORATOR, "transaction.atomic()")
+        enumeration = enumeration_of(NESTED_IN_DECORATOR, sites, [nested_marker])
+        self.assertEqual(
+            [shape(unit) for unit in enumeration.units], [("S3", 7, ("a",), (7,)), ("S3", 8, ("b",), (8,))]
+        )
+        self.assertEqual(enumeration.unmatched_markers, [SiteLocation(FILE, SourcePosition(5, 1))])
 
     def test_kiln_e1dj_05_with_block_is_one_s2_unit_of_the_enclosing_function(self):
         sites = [
@@ -216,10 +242,10 @@ class TransactionUnitTests(unittest.TestCase):
             site(NESTED, "Order.objects.last"),
         ]
         markers = [
-            marker(NESTED, "transaction.atomic\ndef outer", name="app.outer"),
-            marker(NESTED, "transaction.atomic():\n        Order.objects.create"),
-            marker(NESTED, "transaction.atomic():\n            Order.objects.first"),
-            marker(NESTED, "transaction.atomic\ndef sibling", name="app.sibling"),
+            definition_marker(NESTED, "transaction.atomic\ndef outer", "inner_helper(a)", "app.outer"),
+            marker(NESTED, "transaction.atomic()", occurrence=1),
+            marker(NESTED, "transaction.atomic()", occurrence=2),
+            definition_marker(NESTED, "transaction.atomic\ndef sibling", "Order.objects.last()", "app.sibling"),
         ]
         units = units_of(NESTED, sites, markers)
         self.assertEqual(
@@ -232,7 +258,7 @@ class TransactionUnitTests(unittest.TestCase):
             site(HELPERS, "Order.objects.get"),
             site(HELPERS, "Order.objects.first"),
         ]
-        markers = [marker(HELPERS, "transaction.atomic", name="app.pay")]
+        markers = [definition_marker(HELPERS, "transaction.atomic", "\n    closure()", "app.pay")]
         units = units_of(HELPERS, sites, markers)
         self.assertEqual(
             [shape(unit) for unit in units],
@@ -290,9 +316,22 @@ class AutocommitUnitTests(unittest.TestCase):
         )
 
     def test_kiln_e1dj_11_call_inside_an_fstring_is_read_where_the_analyzer_reports_it(self):
-        reported_at_the_fstring = site(FSTRING, 'f"{user', method="count")
+        reported_at_the_fstring = site(FSTRING, 'f"{user', method="count", end_after="count()")
         (unit,) = units_of(FSTRING, [reported_at_the_fstring])
         self.assertEqual(unit.parameters, ("user",))
+
+    def test_kiln_e1dj_11_calls_reported_at_the_same_start_keep_their_own_parameters(self):
+        sites = [
+            site(TWO_CALLS_IN_ONE_FSTRING, 'f"{left', receiver="left", method="get", end_after="left.get()"),
+            site(TWO_CALLS_IN_ONE_FSTRING, 'f"{left', receiver="right", method="get", end_after="right.get()"),
+        ]
+        units = units_of(TWO_CALLS_IN_ONE_FSTRING, sites)
+        self.assertEqual([unit.parameters for unit in units], [("left",), ("right",)])
+
+    def test_kiln_e1dj_11_call_the_reported_span_does_not_single_out_fails_loudly(self):
+        unplaced = site(FSTRING, 'f"{user', method="count", end_after="other")
+        with self.assertRaisesRegex(AnalyzerReportError, "0 calls of `count`"):
+            units_of(FSTRING, [unplaced])
 
     def test_kiln_e1dj_12_call_the_analyzer_does_not_report_yields_no_unit(self):
         self.assertEqual(units_of(UNREPORTED, []), [])

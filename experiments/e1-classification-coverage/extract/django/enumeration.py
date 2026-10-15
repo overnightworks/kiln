@@ -7,7 +7,7 @@ from typing import Mapping
 
 from analyzer_report import AnalyzerReport, AnalyzerReportError
 from source_scopes import SourceScopes, TransactionBlock, read_scopes
-from unit_records import OrmSite, SiteLocation, SourcePosition, Unit, UnitRule
+from unit_records import OrmSite, SiteLocation, Span, Unit, UnitRule
 
 
 @dataclass(frozen=True)
@@ -23,22 +23,22 @@ def enumerate_units(
     sites_by_file: dict[str, list[OrmSite]] = defaultdict(list)
     for site in report.sites:
         sites_by_file[site.location.file].append(site)
-    markers_by_file: dict[str, set[SourcePosition]] = defaultdict(set)
+    markers_by_file: dict[str, set[Span]] = defaultdict(set)
     for marker in report.markers:
-        markers_by_file[marker.file].add(marker.position)
+        markers_by_file[marker.file].add(marker.span)
 
     units: list[Unit] = []
     unmatched: list[SiteLocation] = []
     for file in sorted(sites_by_file.keys() | markers_by_file.keys()):
         scopes = _scopes_of(file, sources, frozenset(markers_by_file[file]))
         units.extend(_units_of_file(application, file, sites_by_file[file], scopes))
-        unmatched.extend(SiteLocation(file, position) for position in scopes.unmatched_markers)
+        unmatched.extend(SiteLocation(file, span.start) for span in scopes.unmatched_markers)
     ordered_sites = sorted(report.sites, key=lambda site: site.location)
     return Enumeration(sorted(units, key=lambda unit: unit.order_key), ordered_sites, unmatched)
 
 
 def _scopes_of(
-    file: str, sources: Mapping[str, str], markers: frozenset[SourcePosition]
+    file: str, sources: Mapping[str, str], markers: frozenset[Span]
 ) -> SourceScopes:
     if file not in sources:
         raise AnalyzerReportError(f"{file}: no source text for the reported file")
@@ -84,5 +84,5 @@ def _autocommit_unit(application: str, site: OrmSite, scopes: SourceScopes) -> U
     enclosing = scopes.function_at(position)
     parameters = ()
     if enclosing:
-        parameters = enclosing.feeding(position, scopes.names_in_call(position, site.method))
+        parameters = enclosing.feeding(position, scopes.names_in_call(site))
     return Unit(application, site.location, UnitRule.S3, parameters, (site.location,))

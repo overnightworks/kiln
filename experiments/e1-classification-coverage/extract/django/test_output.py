@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from unit_fixtures import APPLICATION, enumeration_of, marker, site
+from unit_fixtures import APPLICATION, definition_marker, enumeration_of, site
 from rendering import render_units
 
 SOURCE = """\
@@ -23,7 +23,7 @@ def messages():
         site(SOURCE, "Order.objects.first"),
         site(SOURCE, "Order.objects.last"),
     ]
-    return sites, [marker(SOURCE, "transaction.atomic", name="app.pay")]
+    return sites, [definition_marker(SOURCE, "transaction.atomic", "Ledger.objects.create(order=order_id)", "app.pay")]
 
 
 class OutputTests(unittest.TestCase):

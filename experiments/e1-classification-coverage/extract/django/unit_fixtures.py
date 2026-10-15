@@ -27,8 +27,14 @@ def site(source: str, needle: str, occurrence: int = 1, **fields) -> dict:
     return site_message(f"{ROOT}/{FILE}", source, needle, occurrence=occurrence, **fields)
 
 
-def marker(source: str, needle: str, name: str = "with") -> dict:
-    return marker_message(f"{ROOT}/{FILE}", source, needle, name)
+def marker(source: str, needle: str, name: str = "with", **fields) -> dict:
+    """A called decorator or `with` item: reported over the expression itself."""
+    return marker_message(f"{ROOT}/{FILE}", source, needle, name, **fields)
+
+
+def definition_marker(source: str, first_decorator: str, last_line: str, name: str) -> dict:
+    """A bare `atomic` decorator: reported from the first decorator to the end of the definition."""
+    return marker_message(f"{ROOT}/{FILE}", source, first_decorator, name, end_after=last_line)
 
 
 def shape(unit: Unit) -> tuple:

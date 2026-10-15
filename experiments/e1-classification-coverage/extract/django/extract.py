@@ -78,7 +78,7 @@ def _write_units(row: ManifestRow, corpus: Path, output_dir: Path) -> None:
     report = parse_analyzer_json(messages.read_text(encoding="utf-8"), str(root))
     sources = {
         file: (root / file).read_text(encoding="utf-8")
-        for file in sorted({site.location.file for site in report.sites} | {m.file for m in report.markers})
+        for file in sorted({site.location.file for site in report.sites} | {marker.file for marker in report.markers})
     }  # fmt: skip
     enumeration = enumerate_units(row.owner_repo, report, sources)
     (output_dir / f"{stem}.units.jsonl").write_text(render_units(enumeration.units), encoding="utf-8")

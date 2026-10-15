@@ -18,6 +18,17 @@ class SourcePosition:
 
 
 @dataclass(frozen=True, order=True)
+class Span:
+    """Where the analyzer says an expression lies: start inclusive, end exclusive."""
+
+    start: SourcePosition
+    end: SourcePosition
+
+    def contains(self, position: SourcePosition) -> bool:
+        return self.start <= position < self.end
+
+
+@dataclass(frozen=True, order=True)
 class SiteLocation:
     file: str
     position: SourcePosition
@@ -28,6 +39,7 @@ class OrmSite:
     """One analyzer report of an ORM call, with the receiver evidence for S4."""
 
     location: SiteLocation
+    end: SourcePosition
     method: str
     receiver: str
     receiver_types: tuple[str, ...]
