@@ -31,7 +31,7 @@ test("KILN-E1TO-23 EPGStation restore yields one S2 unit parameterized by items 
   );
 });
 
-test("KILN-E1TO-24 EPGStation insertOnce yields one S5 unit for its two reported sites", () => {
+test("KILN-E1TO-24 EPGStation insertOnce yields one S5 unit for its two reported sites, parameterized by recorded and the earlier-bound connection", () => {
   const units = recordedUnits("epgstation", SOURCE_PROJECT, RECORDED_DB).filter(withinLines(INSERT_ONCE_LINES));
   assert.deepEqual(
     units.map(({ rule, line, column, parameters, absorbedSites }) => [rule, line, column, parameters, absorbedSites.length]),

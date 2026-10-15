@@ -39,6 +39,11 @@ test("KILN-E1TO-26 the analyzer environment is the pinned install of the rule, a
   assert.equal(dependencies.directory, "/data/corpus/l3tnun__EPGStation");
 });
 
+test("KILN-E1TO-27 the application's dependencies are installed without running install scripts", () => {
+  const [dependencies] = dependencyCommands(applicationRow(manifest, EPGSTATION), CORPUS);
+  assert.deepEqual([dependencies.program, ...dependencies.arguments], ["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund"]);
+});
+
 test("KILN-E1TO-26 a missing corpus setting or one inside the repository is rejected", () => {
   assert.equal(corpusDirectory("/data/corpus", REPOSITORY_ROOT), CORPUS);
   assert.throws(() => corpusDirectory(undefined, REPOSITORY_ROOT), /set the corpus directory/);

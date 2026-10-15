@@ -21,7 +21,8 @@ import {
 } from "./corpus.mjs"; // fmt: skip
 import { enumerateUnits } from "./enumeration.mjs";
 import { selectionOf } from "./file_selection.mjs";
-import { renderReceiverEvidence, renderUnits, renderUnmatchedMarkers } from "./rendering.mjs";
+import { installScriptsOf } from "./install_scripts.mjs";
+import { renderInstallScripts, renderReceiverEvidence, renderUnits, renderUnmatchedMarkers } from "./rendering.mjs";
 
 function main(argv) {
   const { values, positionals } = parseArgs({
@@ -70,6 +71,7 @@ function writeUnits(row, corpus, outputDirectory) {
   writeFileSync(`${stem}.units.jsonl`, renderUnits(enumeration.units));
   writeFileSync(`${stem}.receivers.jsonl`, renderReceiverEvidence(enumeration.receiverEvidence));
   writeFileSync(`${stem}.unmatched-markers.jsonl`, renderUnmatchedMarkers(enumeration.unmatchedMarkers));
+  writeFileSync(`${stem}.install-scripts.jsonl`, renderInstallScripts(installScriptsOf(root)));
 }
 
 main(process.argv.slice(2));

@@ -50,9 +50,10 @@ start of the reported expression.
 ## Worked examples
 
 - [KILN-E1TO-23] From the analyzer output recorded for EPGStation at its pinned commit, `restore` yields 1 S2 unit parameterized by `items` that absorbs its 4 sites.
-- [KILN-E1TO-24] From the same recording, `insertOnce` yields 1 S5 unit parameterized by `recorded` that absorbs its 2 reported sites.
+- [KILN-E1TO-24] From the same recording, `insertOnce` yields 1 S5 unit parameterized by `recorded` (the function argument) and `connection` (the earlier-bound local the chain reads, by the S3-parameter reading of §3) that absorbs its 2 reported sites.
 - [KILN-E1TO-25] From the analyzer output recorded for cool-admin-midway at its pinned commit, `CloudDBService.data` yields its 5 units and `getRepository` its 1 (§3.1: 6 in all).
 
 ## Corpus
 
 - [KILN-E1TO-26] Fetching an application clones its manifest row at `commit_sha_full` into the configured corpus directory; its own dependencies are installed there by a separate command and the pinned analyzer environment of §3 (`@ctring/splinter-eslint@1.0.9`, `typescript@5.4.3`) by another; an unknown application, a missing corpus directory setting, or a directory inside the repository is rejected.
+- [KILN-E1TO-27] Dependencies are installed with `--ignore-scripts` (the recorded deviation of the TypeORM clarification of §3), and each `units` run writes `<application>.install-scripts.jsonl`: one JSON line with `package`, `version`, `path` (below the application root, `.` for the application) and `scripts` for the application and for every installed package, nested and scoped ones included, that declares a `preinstall`, `install` or `postinstall` script (the application also `prepare`; a `binding.gyp` without `preinstall` and `install` counts as an `install`), read from the package manifests without running anything and ordered by path; a package manifest that cannot be read fails the run.

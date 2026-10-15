@@ -648,7 +648,12 @@ it is applied to TypeScript.
   are the names that function declares (destructured names and rest included),
   then its `const`/`let`/`var`, loop and `catch` variables bound before the
   site, as the Django clarification orders them; a name of an outer function is
-  not one. For an S5 chain the call is the whole written chain.
+  not one. For an S5 chain the call is the whole written chain. §3.1's
+  "parameterized by `recorded`" for `insertOnce` names only the function
+  argument; `connection`, a local bound earlier in the function and read by
+  the call, is also a parameter under the S3-parameter reading above, so the
+  unit's parameters are `recorded` and `connection`. This changes the
+  parameters, not the example's unit count.
 - **S5 chain.** A chain is one written receiver chain: the `createQueryBuilder()`
   call and every call whose callee is a member access on the result of the call
   before it, up to the last such call. A reported call on a variable that
@@ -658,12 +663,29 @@ it is applied to TypeScript.
 - **S2 forms.** `X.startTransaction()` ends at the last
   `X.commitTransaction()` or `X.rollbackTransaction()` with the same receiver
   text written directly in the same function before the next
-  `X.startTransaction()`; a start without one opens no unit.
+  `X.startTransaction()` that does not nest in it; a start without one opens
+  no unit. A start written while the transaction of an earlier start is still
+  open (more starts than commits and rollbacks so far) nests in it, and the
+  outermost owns the nested one's sites.
   `X.transaction(...)` opens a unit when `X` is, or ends in a property named,
   `dataSource`, `manager` or `connection`, and its body is the last function
   or arrow function argument. A method decorated `@Transaction` or
   `@LazyTransaction`, and any other `transaction` call, is a marker that opens
-  no unit, recorded as the Django clarification states.
+  no unit, recorded as the Django clarification states. A transaction report
+  that is neither a call over the reported span nor such a decorated method
+  is not a legitimate unsupported form and fails the run.
+- **Dependency installation (recorded deviation).** §3's plain `npm install`
+  of an application is run as `npm install --ignore-scripts --no-audit
+  --no-fund`. Reason: lifecycle scripts would execute arbitrary code from the
+  dependency trees of 32 third-party applications on the machine, and type
+  resolution needs package contents, not their build output. Possible bias:
+  types that a dependency's install script would generate stay unresolved,
+  which can hide sites the analyzer would otherwise report. The reach of the
+  deviation is recorded, not assumed: each application's run writes
+  `<application>.install-scripts.jsonl` naming the application and every
+  installed package that declares a `preinstall`, `install` or `postinstall`
+  script (the application also `prepare`), read from the package manifests
+  without running anything.
 
 ### 3.1 Worked examples: full unit counts against the frozen rule
 

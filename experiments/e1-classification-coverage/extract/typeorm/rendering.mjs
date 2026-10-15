@@ -21,3 +21,5 @@ export const renderReceiverEvidence = lines;
 export function renderUnmatchedMarkers(markers) {
   return lines(markers.map(locationOf));
 }
+
+export const renderInstallScripts = lines;
