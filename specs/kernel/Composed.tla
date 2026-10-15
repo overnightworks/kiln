@@ -31,10 +31,11 @@ ComposedInitDb ==
 (* Witnesses (negated; TLC's counterexample is the reachability proof). *)
 
 (* t1 holds its draw and its pin on 3 while both the delete (pin against
-   delete) and the table scan (scan against draw and claim) wait on it. *)
+   delete) and the table scan (scan against draw and claim) wait on it;
+   whichever of t2 and t3 was dispatched later also waits on the other. *)
 ComposedPinDeleteUnreached ==
   ~(Res("PIN", {3}) \in held["t1"] /\ Res("DRAW", {1}) \in held["t1"]
-    /\ WaitsOn("t2") = {"t1"} /\ WaitsOn("t3") = {"t1"})
+    /\ "t1" \in WaitsOn("t2") /\ "t1" \in WaitsOn("t3"))
 
 (* The delete won: t1 was told "noparent" and its draw left no effect. *)
 ComposedNoParentUnreached ==

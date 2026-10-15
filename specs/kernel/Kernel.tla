@@ -1,7 +1,8 @@
 ------------------------------ MODULE Kernel ------------------------------
-(* Kernel model, slice 1 (issue #16, parent #6): docs/concept.md §4's one
-   resource namespace with its admission protocol (the complete footprint
-   acquired at dispatch, held through commit: strict two-phase locking),
+(* Kernel model (issue #6; slice 1 in #16, escrow admission in #24):
+   docs/concept.md §4's one resource namespace with its admission protocol
+   (the complete footprint, including each escrow key's reservation,
+   acquired at dispatch and held through commit: strict two-phase locking),
    §3.2/§5's typed reservations (unique claim, foreign-key pin with a
    durable reverse reference, escrow draw under balance >= 0) composed
    with ordinary point, range and table locks over the same keys, and
@@ -40,13 +41,22 @@ Refs(v, k) == {c \in Keys : v[c].present /\ v[c].parent = k}
      Insert(k, p)       unique claim on k (+ pin on parent p if p # 0)
      Delete(k)          exclusive reservation against k's reverse-reference
                         set (+ pin on k's own parent while unlinking)
-     Buy(k, a)          escrow draw of a against k's bal, sold += 1 *)
+     Buy(k, a)          escrow draw of a against k's bal, sold += 1
+     BuyUnder(k, a, cap) the same draw, taken only while fewer than cap are
+                        sold (a branch the budget must cover either way)
+     BuyVal(k, j)       draws row j's val from k: an amount the program
+                        does not know statically (budget unbounded) *)
 Read(k) == [op |-> "Read", k |-> k]
 Scan(lo, hi) == [op |-> "Scan", lo |-> lo, hi |-> hi]
 Update(k, val, bal) == [op |-> "Update", k |-> k, val |-> val, bal |-> bal]
 Insert(k, p) == [op |-> "Insert", k |-> k, p |-> p]
 Delete(k) == [op |-> "Delete", k |-> k]
 Buy(k, a) == [op |-> "Buy", k |-> k, a |-> a]
+BuyUnder(k, a, cap) == [op |-> "BuyUnder", k |-> k, a |-> a, cap |-> cap]
+BuyVal(k, j) == [op |-> "BuyVal", k |-> k, j |-> j]
+
+DrawOps == {"Buy", "BuyUnder", "BuyVal"}
+Draws(op) == op.op \in DrawOps
 
 Res(kind, cov) == [kind |-> kind, cov |-> cov]
 
@@ -62,6 +72,8 @@ Need(op, v) ==
                            \cup (IF v[op.k].present /\ v[op.k].parent # 0
                                  THEN {Res("PIN", {v[op.k].parent})} ELSE {})
     [] op.op = "Buy"    -> {Res("DRAW", {op.k})}
+    [] op.op = "BuyUnder" -> {Res("DRAW", {op.k})}
+    [] op.op = "BuyVal" -> {Res("DRAW", {op.k}), Res("S", {op.j})}
 
 (* Compatibility (§4, §5). Two resources whose coverage is disjoint never
    contend ("two keyed resources with distinct keys never contend"); with
@@ -85,9 +97,12 @@ Compatible(a, b) ==
    between them can only come from interleaving, never from two
    definitions of what an operation does. A rejected result is a
    constraint failure the caller sees; §5 lets only committed state
-   justify it, which is why the live protocol evaluates it on the view
-   only once every tentative holder it conflicts with is gone. *)
+   justify it. *)
 Result(resp, v, rejected) == [resp |-> resp, db |-> v, rejected |-> rejected]
+
+DrawFrom(k, a, v) ==
+  IF v[k].bal < a THEN Result("insufficient", v, TRUE)
+  ELSE Result("ok", [v EXCEPT ![k].bal = @ - a, ![k].val = @ + 1], FALSE)
 
 ApplyOp(op, v) ==
   CASE op.op = "Read" ->
@@ -113,10 +128,12 @@ ApplyOp(op, v) ==
          ELSE IF Refs(v, op.k) # {} THEN Result("referenced", v, TRUE)
          ELSE Result("ok", [v EXCEPT ![op.k] = AbsentRow], FALSE)
     [] op.op = "Buy" ->
-         IF v[op.k].bal < op.a THEN Result("insufficient", v, TRUE)
-         ELSE Result("ok",
-                     [v EXCEPT ![op.k].bal = @ - op.a, ![op.k].val = @ + 1],
-                     FALSE)
+         DrawFrom(op.k, op.a, v)
+    [] op.op = "BuyUnder" ->
+         IF v[op.k].val < op.cap THEN DrawFrom(op.k, op.a, v)
+         ELSE Result("skipped", v, FALSE)
+    [] op.op = "BuyVal" ->
+         DrawFrom(op.k, v[op.j].val, v)
 
 ----------------------------------------------------------------------------
 (* Serial reference execution: run the transactions of `perm` one after
@@ -165,19 +182,39 @@ OpFootprint(op) ==
   ELSE Need(op, InitDb)
 Footprint(t) == UNION {OpFootprint(Prog[t][i]) : i \in DOMAIN Prog[t]}
 
+(* The escrow budget (§4, rule 1): a program's statically known total draw
+   on a key, the sum of its draw amounts there. A draw whose amount only
+   the data decides (BuyVal) makes the budget unknown, which counts as
+   unbounded. A branch (BuyUnder) counts in full whether or not it is
+   taken. *)
+EscrowKeys(t) == {k \in Keys : Res("DRAW", {k}) \in Footprint(t)}
+
+BudgetKnown(t, k) ==
+  ~\E i \in DOMAIN Prog[t] : Prog[t][i].op = "BuyVal" /\ Prog[t][i].k = k
+
+RECURSIVE SumAmounts(_, _)
+SumAmounts(ops, k) ==
+  IF ops = <<>> THEN 0
+  ELSE (IF Draws(Head(ops)) /\ Head(ops).k = k THEN Head(ops).a ELSE 0)
+       + SumAmounts(Tail(ops), k)
+
+Budget(t, k) == SumAmounts(Prog[t], k)
+
 ASSUME \A k \in Keys : InitDb[k] \in Row /\ (~InitDb[k].present => InitDb[k] = AbsentRow)
 
 ----------------------------------------------------------------------------
 VARIABLES
-  status,  \* [Txns -> {"pending", "active", "committed", "rejected"}]
-  pc,      \* [Txns -> Nat]: operations already executed
-  held,    \* [Txns -> SUBSET Resource]: the footprint, held from dispatch to the end
-  wr,      \* [Txns -> partial Keys -> Row]: tentative writes, applied at commit
-  draws,   \* [Txns -> [Keys -> Draw]]: tentative escrow draws, deltas at commit
-  resp,    \* [Txns -> Seq(response)]: what the caller has been told
-  db       \* [Keys -> Row]: committed state
+  status,   \* [Txns -> {"pending", "active", "committed", "rejected"}]
+  seq,      \* [Txns -> Nat]: dispatch sequence number, 0 before dispatch
+  pc,       \* [Txns -> Nat]: operations already executed
+  held,     \* [Txns -> SUBSET Resource]: the footprint, held from admission to the end
+  reserved, \* [Txns -> [Keys -> Nat]]: the escrow reservation per key, admission to the end
+  wr,       \* [Txns -> partial Keys -> Row]: tentative writes, applied at commit
+  draws,    \* [Txns -> [Keys -> Draw]]: tentative escrow draws, deltas at commit
+  resp,     \* [Txns -> Seq(response)]: what the caller has been told
+  db        \* [Keys -> Row]: committed state
 
-Vars == <<status, pc, held, wr, draws, resp, db>>
+Vars == <<status, seq, pc, held, reserved, wr, draws, resp, db>>
 
 Resource == [kind : Kinds, cov : SUBSET Keys]
 
@@ -187,19 +224,23 @@ NoWrites == [k \in {} |-> AbsentRow]
    drawn (bal) and sold (val) so far on a key. *)
 Draw == [bal : Nat, val : Nat]
 NoDraws == [k \in Keys |-> [bal |-> 0, val |-> 0]]
+NoReservation == [k \in Keys |-> 0]
 
 Init ==
   /\ status = [t \in Txns |-> "pending"]
+  /\ seq = [t \in Txns |-> 0]
   /\ pc = [t \in Txns |-> 0]
   /\ held = [t \in Txns |-> {}]
+  /\ reserved = [t \in Txns |-> NoReservation]
   /\ wr = [t \in Txns |-> NoWrites]
   /\ draws = [t \in Txns |-> NoDraws]
   /\ resp = [t \in Txns |-> <<>>]
   /\ db = InitDb
 
-(* A pending transaction is dispatched but holds nothing yet; an active
-   one holds its footprint. *)
+(* A pending transaction holds nothing; once dispatched it is queued for
+   admission in dispatch order; an active one holds its footprint. *)
 Pending(t) == status[t] = "pending"
+Queued(t) == Pending(t) /\ seq[t] > 0
 Active(t) == status[t] = "active"
 Live(t) == Pending(t) \/ Active(t)
 Running(t) == Active(t) /\ pc[t] < Len(Prog[t])
@@ -215,91 +256,135 @@ Undrawn(t, k, row) ==
 View(t) ==
   [k \in Keys |-> Drawn(t, k, IF k \in DOMAIN wr[t] THEN wr[t][k] ELSE db[k])]
 
+(* A draw consumes the transaction's own reservation (§4, rule 1): the
+   balance a draw sees is what remains of that reservation, never the
+   committed balance other holders are drawing from. A transaction that
+   holds a resource on the key incompatible with DRAW is the key's only
+   draw holder; its draws see its own view, so an Update that raised the
+   balance in the same transaction is drawn from. *)
+SoleDrawHolder(t, k) == \E h \in held[t] : h.kind # "DRAW" /\ k \in h.cov
+
+DrawView(t, k) ==
+  IF SoleDrawHolder(t, k) THEN View(t)
+  ELSE [View(t) EXCEPT ![k].bal = reserved[t][k] - draws[t][k].bal]
+
+OpView(t, op) == IF Draws(op) THEN DrawView(t, op.k) ELSE View(t)
+
 (* Admission guard: every registered resource must be compatible with
    every resource a live transaction holds. *)
 Conflicting(t, R) ==
   {u \in Txns \ {t} : Active(u) /\ \E r \in R, h \in held[u] : ~Compatible(r, h)}
 
-(* Escrow allowance (§5): a tentative draw already reduces what a
-   concurrent draw may reserve, so the allowance is the committed balance
-   minus every live tentative draw on the key; a draw that fits the
-   committed balance but not the allowance waits on those holders. *)
-TentativeDraw(u, k) == draws[u][k].bal
-
-RECURSIVE SumDraws(_, _)
-SumDraws(U, k) ==
+(* Escrow admission (§4, rule 1; §5): a transaction's reservation on an
+   escrow key is min(budget, committed balance). Live reservations are
+   funded from the committed balance, so a transaction is admitted only
+   while every other live reservation on the key leaves room for its own:
+   a reservation capped at the committed balance therefore waits until
+   every other reservation on that key has resolved (rule 2), and its
+   draws then fail only on committed state. *)
+RECURSIVE SumOver(_, _)
+SumOver(U, k) ==
   IF U = {} THEN 0
-  ELSE LET u == CHOOSE x \in U : TRUE IN TentativeDraw(u, k) + SumDraws(U \ {u}, k)
+  ELSE LET u == CHOOSE x \in U : TRUE IN reserved[u][k] + SumOver(U \ {u}, k)
 
-DrawHolders(t, k) == {u \in Txns \ {t} : Active(u) /\ TentativeDraw(u, k) > 0}
+Capped(t, k) == ~BudgetKnown(t, k) \/ Budget(t, k) > db[k].bal
 
-AllowanceBlocks(t, op) ==
-  /\ op.op = "Buy"
-  /\ View(t)[op.k].bal >= op.a
-  /\ View(t)[op.k].bal - SumDraws(DrawHolders(t, op.k), op.k) < op.a
+Reservation(t, k) == IF Capped(t, k) THEN db[k].bal ELSE Budget(t, k)
+
+ReservationHolders(t, k) == {u \in Txns \ {t} : Active(u) /\ reserved[u][k] > 0}
+
+EscrowBlocked(t, k) ==
+  SumOver(ReservationHolders(t, k), k) + Reservation(t, k) > db[k].bal
+
+EscrowBlockers(t) ==
+  UNION {ReservationHolders(t, k) : k \in {k \in EscrowKeys(t) : EscrowBlocked(t, k)}}
+
+(* Admission order (§4, rule 3): one queue per resource in dispatch
+   order. A queued transaction waits on every older queued transaction
+   whose footprint shares a resource with its own, so it never bypasses
+   it; disjoint footprints proceed independently. *)
+Shares(t, u) == \E a \in Footprint(t), b \in Footprint(u) : a.cov \cap b.cov # {}
+
+OlderQueued(t) == {u \in Txns \ {t} : Queued(u) /\ seq[u] < seq[t] /\ Shares(t, u)}
 
 (* The wait-for relation: who a live transaction is waiting on right now.
-   A pending transaction waits on every holder its footprint conflicts
-   with; an active one holds its footprint and waits only for the escrow
-   allowance of its next draw. Empty exactly when its next step may run. *)
+   A queued transaction waits on every holder its footprint conflicts
+   with, on the reservation holders that leave no room for its own, and
+   on older queued transactions sharing a resource. An active one holds
+   its whole footprint and never waits again (rule 1). Empty exactly when
+   its next step may run. *)
 WaitsOn(t) ==
-  IF Pending(t) THEN Conflicting(t, Footprint(t))
-  ELSE IF Running(t) /\ AllowanceBlocks(t, NextOp(t)) THEN DrawHolders(t, NextOp(t).k)
+  IF Queued(t) THEN Conflicting(t, Footprint(t)) \cup EscrowBlockers(t) \cup OlderQueued(t)
   ELSE {}
 
 Changed(t, v) == {k \in Keys : v[k] # View(t)[k]}
 
+(* Dispatch: the request enters the admission queue with the next
+   sequence number. *)
+Dispatch(t) ==
+  /\ Pending(t) /\ seq[t] = 0
+  /\ seq' = [seq EXCEPT ![t] = 1 + Cardinality({u \in Txns : seq[u] > 0})]
+  /\ UNCHANGED <<status, pc, held, reserved, wr, draws, resp, db>>
+
 (* Acquire the complete footprint in one step, atomically with the
-   compatibility check (§4: registered "atomically at dispatch, held
-   through commit"; a covering resource is acquired "before any read or
-   write touches the underlying state"). The implementation acquires the
-   same set resource by resource in canonical order; the step abstracts
-   that sequence, so no partial footprint is ever held. *)
+   compatibility check and the escrow reservations (§4: registered
+   "atomically at dispatch, held through commit"; a covering resource is
+   acquired "before any read or write touches the underlying state"). The
+   implementation acquires the same set resource by resource in canonical
+   order; the step abstracts that sequence, so no partial footprint is
+   ever held. *)
 Acquire(t) ==
-  /\ Pending(t)
+  /\ Queued(t)
   /\ WaitsOn(t) = {}
   /\ status' = [status EXCEPT ![t] = "active"]
   /\ held' = [held EXCEPT ![t] = Footprint(t)]
-  /\ UNCHANGED <<pc, wr, draws, resp, db>>
+  /\ reserved' = [reserved EXCEPT ![t] =
+                   [k \in Keys |-> IF k \in EscrowKeys(t) THEN Reservation(t, k) ELSE 0]]
+  /\ UNCHANGED <<seq, pc, wr, draws, resp, db>>
 
 (* Execute the next operation on the view under the footprint already
-   held; it acquires nothing. A constraint rejection ends the transaction
-   with the caller's failure response and releases everything it held;
-   nothing it wrote survives. *)
+   held; it acquires nothing and waits for nothing. A constraint rejection
+   ends the transaction with the caller's failure response and releases
+   everything it held, the unused reservation included; nothing it wrote
+   survives. *)
 DoOp(t) ==
   /\ Running(t)
-  /\ WaitsOn(t) = {}
   /\ LET op == NextOp(t)
-         r == ApplyOp(op, View(t)) IN
+         v == OpView(t, op)
+         r == ApplyOp(op, v) IN
      /\ pc' = [pc EXCEPT ![t] = @ + 1]
      /\ resp' = [resp EXCEPT ![t] = Append(@, r.resp)]
      /\ IF r.rejected
         THEN /\ status' = [status EXCEPT ![t] = "rejected"]
              /\ held' = [held EXCEPT ![t] = {}]
+             /\ reserved' = [reserved EXCEPT ![t] = NoReservation]
              /\ wr' = [wr EXCEPT ![t] = NoWrites]
              /\ draws' = [draws EXCEPT ![t] = NoDraws]
-        ELSE /\ UNCHANGED <<status, held>>
-             /\ IF op.op = "Buy"
+        ELSE /\ UNCHANGED <<status, held, reserved>>
+             /\ IF Draws(op)
                 THEN /\ draws' = [draws EXCEPT ![t][op.k] =
-                                   [bal |-> @.bal + op.a, val |-> @.val + 1]]
+                                   [bal |-> @.bal + (v[op.k].bal - r.db[op.k].bal),
+                                    val |-> @.val + (r.db[op.k].val - v[op.k].val)]]
                      /\ UNCHANGED wr
                 ELSE /\ wr' = [wr EXCEPT ![t] =
                                 [k \in DOMAIN @ \cup Changed(t, r.db) |->
                                    Undrawn(t, k, r.db[k])]]
                      /\ UNCHANGED draws
-  /\ UNCHANGED db
+  /\ UNCHANGED <<seq, db>>
 
 (* Commit applies the tentative writes and draws atomically - the view
-   becomes the committed state - and releases every resource (strict
-   two-phase locking: held from dispatch to commit). *)
+   becomes the committed state - and releases every resource and the
+   unused reservation (strict two-phase locking: held from admission to
+   commit). *)
 Commit(t) ==
   /\ Active(t) /\ pc[t] = Len(Prog[t])
   /\ status' = [status EXCEPT ![t] = "committed"]
   /\ db' = View(t)
   /\ held' = [held EXCEPT ![t] = {}]
+  /\ reserved' = [reserved EXCEPT ![t] = NoReservation]
   /\ wr' = [wr EXCEPT ![t] = NoWrites]
   /\ draws' = [draws EXCEPT ![t] = NoDraws]
-  /\ UNCHANGED <<pc, resp>>
+  /\ UNCHANGED <<seq, pc, resp>>
 
 Finished == \A t \in Txns : ~Live(t)
 
@@ -308,15 +393,19 @@ Finished == \A t \in Txns : ~Live(t)
    default check reports. *)
 Terminating == Finished /\ UNCHANGED Vars
 
-Next == (\E t \in Txns : Acquire(t) \/ DoOp(t) \/ Commit(t)) \/ Terminating
+Next ==
+  \/ \E t \in Txns : Dispatch(t) \/ Acquire(t) \/ DoOp(t) \/ Commit(t)
+  \/ Terminating
 
 Spec == Init /\ [][Next]_Vars
 
 ----------------------------------------------------------------------------
 TypeOK ==
   /\ status \in [Txns -> {"pending", "active", "committed", "rejected"}]
+  /\ seq \in [Txns -> Nat]
   /\ pc \in [Txns -> Nat]
   /\ \A t \in Txns : held[t] \subseteq Resource
+  /\ reserved \in [Txns -> [Keys -> Nat]]
   /\ \A t \in Txns : DOMAIN wr[t] \subseteq Keys /\ \A k \in DOMAIN wr[t] : wr[t][k] \in Row
   /\ draws \in [Txns -> [Keys -> Draw]]
   /\ db \in [Keys -> Row]
@@ -327,9 +416,21 @@ MutualExclusion ==
     \A a \in held[t], b \in held[u] : Compatible(a, b)
 
 (* An operation runs without acquiring anything: the footprint taken at
-   dispatch holds every resource it needs on the view it runs on. *)
+   admission holds every resource it needs on the view it runs on. *)
 FootprintCovers ==
   \A t \in Txns : Running(t) => Need(NextOp(t), View(t)) \subseteq held[t]
+
+(* Escrow conservation (§4, rule 1). Live reservations are funded: their
+   sum on a key never exceeds its committed balance. Draws stay within the
+   reservation: a transaction never draws more than it reserved, unless it
+   holds X on the key, in which case it is the key's only draw holder and
+   may draw from a balance its own update raised. *)
+ReservationsFunded ==
+  \A k \in Keys : SumOver({t \in Txns : Active(t)}, k) <= db[k].bal
+
+DrawsWithinReservation ==
+  \A t \in Txns, k \in Keys :
+    Active(t) /\ Res("X", {k}) \notin held[t] => draws[t][k].bal <= reserved[t][k]
 
 RECURSIVE Closure(_, _)
 Closure(R, n) ==
