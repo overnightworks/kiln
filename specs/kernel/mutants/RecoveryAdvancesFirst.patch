@@ -1,0 +1,11 @@
+--- Publication.tla
++++ Publication.tla
+@@ -124,7 +124,7 @@
+    alone, the end of the longest prefix of fully installed commits. *)
+ FullyInstalledPrefixes == {n \in 0..Len(log) : \A i \in 1..n : CompletelyInstalled(log[i].txn)}
+ 
+-Reconstructed == CHOOSE n \in FullyInstalledPrefixes : \A m \in FullyInstalledPrefixes : m <= n
++Reconstructed == Len(log)
+ 
+ RecoverPublication ==
+   /\ RecoverTo(SubSeq(log, 1, Reconstructed))
