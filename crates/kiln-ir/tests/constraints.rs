@@ -48,6 +48,7 @@ fn accounts_schema(unique_constraints: Vec<UniqueConstraint>) -> Schema {
             ],
         }],
         unique_constraints,
+        ..Default::default()
     }
 }
 
