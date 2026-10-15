@@ -12,8 +12,8 @@ use std::collections::{BTreeMap, HashMap};
 use crate::call::Call;
 use crate::identifiers::{AbortName, ColumnName, ParameterName, TableName};
 use crate::ir::{
-    ArithmeticOp, Block, ClampDomain, Column, Condition, Effect, Expr, IntegerWidth, Program, Row,
-    Schema, SchemaError, Slot, Terminal, Value,
+    ArithmeticOp, Block, ClampDomain, Column, Condition, Effect, Expr, Function, IntegerWidth,
+    Parameter, Program, Row, Schema, SchemaError, Slot, Terminal, Value,
 };
 use crate::store::Store;
 
@@ -26,22 +26,39 @@ pub enum Outcome {
 
 /// Why a call aborted.
 ///
-/// `MissingRow`, `DuplicateKey` and `Overflow` are the evaluator's own
-/// structural rules for update/delete, insert and checked arithmetic
-/// (`docs/concept.md` §2.2, D3); `Declared` is a transaction body's own
-/// explicit, named rejection.
+/// `MissingRow`, `DuplicateKey`, `Overflow` and `BoundExceeded` are the
+/// evaluator's own structural rules for update/delete, insert, checked
+/// arithmetic and bounded range iteration (`docs/concept.md` §2.2, D3, D6);
+/// `Declared` is a transaction body's own explicit, named rejection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AbortReason {
     Declared(AbortName),
-    MissingRow { table: TableName, key: Value },
-    DuplicateKey { table: TableName, key: Value },
+    MissingRow {
+        table: TableName,
+        key: Value,
+    },
+    DuplicateKey {
+        table: TableName,
+        key: Value,
+    },
     Overflow(OverflowReason),
+    /// A range read on `table` matched `matched` rows, more than its
+    /// declared `bound` — bounded iteration never runs open-ended (§2.1,
+    /// §2.2 D6).
+    BoundExceeded {
+        table: TableName,
+        bound: i64,
+        matched: usize,
+    },
 }
 
-/// Why checked arithmetic overflowed (D3): either `i64` itself overflowed
-/// before any column write ever saw the result, or a write's final value
-/// fell outside its target column's declared width with no clamping domain
-/// to saturate into instead.
+/// Why checked arithmetic overflowed, or a value fell outside its
+/// declared width (D3): `i64` itself overflowed before any width-or-clamp
+/// decision ever saw the result, a write's final value fell outside its
+/// target column's declared width with no clamping domain to saturate
+/// into instead, or an argument fell outside its parameter's declared
+/// width — a column clamps, but a parameter, declaring no domain, never
+/// does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OverflowReason {
     /// Arithmetic overflowed `i64` itself — in a response, a key expression,
@@ -55,6 +72,8 @@ pub enum OverflowReason {
         column: ColumnName,
         key: Value,
     },
+    /// The argument bound to `parameter` fell outside its declared width.
+    Argument { parameter: ParameterName },
 }
 
 /// Which columns an access touched: every column of the row, or exactly the
@@ -65,17 +84,25 @@ pub enum AccessedColumns {
     Named(Vec<ColumnName>),
 }
 
-/// What kind of access an [`AccessLogEntry`] records.
-///
-/// Named `PointRead` rather than `Read` so a later slice can add
-/// `RangeRead` alongside it without renaming this one (D5 names both as
-/// one family of access kinds).
+/// What kind of access an [`AccessLogEntry`] records (D5 names a point
+/// read and a range read as one family of access kinds).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccessKind {
     PointRead,
+    RangeRead,
     Insert,
     Update,
     Delete,
+}
+
+/// Which rows an [`AccessLogEntry`] names: one row by key, or every row
+/// whose key falls in `[start, end]` — recorded even when the range
+/// matches no row, since the range itself was still attempted
+/// (`docs/concept.md` §2.2, D5: "range bounds (including empty ranges)").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccessTarget {
+    Point(Value),
+    Range { start: Value, end: Value },
 }
 
 /// One attempted access, recorded whether or not the call that made it
@@ -84,7 +111,7 @@ pub enum AccessKind {
 pub struct AccessLogEntry {
     pub table: TableName,
     pub kind: AccessKind,
-    pub key: Value,
+    pub target: AccessTarget,
     pub columns: AccessedColumns,
 }
 
@@ -104,8 +131,27 @@ pub struct Execution {
 /// separately through every call in the recursion.
 struct CallContext<'a> {
     schema: &'a Schema,
-    parameters: &'a [ParameterName],
+    parameters: &'a [Parameter],
     args: &'a [Value],
+}
+
+/// What a [`Slot`] holds once the effect that bound it has run: a single
+/// row or its absence (`Effect::Read`), or the ordered sequence of rows a
+/// range matched (`Effect::ReadRange`). [`Condition::RowPresent`] reads
+/// either kind as one branchable fact — "did this read find anything" —
+/// without the rest of `run` needing to know which effect produced it.
+enum Binding {
+    Row(Option<Row>),
+    Range(Vec<Row>),
+}
+
+impl Binding {
+    fn is_present(&self) -> bool {
+        match self {
+            Binding::Row(row) => row.is_some(),
+            Binding::Range(rows) => !rows.is_empty(),
+        }
+    }
 }
 
 /// Runs `call` against `program` starting from `store`. Does not mutate
@@ -128,15 +174,24 @@ pub fn run(program: &Program, call: &Call, store: &Store) -> Result<Execution, S
         parameters: &function.parameters,
         args: &call.args,
     };
+
+    if let Some(reason) = check_argument_widths(function, &call.args) {
+        return Ok(Execution {
+            store: store.clone(),
+            outcome: Outcome::Aborted { reason },
+            access_log: Vec::new(),
+        });
+    }
+
     let mut working_store = store.clone();
-    let mut reads: HashMap<Slot, Option<Row>> = HashMap::new();
+    let mut bindings: HashMap<Slot, Binding> = HashMap::new();
     let mut access_log = Vec::new();
 
     let outcome = execute_block(
         &function.body,
         &ctx,
         &mut working_store,
-        &mut reads,
+        &mut bindings,
         &mut access_log,
     );
 
@@ -152,21 +207,46 @@ pub fn run(program: &Program, call: &Call, store: &Store) -> Result<Execution, S
     })
 }
 
+/// Checks every argument in `args` against the declared width of the
+/// parameter at the same position, exactly as a write checks its value
+/// against its target column's declared width (D3, `docs/concept.md` §2.2:
+/// "the column's or argument's declared width"). Returns the typed abort
+/// reason for the first argument that does not fit, or `None` once every
+/// argument has been checked.
+///
+/// A parameter with no declared width ([`Parameter::width`] is `None`)
+/// resolves unchecked, exactly as an undeclared column's write does. A
+/// parameter declares no clamping domain, so an out-of-width argument
+/// always aborts — unlike a column, which may clamp instead.
+fn check_argument_widths(function: &Function, args: &[Value]) -> Option<AbortReason> {
+    for (parameter, arg) in function.parameters.iter().zip(args) {
+        let Some(width) = parameter.width else {
+            continue;
+        };
+        if check_width(as_integer(arg.clone()), width).is_err() {
+            return Some(AbortReason::Overflow(OverflowReason::Argument {
+                parameter: parameter.name.clone(),
+            }));
+        }
+    }
+    None
+}
+
 /// Applies a block's effects in program order, then its terminal. Returns
 /// as soon as an effect aborts, before any later effect runs.
 fn execute_block(
     block: &Block,
     ctx: &CallContext,
     store: &mut Store,
-    reads: &mut HashMap<Slot, Option<Row>>,
+    bindings: &mut HashMap<Slot, Binding>,
     access_log: &mut Vec<AccessLogEntry>,
 ) -> Outcome {
     for effect in &block.effects {
-        if let Some(outcome) = apply_effect(effect, ctx, store, reads, access_log) {
+        if let Some(outcome) = apply_effect(effect, ctx, store, bindings, access_log) {
             return outcome;
         }
     }
-    execute_terminal(&block.terminal, ctx, store, reads, access_log)
+    execute_terminal(&block.terminal, ctx, store, bindings, access_log)
 }
 
 /// Applies one effect by dispatching to the function that owns its kind.
@@ -176,37 +256,57 @@ fn apply_effect(
     effect: &Effect,
     ctx: &CallContext,
     store: &mut Store,
-    reads: &mut HashMap<Slot, Option<Row>>,
+    bindings: &mut HashMap<Slot, Binding>,
     access_log: &mut Vec<AccessLogEntry>,
 ) -> Option<Outcome> {
     match effect {
         Effect::Read { table, key, into } => {
-            apply_read(table, key, *into, ctx, store, reads, access_log)
+            apply_read(table, key, *into, ctx, store, bindings, access_log)
         }
         Effect::Insert {
             table,
             key,
             columns,
-        } => apply_insert(table, key, columns, ctx, store, reads, access_log),
+        } => apply_insert(table, key, columns, ctx, store, bindings, access_log),
         Effect::Update {
             table,
             key,
             columns,
-        } => apply_update(table, key, columns, ctx, store, reads, access_log),
-        Effect::Delete { table, key } => apply_delete(table, key, ctx, store, reads, access_log),
+        } => apply_update(table, key, columns, ctx, store, bindings, access_log),
+        Effect::Delete { table, key } => apply_delete(table, key, ctx, store, bindings, access_log),
+        Effect::ReadRange {
+            table,
+            start,
+            end,
+            bound,
+            into,
+        } => apply_read_range(
+            RangeRead {
+                table,
+                start,
+                end,
+                bound,
+                into: *into,
+            },
+            ctx,
+            store,
+            bindings,
+            access_log,
+        ),
     }
 }
 
-/// Resolves an effect's key expression, turning an `i64`-overflow failure
-/// into the aborted [`Outcome`] every `apply_*` function below returns on
-/// error — shared so every effect kind reports a key's own arithmetic
-/// overflow the same way (D3).
-fn resolve_key(
-    key: &Expr,
+/// Resolves an effect's expression, turning an `i64`-overflow failure into
+/// the aborted [`Outcome`] every `apply_*` function below returns on error —
+/// shared so every effect kind reports its own arithmetic overflow the same
+/// way (D3), whether the expression is a key or a range's start, end, or
+/// bound.
+fn resolve_or_abort(
+    expr: &Expr,
     ctx: &CallContext,
-    reads: &HashMap<Slot, Option<Row>>,
+    bindings: &HashMap<Slot, Binding>,
 ) -> Result<Value, Outcome> {
-    resolve(key, ctx, reads).map_err(|reason| Outcome::Aborted {
+    resolve(expr, ctx, bindings).map_err(|reason| Outcome::Aborted {
         reason: AbortReason::Overflow(reason),
     })
 }
@@ -219,10 +319,10 @@ fn apply_read(
     into: Slot,
     ctx: &CallContext,
     store: &Store,
-    reads: &mut HashMap<Slot, Option<Row>>,
+    bindings: &mut HashMap<Slot, Binding>,
     access_log: &mut Vec<AccessLogEntry>,
 ) -> Option<Outcome> {
-    let key = match resolve_key(key, ctx, reads) {
+    let key = match resolve_or_abort(key, ctx, bindings) {
         Ok(key) => key,
         Err(outcome) => return Some(outcome),
     };
@@ -230,10 +330,72 @@ fn apply_read(
     access_log.push(AccessLogEntry {
         table: table.clone(),
         kind: AccessKind::PointRead,
-        key,
+        target: AccessTarget::Point(key),
         columns: AccessedColumns::EntireRow,
     });
-    reads.insert(into, row);
+    bindings.insert(into, Binding::Row(row));
+    None
+}
+
+/// An [`Effect::ReadRange`]'s own fields, bundled so `apply_read_range`
+/// takes one value instead of five — the same reason [`CallContext`]
+/// bundles the call's constant context, applied to one effect's fields
+/// instead.
+struct RangeRead<'a> {
+    table: &'a TableName,
+    start: &'a Expr,
+    end: &'a Expr,
+    bound: &'a Expr,
+    into: Slot,
+}
+
+/// Reads every row of `range.table` whose key falls in `[range.start,
+/// range.end]`, binding the matched sequence, in key order, to
+/// `range.into` (`Effect::ReadRange`).
+///
+/// Aborts with [`AbortReason::BoundExceeded`] if more rows match than
+/// `range.bound` resolves to, without binding `range.into` at all —
+/// bounded iteration never runs open-ended (`docs/concept.md` §2.1, §2.2
+/// D6).
+fn apply_read_range(
+    range: RangeRead,
+    ctx: &CallContext,
+    store: &Store,
+    bindings: &mut HashMap<Slot, Binding>,
+    access_log: &mut Vec<AccessLogEntry>,
+) -> Option<Outcome> {
+    let start = match resolve_or_abort(range.start, ctx, bindings) {
+        Ok(start) => start,
+        Err(outcome) => return Some(outcome),
+    };
+    let end = match resolve_or_abort(range.end, ctx, bindings) {
+        Ok(end) => end,
+        Err(outcome) => return Some(outcome),
+    };
+    let bound = match resolve_or_abort(range.bound, ctx, bindings) {
+        Ok(bound) => as_integer(bound),
+        Err(outcome) => return Some(outcome),
+    };
+    access_log.push(AccessLogEntry {
+        table: range.table.clone(),
+        kind: AccessKind::RangeRead,
+        target: AccessTarget::Range {
+            start: start.clone(),
+            end: end.clone(),
+        },
+        columns: AccessedColumns::EntireRow,
+    });
+    let rows = store.rows_in_range(range.table, &start, &end);
+    if rows.len() as i64 > bound {
+        return Some(Outcome::Aborted {
+            reason: AbortReason::BoundExceeded {
+                table: range.table.clone(),
+                bound,
+                matched: rows.len(),
+            },
+        });
+    }
+    bindings.insert(range.into, Binding::Range(rows));
     None
 }
 
@@ -245,17 +407,17 @@ fn apply_insert(
     columns: &BTreeMap<ColumnName, Expr>,
     ctx: &CallContext,
     store: &mut Store,
-    reads: &HashMap<Slot, Option<Row>>,
+    bindings: &HashMap<Slot, Binding>,
     access_log: &mut Vec<AccessLogEntry>,
 ) -> Option<Outcome> {
-    let key = match resolve_key(key, ctx, reads) {
+    let key = match resolve_or_abort(key, ctx, bindings) {
         Ok(key) => key,
         Err(outcome) => return Some(outcome),
     };
     access_log.push(AccessLogEntry {
         table: table.clone(),
         kind: AccessKind::Insert,
-        key: key.clone(),
+        target: AccessTarget::Point(key.clone()),
         columns: AccessedColumns::Named(columns.keys().cloned().collect()),
     });
     if store.row(table, &key).is_some() {
@@ -266,7 +428,7 @@ fn apply_insert(
             },
         });
     }
-    let resolved_columns = match resolve_write_columns(table, &key, columns, ctx, reads) {
+    let resolved_columns = match resolve_write_columns(table, &key, columns, ctx, bindings) {
         Ok(resolved) => resolved,
         Err(outcome) => return Some(outcome),
     };
@@ -288,17 +450,17 @@ fn apply_update(
     columns: &BTreeMap<ColumnName, Expr>,
     ctx: &CallContext,
     store: &mut Store,
-    reads: &HashMap<Slot, Option<Row>>,
+    bindings: &HashMap<Slot, Binding>,
     access_log: &mut Vec<AccessLogEntry>,
 ) -> Option<Outcome> {
-    let key = match resolve_key(key, ctx, reads) {
+    let key = match resolve_or_abort(key, ctx, bindings) {
         Ok(key) => key,
         Err(outcome) => return Some(outcome),
     };
     access_log.push(AccessLogEntry {
         table: table.clone(),
         kind: AccessKind::Update,
-        key: key.clone(),
+        target: AccessTarget::Point(key.clone()),
         columns: AccessedColumns::Named(columns.keys().cloned().collect()),
     });
     let Some(mut row) = store.row(table, &key).cloned() else {
@@ -309,7 +471,7 @@ fn apply_update(
             },
         });
     };
-    let resolved_columns = match resolve_write_columns(table, &key, columns, ctx, reads) {
+    let resolved_columns = match resolve_write_columns(table, &key, columns, ctx, bindings) {
         Ok(resolved) => resolved,
         Err(outcome) => return Some(outcome),
     };
@@ -325,17 +487,17 @@ fn apply_delete(
     key: &Expr,
     ctx: &CallContext,
     store: &mut Store,
-    reads: &HashMap<Slot, Option<Row>>,
+    bindings: &HashMap<Slot, Binding>,
     access_log: &mut Vec<AccessLogEntry>,
 ) -> Option<Outcome> {
-    let key = match resolve_key(key, ctx, reads) {
+    let key = match resolve_or_abort(key, ctx, bindings) {
         Ok(key) => key,
         Err(outcome) => return Some(outcome),
     };
     access_log.push(AccessLogEntry {
         table: table.clone(),
         kind: AccessKind::Delete,
-        key: key.clone(),
+        target: AccessTarget::Point(key.clone()),
         columns: AccessedColumns::EntireRow,
     });
     if store.row(table, &key).is_none() {
@@ -363,23 +525,24 @@ fn resolve_write_columns(
     key: &Value,
     columns: &BTreeMap<ColumnName, Expr>,
     ctx: &CallContext,
-    reads: &HashMap<Slot, Option<Row>>,
+    bindings: &HashMap<Slot, Binding>,
 ) -> Result<BTreeMap<ColumnName, Value>, Outcome> {
     let mut resolved = BTreeMap::new();
     for (column, expr) in columns {
         let declared = ctx.schema.column(table, column);
-        let value = resolve_for_write(expr, ctx, reads, declared).map_err(|error| match error {
-            WriteOverflow::Arithmetic => Outcome::Aborted {
-                reason: AbortReason::Overflow(OverflowReason::Arithmetic),
-            },
-            WriteOverflow::Width => Outcome::Aborted {
-                reason: AbortReason::Overflow(OverflowReason::Width {
-                    table: table.clone(),
-                    column: column.clone(),
-                    key: key.clone(),
-                }),
-            },
-        })?;
+        let value =
+            resolve_for_write(expr, ctx, bindings, declared).map_err(|error| match error {
+                WriteOverflow::Arithmetic => Outcome::Aborted {
+                    reason: AbortReason::Overflow(OverflowReason::Arithmetic),
+                },
+                WriteOverflow::Width => Outcome::Aborted {
+                    reason: AbortReason::Overflow(OverflowReason::Width {
+                        table: table.clone(),
+                        column: column.clone(),
+                        key: key.clone(),
+                    }),
+                },
+            })?;
         resolved.insert(column.clone(), value);
     }
     Ok(resolved)
@@ -392,11 +555,11 @@ fn execute_terminal(
     terminal: &Terminal,
     ctx: &CallContext,
     store: &mut Store,
-    reads: &mut HashMap<Slot, Option<Row>>,
+    bindings: &mut HashMap<Slot, Binding>,
     access_log: &mut Vec<AccessLogEntry>,
 ) -> Outcome {
     match terminal {
-        Terminal::Return(expr) => match resolve(expr, ctx, reads) {
+        Terminal::Return(expr) => match resolve(expr, ctx, bindings) {
             Ok(response) => Outcome::Committed { response },
             Err(reason) => Outcome::Aborted {
                 reason: AbortReason::Overflow(reason),
@@ -411,15 +574,15 @@ fn execute_terminal(
             when_absent,
         } => {
             let present = match condition {
-                Condition::RowPresent(slot) => reads
+                Condition::RowPresent(slot) => bindings
                     .get(slot)
                     .unwrap_or_else(|| {
                         panic!("branch condition reads slot {slot:?} before any read bound it")
                     })
-                    .is_some(),
+                    .is_present(),
             };
             let block = if present { when_present } else { when_absent };
-            execute_block(block, ctx, store, reads, access_log)
+            execute_block(block, ctx, store, bindings, access_log)
         }
     }
 }
@@ -437,7 +600,7 @@ fn execute_terminal(
 fn resolve(
     expr: &Expr,
     ctx: &CallContext,
-    reads: &HashMap<Slot, Option<Row>>,
+    bindings: &HashMap<Slot, Binding>,
 ) -> Result<Value, OverflowReason> {
     match expr {
         Expr::Literal(value) => Ok(value.clone()),
@@ -445,24 +608,35 @@ fn resolve(
             let index = ctx
                 .parameters
                 .iter()
-                .position(|parameter| parameter == name)
+                .position(|parameter| &parameter.name == name)
                 .unwrap_or_else(|| panic!("function has no declared parameter named {name:?}"));
             Ok(ctx.args[index].clone())
         }
-        Expr::Projection { slot, column } => Ok(reads
-            .get(slot)
-            .unwrap_or_else(|| panic!("projection reads slot {slot:?} before any read bound it"))
-            .as_ref()
-            .unwrap_or_else(|| {
-                panic!("projection reads column {column:?} from slot {slot:?}, whose read found no row")
-            })
-            .columns
-            .get(column)
-            .unwrap_or_else(|| panic!("row bound to slot {slot:?} has no column named {column:?}"))
-            .clone()),
+        Expr::Projection { slot, column } => {
+            let binding = bindings.get(slot).unwrap_or_else(|| {
+                panic!("projection reads slot {slot:?} before any read bound it")
+            });
+            let row = match binding {
+                Binding::Row(row) => row.as_ref().unwrap_or_else(|| {
+                    panic!(
+                        "projection reads column {column:?} from slot {slot:?}, whose read found no row"
+                    )
+                }),
+                Binding::Range(_) => panic!(
+                    "projection reads column {column:?} from slot {slot:?}, which a range read bound to a sequence of rows, not one row"
+                ),
+            };
+            Ok(row
+                .columns
+                .get(column)
+                .unwrap_or_else(|| {
+                    panic!("row bound to slot {slot:?} has no column named {column:?}")
+                })
+                .clone())
+        }
         Expr::Arithmetic(op, lhs, rhs) => {
-            let lhs = as_integer(resolve(lhs, ctx, reads)?);
-            let rhs = as_integer(resolve(rhs, ctx, reads)?);
+            let lhs = as_integer(resolve(lhs, ctx, bindings)?);
+            let rhs = as_integer(resolve(rhs, ctx, bindings)?);
             let result = checked_apply(*op, lhs, rhs).ok_or(OverflowReason::Arithmetic)?;
             Ok(Value::Integer(result))
         }
@@ -495,10 +669,10 @@ enum WriteOverflow {
 fn resolve_for_write(
     expr: &Expr,
     ctx: &CallContext,
-    reads: &HashMap<Slot, Option<Row>>,
+    bindings: &HashMap<Slot, Binding>,
     declared_column: Option<&Column>,
 ) -> Result<Value, WriteOverflow> {
-    let value = resolve(expr, ctx, reads).map_err(|_| WriteOverflow::Arithmetic)?;
+    let value = resolve(expr, ctx, bindings).map_err(|_| WriteOverflow::Arithmetic)?;
     let Some(column) = declared_column else {
         return Ok(value);
     };

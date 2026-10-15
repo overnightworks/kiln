@@ -5,9 +5,13 @@
 //! state to represent.
 //!
 //! This slice covers key read, insert, update, delete, branch, abort,
-//! response, checked arithmetic and clamping domains (D3). Range read,
-//! dependent read, bounded iteration and constraint nodes (`docs/concept.md`
-//! §2.1) belong to later slices and have no types here yet.
+//! response, checked arithmetic, clamping domains (D3), range read, bounded
+//! iteration, dependent read and typed function parameters. A dependent read
+//! has no type of its own: it is an [`Effect::Read`] whose `key` is an
+//! [`Expr::Projection`] into a row an earlier read bound, so "which row to
+//! read next" is itself a value the call computed, not a literal or
+//! argument. Constraint nodes (`docs/concept.md` §2.1) belong to a later
+//! slice and have no types here yet.
 
 use std::collections::BTreeMap;
 
@@ -183,10 +187,15 @@ pub enum ArithmeticOp {
 /// arguments, a constant written into the program, a column projected from
 /// an earlier read's row, or an arithmetic operation over two such values.
 ///
-/// [`Expr::Projection`] is a limited dependent read: it projects a column
-/// out of a row an earlier [`Effect::Read`] already bound to a [`Slot`] in
-/// this same call, but it cannot itself choose *which* row to read next
-/// from a projected value — that full dependent read is a later slice.
+/// [`Expr::Projection`] projects a column out of a row an earlier
+/// [`Effect::Read`] already bound to a [`Slot`] in this same call. Used as
+/// another [`Effect::Read`]'s `key`, it makes that read a dependent read:
+/// which row to read next is itself a value the call computed, not a
+/// literal or argument (`docs/concept.md` §2.1, §2.2 D6). A projection out
+/// of a [`Slot`] a range read bound has no single row to read, so it is
+/// rejected the same way a projection out of an absent row is — a contract
+/// violation by whatever built the expression, not a semantic outcome `run`
+/// reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Literal(Value),
@@ -197,8 +206,12 @@ pub enum Expr {
 
 /// A condition a [`Terminal::Branch`] decides on.
 ///
-/// This slice's only branchable fact is whether a prior read found a row —
-/// "an absent key is a branchable value" (`docs/concept.md` §2.2).
+/// `RowPresent` tests one fact for either read kind that can bind a
+/// [`Slot`]: a point read (`docs/concept.md` §2.2 D6, "an absent key is a
+/// branchable value") is present when it found a row, and a range read
+/// (§2.2 D6, "an empty range reads as an empty sequence") is present when
+/// its matched sequence is non-empty — the same branchable-absence fact
+/// under one name, since both ultimately ask "did this read find anything".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Condition {
     RowPresent(Slot),
@@ -230,6 +243,22 @@ pub enum Effect {
     },
     /// Remove a row. Aborts if no row exists at `key`.
     Delete { table: TableName, key: Expr },
+    /// Read every row whose key falls in `[start, end]`, in key order,
+    /// binding the matched sequence to `into` — empty if `start` sorts
+    /// after `end` or no row's key falls between them (`docs/concept.md`
+    /// §2.2 D6, "an empty range reads as an empty sequence").
+    ///
+    /// Always bounded (§2.1, "never an open-ended loop"): if more rows
+    /// match than `bound` resolves to, the call aborts with
+    /// [`AbortReason::BoundExceeded`](crate::evaluator::AbortReason::BoundExceeded)
+    /// instead of binding `into` at all.
+    ReadRange {
+        table: TableName,
+        start: Expr,
+        end: Expr,
+        bound: Expr,
+        into: Slot,
+    },
 }
 
 /// How a block of [`Effect`]s ends: every path through a function's body
@@ -258,11 +287,31 @@ pub struct Block {
     pub terminal: Terminal,
 }
 
+/// A function's declared parameter: its name and, if declared, its integer
+/// width.
+///
+/// An argument bound to `name` is checked against `width` exactly as a
+/// write is checked against its target column's declared width (D3,
+/// `docs/concept.md` §2.2: "Arithmetic runs over checked integers at the
+/// column's or argument's declared width"). `width` is `None` for a
+/// parameter whose declared type is not yet representable here — text
+/// arrives with columns in a later slice (D3: "Text-typed column
+/// declarations arrive with slice 4") — exactly as an undeclared
+/// [`Column`] carries no width either; such a parameter's argument resolves
+/// unchecked. Unlike `Column`, a declared parameter carries no clamping
+/// domain: D3 clamps a column's own write, never a call's argument, so an
+/// out-of-width argument always aborts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Parameter {
+    pub name: ParameterName,
+    pub width: Option<IntegerWidth>,
+}
+
 /// A named transaction function: its parameters and its body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
     pub name: FunctionName,
-    pub parameters: Vec<ParameterName>,
+    pub parameters: Vec<Parameter>,
     pub body: Block,
 }
 

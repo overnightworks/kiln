@@ -9,13 +9,13 @@
 mod support;
 
 use kiln_ir::{
-    AbortReason, AccessKind, AccessedColumns, Condition, Effect, Expr, Outcome, Row, Slot, Store,
-    Terminal, Value,
+    AbortReason, AccessKind, AccessTarget, AccessedColumns, Condition, Effect, Expr, Outcome, Row,
+    Slot, Store, Terminal, Value,
 };
 use proptest::prelude::*;
 use support::{
     arbitrary_value, call_under_test, column, columns_of, columns_of_values, committed_response,
-    parameter, run_ok, single_function_program, table,
+    parameter, run_ok, single_function_program, table, untyped_parameter,
 };
 
 // --- an absent key is a branchable value (docs/concept.md §2.2) ---
@@ -113,7 +113,7 @@ proptest! {
         )]);
 
         let program = single_function_program(
-            vec![parameter("arg")],
+            vec![untyped_parameter("arg")],
             vec![Effect::Insert {
                 table: table("t"),
                 key: Expr::Literal(key.clone()),
@@ -257,13 +257,19 @@ proptest! {
         prop_assert_eq!(execution.access_log.len(), 2);
         prop_assert_eq!(execution.access_log[0].table.clone(), table("t"));
         prop_assert_eq!(execution.access_log[0].kind.clone(), AccessKind::Insert);
-        prop_assert_eq!(execution.access_log[0].key.clone(), inserted_key);
+        prop_assert_eq!(
+            execution.access_log[0].target.clone(),
+            AccessTarget::Point(inserted_key)
+        );
         prop_assert_eq!(
             execution.access_log[0].columns.clone(),
             AccessedColumns::Named(vec![column("c")])
         );
         prop_assert_eq!(execution.access_log[1].kind.clone(), AccessKind::Update);
-        prop_assert_eq!(execution.access_log[1].key.clone(), missing_key);
+        prop_assert_eq!(
+            execution.access_log[1].target.clone(),
+            AccessTarget::Point(missing_key)
+        );
         // The whole call aborted, so the insert the log remembers never actually happened.
         prop_assert_eq!(&execution.store, &store);
     }
@@ -348,7 +354,7 @@ fn access_log_entry_is_complete_for_every_access_kind() {
         let entry = &execution.access_log[0];
         assert_eq!(entry.table, table("t"), "case {case:?}");
         assert_eq!(entry.kind, expected_kind, "case {case:?}");
-        assert_eq!(entry.key, key, "case {case:?}");
+        assert_eq!(entry.target, AccessTarget::Point(key), "case {case:?}");
         assert_eq!(entry.columns, expected_columns, "case {case:?}");
     }
 }

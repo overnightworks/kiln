@@ -8,12 +8,13 @@
 mod support;
 
 use kiln_ir::{
-    AbortReason, ArithmeticOp, ClampDomain, Column, Effect, Expr, IntegerWidth, Outcome,
-    OverflowReason, Row, Store, Terminal, Value,
+    AbortReason, AccessTarget, ArithmeticOp, ClampDomain, Column, Effect, Expr, IntegerWidth,
+    Outcome, OverflowReason, Row, Store, Terminal, Value,
 };
 use proptest::prelude::*;
 use support::{
-    call_under_test, column, columns_of, program_with_column, run_ok, run_write, table, WriteVia,
+    call_under_test, column, columns_of, program_with_column, run_ok, run_write, table,
+    untyped_parameter, WriteVia,
 };
 
 fn add(lhs: i64, rhs: i64) -> Expr {
@@ -186,8 +187,14 @@ fn overflow_abort_discards_every_effect_and_retains_every_attempted_access() {
     // Both attempted inserts are still in the access log — an abort keeps every access it
     // attempted, not only the one that triggered it (D5).
     assert_eq!(execution.access_log.len(), 2);
-    assert_eq!(execution.access_log[0].key, Value::Integer(1));
-    assert_eq!(execution.access_log[1].key, Value::Integer(2));
+    assert_eq!(
+        execution.access_log[0].target,
+        AccessTarget::Point(Value::Integer(1))
+    );
+    assert_eq!(
+        execution.access_log[1].target,
+        AccessTarget::Point(Value::Integer(2))
+    );
 }
 
 // --- D3: arithmetic overflowing i64 in a response, outside any column write, aborts with a
@@ -357,7 +364,7 @@ fn arithmetic_can_use_a_value_projected_from_an_earlier_read() {
     };
     let program = program_with_column(
         declared_column,
-        vec![support::parameter("amount")],
+        vec![untyped_parameter("amount")],
         vec![
             Effect::Read {
                 table: table("t"),
