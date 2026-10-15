@@ -81,10 +81,9 @@ step, atomically with the compatibility check against every live holder
 and the escrow admission check. This is the model's abstraction of §4's
 atomic-at-dispatch registration: a keyed resource is registered
 "atomically at dispatch, held through commit", and a covering resource is
-acquired "before any read or write touches the underlying state". §4's
-canonical order is how an implementation acquires the same set piece by
-piece; the step abstracts that sequence, so the model never holds a
-partial footprint. The transaction is then `active` and `DoOp` executes
+acquired "before any read or write touches the underlying state". An
+implementation may acquire the same set piece by piece; the step abstracts
+that sequence, so the model never holds a partial footprint. The transaction is then `active` and `DoOp` executes
 its program in order on its view — committed rows overlaid with its own
 tentative writes and draws — acquiring nothing more and waiting for
 nothing (§4, rule 1: an admitted transaction never waits again). A
@@ -167,6 +166,31 @@ over the static footprint, credited a transaction with a pin it never
 held and admitted a deadlock. The `PerOperationAcquisition` mutant
 reintroduces that registration; TLC refutes it on all four.
 
+**Widen-and-restart (§4, "lock expansion restarts safely", #46).**
+`Follow(k)` reads row `k` and the row its `val` names, so the second
+resource is decided by data. `Footprint(t)` guesses it from `InitDb`;
+`widened[t]` holds what earlier attempts found missing, and admission
+requests `Requested(t) = Footprint(t) \cup widened[t]`. `DoOp` runs only
+when `Covered(t)`: the held footprint contains `Need(NextOp(t), View(t))`.
+Otherwise `WidenAndRestart(t)` is the only step of the running transaction:
+
+```
+WidenAndRestart(t) ==
+  /\ Running(t) /\ ~Covered(t)
+  /\ widened' = [widened EXCEPT ![t] = @ \cup Need(NextOp(t), View(t))]
+  /\ status' = pending, seq' = 1 + (number of queued), pc' = 0, resp' = <<>>
+  /\ held', reserved', wr', draws' = nothing; db unchanged
+```
+
+The call holds nothing afterwards and joins the admission queue at its
+tail, so queue order, conflicts and escrow reservations apply to it as to
+any request. Its `resp` is cleared, so the response it finally gives is
+the one of its last attempt, which `Serializable` checks exactly. Every
+restart adds a resource not yet requested (the held footprint contains
+`widened`), a subset of a finite set, so restarts are finite; the step is
+weakly fair like the others. `FootprintCovers` now exempts `Follow`
+only. `Rearrive` clears `widened`.
+
 **Serializability, checked for real.** `Serializable`: for the transactions
 that have ended (committed or rejected), some permutation, executed
 serially from `InitDb` with the same `ApplyOp`, returns exactly the
@@ -205,7 +229,8 @@ every transaction has ended).
 Fairness` with
 
 ```
-Fairness == \A t \in Txns : WF_Vars(Acquire(t)) /\ WF_Vars(DoOp(t)) /\ WF_Vars(Commit(t))
+Fairness == \A t \in Txns : WF_Vars(Acquire(t)) /\ WF_Vars(DoOp(t))
+                      /\ WF_Vars(WidenAndRestart(t)) /\ WF_Vars(Commit(t))
 ```
 
 A step of a transaction that stays enabled is eventually taken: admission,
@@ -242,9 +267,9 @@ below are from the rerun.
 
 **Bounds.** 2-3 transactions with programs of 1-2 operations, 1-3 keys,
 fixed programs per scenario; `Starvation` repeats its three single-operation programs without bound. The footprint is acquired as one step; the
-canonical order in which an implementation acquires it piecewise, and §4's
-restart of a class-4 call whose covering resource must widen
-mid-execution, are not modelled. Not covered: longer programs, more than
+order in which an implementation acquires it piecewise is not modelled.
+Widening is modelled for one data-dependent read (`Follow`), not for a
+widened range or table resource. Not covered: longer programs, more than
 one table, crash and recovery. Liveness is checked only for the
 fair steps above, on scenarios of 2-3 transactions; it makes no claim
 beyond those bounds.
@@ -285,6 +310,10 @@ Depth is the length of the longest shortest path (breadth-first).
 | `MixedModes` | quota 1; t1: `Update(1,0,2)`, `Buy(1,1)`; t2: `Buy(1,1)`, `Update(1,5,0)` — `X` and `DRAW` on one key in each footprint; the `X` locks serialize them; after t2 commits, t1 is capped at 0 and draws from the balance its own update raised | 29 | 11 | `MixedModes.tlc.log` |
 | `UnknownBudget` | quota 2, row 2 with `val` 1; t1: `BuyVal(1,2)`; t2: `Buy(1,1)`; t3: `Update(2,3,0)` — an unknown budget reserves the whole balance; the draw amount t3 raises fails on committed state | 112 | 13 | `UnknownBudget.tlc.log` |
 | `Starvation` | t1, t2, t3: `Update(1,0,0)` each, requested again after finishing (`RepeatSpec`, no `Serializable`) — three transactions contend for one `X` lock forever; dispatch order keeps every request from being overtaken | 98 | 13 | `Starvation.tlc.log` |
+| `Widen` | key 1 points at 2; t1: `Follow(1)`; t2: `Update(1,3,0)`; t3: `Update(3,9,0)` — t1's guessed footprint is `S 1, S 2`; if t2 commits first t1 needs `S 3`, restarts, and waits for t3 if t3 holds key 3 | 135 | 15 | `Widen.tlc.log` |
+| `WidenQueue` | the same pointer; t1: `Follow(1)`; t2: `Update(1,3,0)`; t3: `Update(2,5,0)` — t3 queues behind t1; when t1 restarts it re-enters behind t3 and t3 is admitted first | 129 | 15 | `WidenQueue.tlc.log` |
+| `WidenCycle` | no pointers; t1: `Update(2,1,0)`, `Follow(2)`; t2: `Update(1,2,0)`, `Follow(1)` — each discovers the key the other holds from a pointer it just wrote; restarting discards the pointer and the two serialize | 65 | 17 | `WidenCycle.tlc.log` |
+| `WidenEscrow` | quota 1; key 3 has no pointer; t1: `Buy(1,1)`, `Follow(3)`; t2: `Update(3,2,0)`; t3: `Buy(1,1)` — if t2 commits first, t1 has reserved and drawn the ticket when its follow needs `S 2`; the restart discards both, t3 (waiting on the reservation) takes the ticket and t1's buy then fails on committed state | 130 | 16 | `WidenEscrow.tlc.log` |
 
 **Reachability witnesses.** Each scenario names negated state predicates
 (`*Unreached`); TLC's counterexample is the proof that the scenario's
@@ -322,6 +351,12 @@ assert membership.
 | `MixedModesRaisedUnreached` | t1 drew one against a reservation of 0 under its X lock | 10 |
 | `UnknownBudgetUnboundedUnreached` | t1 holds the whole balance under an unknown budget; t2 waits on it | 4 |
 | `StarvationQueuedBehindUnreached` | t1 holds the key; t2 and t3 are queued behind it, t2 first | 5 |
+| `WidenRestartedUnreached` | t2 committed the repointing; t1 restarted with a widened footprint and holds `S 3` | 9 |
+| `WidenConflictUnreached` | t1 restarted and is queued waiting on t3, which is active and holds `X 3` | 10 |
+| `WidenQueueBehindUnreached` | t1 restarted and is queued behind t3, which was waiting on it | 9 |
+| `WidenCycleBothUnreached` | both calls widened and both ended | 17 |
+| `WidenEscrowDrawnUnreached` | t1 is about to restart with its whole balance reserved and drawn (reservation 1, draw 1) while t3 waits on that reservation | 9 |
+| `WidenEscrowDiscardedUnreached` | t1 restarted: it is queued and widened with reservation 0 and draw 0 | 9 |
 | `UnknownBudgetInsufficientUnreached` | after t3 raised the amount to 3, t1's draw failed on the committed balance 2 | 8 |
 
 ## Mutants (specs/kernel/mutants/)
@@ -357,6 +392,10 @@ lengths below are the states of the committed logs.
 | `DrawIgnoresReservation` | `AllowanceCycle` | `BalanceNonNegative` (quota −2) | 11 |
 | `BudgetUndercounts` — the budget is the largest single draw, not the total | `AllowanceCycle` | `Serializable` (t1 reserves 1 and is told `insufficient` on its second draw; no serial order rejects t1) | 5 |
 | `NoBypass` — a later request may overtake an older queued request on a shared resource (`OlderQueued` dropped from `WaitsOn`) | `Starvation` | `RequestedLeadsToTerminal` (liveness: a lasso in which t3 is admitted, commits and requests again forever while t1, queued first, is never admitted) | 8, loop back to 4 |
+| `WidenInPlace` — a call acquires the widened resource on top of its held footprint and waits for it instead of restarting | `WidenCycle` | `NoWaitCycle` (each holds `X` on the key the other's pointer names and waits for `S` on it) | 7 |
+| `WidenInPlace` | `WidenCycle` | TLC deadlock check | 7 |
+| `KeepTentativeOnRestart` — a restart keeps the tentative writes and draws | `WidenCycle` | `Serializable` (the re-run `Update` returns the call's own earlier write; no serial order yields it) | 9 |
+| `KeepTentativeOnRestart` | `WidenEscrow` | `Serializable` (the kept draw leaves the re-run `Buy` no balance in its new reservation: t1 is told `insufficient` while t3, which could have taken the ticket, has not run; no serial order of the ended calls yields it) | 11 |
 
 `TypeOK` has no mutant: it is a typing check with no protocol content.
 
