@@ -91,6 +91,12 @@ mod kiln_e1_18 {
             ONE_HOP
         );
     }
+
+    #[test]
+    fn the_primary_key_of_a_point_read_row_is_the_key_it_was_read_by() {
+        let body = returns(vec![read_order(), update("customers", key_of(0), &[])]);
+        assert_eq!(category_of(body), STATIC);
+    }
 }
 
 mod kiln_e1_19 {
@@ -154,6 +160,20 @@ mod kiln_e1_19 {
             returns(vec![read("customers", column_of(0, "note"), 1)]),
         );
         assert_eq!(category_of(body), None);
+    }
+
+    #[test]
+    fn of_equally_demanding_arms_the_first_names_the_cause() {
+        let arm = |column: &str| returns(vec![read("customers", column_of(0, column), 1)]);
+        let body = branch_on_presence(vec![read_order()], 0, arm("first"), arm("second"));
+        assert_unknown(
+            body,
+            UnknownCause::NoDeclaredForeignKey {
+                from: table("orders"),
+                column: kiln_ir::ColumnName("first".to_owned()),
+                to: table("customers"),
+            },
+        );
     }
 
     #[test]
@@ -436,6 +456,18 @@ mod kiln_e1_25 {
     }
 
     #[test]
+    fn a_read_depending_only_on_a_covered_range_is_no_chain() {
+        let body = returns(vec![
+            read_range("orders", param("low"), param("high"), 0),
+            iterate(0, 1, vec![read("orders", key_of(1), 2)]),
+            read("customers", column_of(2, "customer_id"), 3),
+            read("orders", param("other_order_id"), 4),
+            read("products", column_of(4, "product_id"), 5),
+        ]);
+        assert_unknown(body, UnknownCause::IndependentResolutions { count: 2 });
+    }
+
+    #[test]
     fn a_chain_of_resolving_reads_is_named_a_chain() {
         let body = returns(vec![
             read_order(),
@@ -525,6 +557,27 @@ mod kiln_e1_26 {
     }
 
     #[test]
+    fn a_range_with_different_leading_arguments_pins_no_partition() {
+        let body = returns(vec![
+            read_index(
+                "customers_by_tenant",
+                vec![param("tenant_low"), literal(0)],
+                vec![param("tenant_high"), literal(9)],
+                0,
+            ),
+            iterate(
+                0,
+                1,
+                vec![
+                    orders_of_customer_in("tenant_low"),
+                    iterate(2, 3, vec![update("orders", key_of(3), &[])]),
+                ],
+            ),
+        ]);
+        assert_unknown(body, UnknownCause::ChainedResolutions { count: 2 });
+    }
+
+    #[test]
     fn a_chain_leaving_the_partition_through_foreign_keys_is_unknown() {
         let body = returns(vec![
             read_index(
@@ -608,6 +661,17 @@ mod kiln_e1_27 {
                 at: "f/body/effects[0]".to_owned()
             })
         );
+    }
+
+    #[test]
+    fn the_report_of_an_error_names_what_is_wrong() {
+        let message = ClassifyError::UnknownFunction(FunctionName("g".to_owned())).to_string();
+        assert!(message.contains('g'));
+        let unbound = ClassifyError::UnboundSlot {
+            slot: Slot(4),
+            at: "f/body/effects[0]".to_owned(),
+        };
+        assert!(unbound.to_string().contains("f/body/effects[0]"));
     }
 
     #[test]

@@ -71,7 +71,7 @@ impl Walker<'_> {
         match effect {
             Effect::Read { table, key, into } => {
                 let role = AccessRole::Lookup(table.clone());
-                let depends_on = self.keyed_access(facts, table, role, key, &node)?;
+                let depends_on = self.keyed_access(facts, role, key, &node)?;
                 let kind = BindingKind::PointRead {
                     table: table.clone(),
                     key: key.clone(),
@@ -86,11 +86,11 @@ impl Walker<'_> {
                 );
             }
             Effect::Insert { table, key, .. } => {
-                self.keyed_access(facts, table, AccessRole::InsertKey, key, &node)?;
+                self.keyed_access(facts, AccessRole::InsertKey, key, &node)?;
             }
             Effect::Update { table, key, .. } | Effect::Delete { table, key } => {
                 let role = AccessRole::Lookup(table.clone());
-                self.keyed_access(facts, table, role, key, &node)?;
+                self.keyed_access(facts, role, key, &node)?;
             }
             Effect::ReadRange {
                 table,
@@ -156,12 +156,11 @@ impl Walker<'_> {
     fn keyed_access(
         &self,
         facts: &mut PathFacts,
-        table: &TableName,
         role: AccessRole,
         key: &Expr,
         node: &NodePath,
     ) -> Result<Vec<kiln_ir::Slot>, ClassifyError> {
-        let confinement = confinement_of_key(facts, table, key, node)?;
+        let confinement = confinement_of_key(facts, key, node)?;
         let origins = track_access(facts, self.schema, &role, [key], node)?;
         facts.record_access(node, confinement);
         Ok(origins)
@@ -188,9 +187,10 @@ fn confinement_of_range(kind: &BindingKind) -> Confinement {
     }
 }
 
+/// A key of another table than the index's is an obstacle, so it needs no
+/// check here.
 fn confinement_of_key(
     facts: &PathFacts,
-    table: &TableName,
     key: &Expr,
     at: &NodePath,
 ) -> Result<Confinement, ClassifyError> {
@@ -200,9 +200,9 @@ fn confinement_of_key(
             let origin = facts.origin(*slot, at)?;
             Ok(match facts.binding(origin).map(|binding| &binding.kind) {
                 Some(BindingKind::IndexRange {
-                    table: indexed,
                     partition: Some(parameter),
-                }) if indexed == table => Confinement::Partition(parameter.clone()),
+                    ..
+                }) => Confinement::Partition(parameter.clone()),
                 _ => Confinement::Outside,
             })
         }
