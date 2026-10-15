@@ -176,7 +176,7 @@ mod kiln_e1_36 {
         }
     }
 
-    fn contents_survive_a_rejected_alias(alias: impl FnOnce(&PathBuf, &PathBuf)) {
+    fn rejected_alias_output(alias: impl FnOnce(&PathBuf, &PathBuf)) -> (PathBuf, PathBuf) {
         let name = format!("alias-{}", std::thread::current().name().unwrap());
         let out = scratch_file(&format!("{name}-gating"));
         let sensitivity = scratch_file(&format!("{name}-sensitivity"));
@@ -192,22 +192,26 @@ mod kiln_e1_36 {
         ]);
 
         assert!(!output.status.success());
-        assert!(!out.exists() || fs::read_to_string(&out).unwrap() == "kept\n");
-        assert!(fs::read_to_string(&sensitivity).map_or(true, |text| text == "kept\n"));
+        (out, sensitivity)
     }
 
     #[test]
     fn a_dangling_symlink_to_the_other_destination_is_rejected_and_nothing_is_written() {
-        contents_survive_a_rejected_alias(|out, sensitivity| {
+        let (out, _) = rejected_alias_output(|out, sensitivity| {
             std::os::unix::fs::symlink(out, sensitivity).unwrap();
         });
+
+        assert!(!out.exists());
     }
 
     #[test]
     fn a_hard_link_to_the_other_destination_is_rejected_and_keeps_its_contents() {
-        contents_survive_a_rejected_alias(|out, sensitivity| {
+        let (out, sensitivity) = rejected_alias_output(|out, sensitivity| {
             fs::write(out, "kept\n").unwrap();
             fs::hard_link(out, sensitivity).unwrap();
         });
+
+        assert_eq!(fs::read_to_string(out).unwrap(), "kept\n");
+        assert_eq!(fs::read_to_string(sensitivity).unwrap(), "kept\n");
     }
 }
