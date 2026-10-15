@@ -3,6 +3,10 @@
 //! `tests/arithmetic.rs` so neither file approaches the repository's size
 //! ratchet. `tests/arithmetic.rs` covers D3's ordinary overflow, width, and
 //! clamp behaviour instead.
+#![allow(
+    non_snake_case,
+    reason = "test names claim a criterion as kiln_ir_nn__name (specs/kiln-ir.spec.md)"
+)]
 
 mod support;
 
@@ -176,7 +180,7 @@ fn boundary_cases() -> Vec<BoundaryCase> {
 }
 
 #[test]
-fn width_boundaries_are_enforced_for_add_and_subtract_via_insert_and_update() {
+fn kiln_ir_23__width_boundaries_are_enforced_for_add_and_subtract_via_insert_and_update() {
     for case in boundary_cases() {
         for via in [WriteVia::Insert, WriteVia::Update] {
             let declared_column = Column {
@@ -260,7 +264,7 @@ fn schema_with_domain(width: IntegerWidth, domain: ClampDomain) -> kiln_ir::Sche
 }
 
 #[test]
-fn a_domain_reaching_outside_its_columns_width_is_rejected() {
+fn kiln_ir_02__a_domain_reaching_outside_its_columns_width_is_rejected() {
     let schema = schema_with_domain(IntegerWidth::I8, ClampDomain { min: 0, max: 1000 });
 
     assert_eq!(
@@ -273,7 +277,7 @@ fn a_domain_reaching_outside_its_columns_width_is_rejected() {
 }
 
 #[test]
-fn a_domain_with_reversed_bounds_is_rejected() {
+fn kiln_ir_01__a_domain_with_reversed_bounds_is_rejected() {
     let schema = schema_with_domain(IntegerWidth::I32, ClampDomain { min: 100, max: 0 });
 
     assert_eq!(
@@ -291,14 +295,14 @@ fn a_domain_with_reversed_bounds_is_rejected() {
 // not only when they are far outside it ---
 
 #[test]
-fn a_domain_whose_min_equals_its_max_is_accepted() {
+fn kiln_ir_01__a_domain_whose_min_equals_its_max_is_accepted() {
     let schema = schema_with_domain(IntegerWidth::I32, ClampDomain { min: 50, max: 50 });
 
     assert_eq!(schema.validate(), Ok(()));
 }
 
 #[test]
-fn a_domain_exactly_at_its_columns_width_bounds_is_accepted() {
+fn kiln_ir_02__a_domain_exactly_at_its_columns_width_bounds_is_accepted() {
     let (width_min, width_max) = IntegerWidth::I8.range();
     let schema = schema_with_domain(
         IntegerWidth::I8,
@@ -312,7 +316,7 @@ fn a_domain_exactly_at_its_columns_width_bounds_is_accepted() {
 }
 
 #[test]
-fn a_domain_one_below_its_columns_width_minimum_is_rejected() {
+fn kiln_ir_02__a_domain_one_below_its_columns_width_minimum_is_rejected() {
     let (width_min, _) = IntegerWidth::I8.range();
     let schema = schema_with_domain(
         IntegerWidth::I8,
@@ -332,7 +336,7 @@ fn a_domain_one_below_its_columns_width_minimum_is_rejected() {
 }
 
 #[test]
-fn a_domain_one_above_its_columns_width_maximum_is_rejected() {
+fn kiln_ir_02__a_domain_one_above_its_columns_width_maximum_is_rejected() {
     let (_, width_max) = IntegerWidth::I8.range();
     let schema = schema_with_domain(
         IntegerWidth::I8,
@@ -352,7 +356,7 @@ fn a_domain_one_above_its_columns_width_maximum_is_rejected() {
 }
 
 #[test]
-fn run_rejects_an_invalid_schema_instead_of_panicking() {
+fn kiln_ir_03__run_rejects_an_invalid_schema_instead_of_panicking() {
     let schema = schema_with_domain(IntegerWidth::I8, ClampDomain { min: 0, max: 1000 });
     let program = kiln_ir::Program {
         schema,

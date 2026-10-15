@@ -5,6 +5,10 @@
 //! D3's checked arithmetic, width, and clamping-domain behaviour lives in
 //! `tests/arithmetic.rs` instead: this file covers everything else `run`
 //! does — key reads, writes, branching, aborts, and the access log.
+#![allow(
+    non_snake_case,
+    reason = "test names claim a criterion as kiln_ir_nn__name (specs/kiln-ir.spec.md)"
+)]
 
 mod support;
 
@@ -22,7 +26,7 @@ use support::{
 // is a typed abort, not a panic (finding 4) ---
 
 #[test]
-fn projecting_from_a_slot_whose_read_found_no_row_aborts_with_a_typed_reason() {
+fn kiln_ir_15__projecting_from_a_slot_whose_read_found_no_row_aborts_with_a_typed_reason() {
     let store = Store::empty();
     let program = single_function_program(
         vec![],
@@ -52,7 +56,7 @@ fn projecting_from_a_slot_whose_read_found_no_row_aborts_with_a_typed_reason() {
 // (finding 4) ---
 
 #[test]
-fn projecting_a_column_absent_from_the_bound_row_aborts_with_a_typed_reason() {
+fn kiln_ir_15__projecting_a_column_absent_from_the_bound_row_aborts_with_a_typed_reason() {
     let store = Store::containing([(table("t"), Value::Integer(1), Row::default())]);
     let program = single_function_program(
         vec![],
@@ -85,7 +89,7 @@ fn projecting_a_column_absent_from_the_bound_row_aborts_with_a_typed_reason() {
 // reason once the body actually resolves the missing one, instead of panicking (finding 4) ---
 
 #[test]
-fn resolving_a_parameter_with_no_matching_argument_aborts_with_a_typed_reason() {
+fn kiln_ir_06__resolving_a_parameter_with_no_matching_argument_aborts_with_a_typed_reason() {
     let store = Store::empty();
     let program = single_function_program(
         vec![typed_parameter("amount", kiln_ir::IntegerWidth::I8)],
@@ -110,7 +114,7 @@ fn resolving_a_parameter_with_no_matching_argument_aborts_with_a_typed_reason() 
 
 proptest! {
     #[test]
-    fn absent_key_is_branchable(
+    fn kiln_ir_08__absent_key_is_branchable(
         key in arbitrary_value(),
         row_present in any::<bool>(),
     ) {
@@ -153,7 +157,7 @@ enum WriteKind {
 
 proptest! {
     #[test]
-    fn write_to_absent_row_aborts(
+    fn kiln_ir_17__write_to_absent_row_aborts(
         key in arbitrary_value(),
         kind in prop_oneof![Just(WriteKind::Update), Just(WriteKind::Delete)],
     ) {
@@ -189,7 +193,7 @@ proptest! {
 
 proptest! {
     #[test]
-    fn inserting_existing_key_aborts(
+    fn kiln_ir_18__inserting_existing_key_aborts(
         key in arbitrary_value(),
         existing_value in arbitrary_value(),
         new_value in arbitrary_value(),
@@ -227,7 +231,7 @@ proptest! {
 
 proptest! {
     #[test]
-    fn effects_apply_in_order_and_reads_see_earlier_writes(
+    fn kiln_ir_07__effects_apply_in_order_and_reads_see_earlier_writes(
         key in arbitrary_value(),
         first_write in any::<i64>(),
     ) {
@@ -277,7 +281,7 @@ proptest! {
 
 proptest! {
     #[test]
-    fn abort_discards_all_effects(
+    fn kiln_ir_21__abort_discards_all_effects(
         key in arbitrary_value(),
         value in any::<i64>(),
     ) {
@@ -308,7 +312,7 @@ proptest! {
 
 proptest! {
     #[test]
-    fn access_log_records_every_attempt_including_the_one_that_aborts(
+    fn kiln_ir_34__access_log_records_every_attempt_including_the_one_that_aborts(
         inserted_key in arbitrary_value(),
         missing_key in arbitrary_value(),
         value in any::<i64>(),
@@ -374,7 +378,7 @@ enum AccessCase {
 }
 
 #[test]
-fn access_log_entry_is_complete_for_every_access_kind() {
+fn kiln_ir_35__access_log_entry_is_complete_for_every_access_kind() {
     for case in [
         AccessCase::PointRead,
         AccessCase::Insert,
@@ -450,7 +454,7 @@ fn access_log_entry_is_complete_for_every_access_kind() {
 // --- a successful delete removes the row (docs/concept.md §2.2, D6) ---
 
 #[test]
-fn successful_delete_removes_the_row() {
+fn kiln_ir_19__successful_delete_removes_the_row() {
     let key = Value::Integer(1);
     let store = Store::containing([(
         table("t"),
@@ -478,7 +482,7 @@ fn successful_delete_removes_the_row() {
 // --- an update overwrites only its named columns (docs/concept.md §2.2) ---
 
 #[test]
-fn update_preserves_untouched_columns() {
+fn kiln_ir_20__update_preserves_untouched_columns() {
     let key = Value::Integer(1);
     let store = Store::containing([(
         table("t"),

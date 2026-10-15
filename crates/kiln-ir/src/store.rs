@@ -83,13 +83,17 @@ impl Store {
 }
 
 #[cfg(test)]
+#[allow(
+    non_snake_case,
+    reason = "test names claim a criterion as kiln_ir_nn__name (specs/kiln-ir.spec.md)"
+)]
 mod tests {
     use super::*;
     use crate::identifiers::ColumnName;
     use proptest::prelude::*;
 
     #[test]
-    fn insert_then_delete_from_empty_store_equals_the_empty_store() {
+    fn kiln_ir_19__insert_then_delete_from_empty_store_equals_the_empty_store() {
         let table = TableName("t".to_owned());
         let key = Value::Integer(1);
         let mut store = Store::empty();
@@ -120,7 +124,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn rows_in_range_returns_every_matched_row_in_key_order(
+        fn kiln_ir_09__rows_in_range_returns_every_matched_row_in_key_order(
             keys in prop::collection::hash_set(any::<i64>(), 1..20),
         ) {
             let table = TableName("t".to_owned());
@@ -137,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn rows_in_range_includes_both_inclusive_bounds_and_excludes_rows_outside_them() {
+    fn kiln_ir_09__rows_in_range_includes_both_inclusive_bounds_and_excludes_rows_outside_them() {
         let table = TableName("t".to_owned());
         let store = Store::containing(
             [0, 5, 10, 15]
@@ -151,7 +155,7 @@ mod tests {
     }
 
     #[test]
-    fn rows_in_range_includes_the_single_row_when_start_equals_end() {
+    fn kiln_ir_09__rows_in_range_includes_the_single_row_when_start_equals_end() {
         let table = TableName("t".to_owned());
         let store = Store::containing([
             (table.clone(), Value::Integer(4), row_keyed(4)),
@@ -165,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn rows_in_range_is_empty_when_start_sorts_after_end() {
+    fn kiln_ir_10__rows_in_range_is_empty_when_start_sorts_after_end() {
         let table = TableName("t".to_owned());
         let store = Store::containing([(table.clone(), Value::Integer(5), Row::default())]);
 
@@ -175,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn rows_in_range_is_empty_for_a_table_with_no_rows() {
+    fn kiln_ir_10__rows_in_range_is_empty_for_a_table_with_no_rows() {
         let table = TableName("t".to_owned());
         let store = Store::empty();
 

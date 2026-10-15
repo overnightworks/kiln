@@ -4,6 +4,10 @@
 //! clamp domain's own validity live in `tests/arithmetic_boundaries.rs`
 //! instead, and every other behaviour of `kiln_ir::run` lives in
 //! `tests/evaluator.rs`.
+#![allow(
+    non_snake_case,
+    reason = "test names claim a criterion as kiln_ir_nn__name (specs/kiln-ir.spec.md)"
+)]
 
 mod support;
 
@@ -30,7 +34,7 @@ fn add(lhs: i64, rhs: i64) -> Expr {
 
 proptest! {
     #[test]
-    fn computed_value_outside_declared_width_aborts_without_a_domain(
+    fn kiln_ir_24__computed_value_outside_declared_width_aborts_without_a_domain(
         lhs in -128i64..=127i64,
         rhs in -128i64..=127i64,
     ) {
@@ -62,7 +66,7 @@ proptest! {
 }
 
 #[test]
-fn literal_write_outside_declared_width_aborts_without_a_domain() {
+fn kiln_ir_25__literal_write_outside_declared_width_aborts_without_a_domain() {
     let declared_column = Column {
         name: column("c"),
         width: IntegerWidth::I8,
@@ -89,7 +93,7 @@ fn literal_write_outside_declared_width_aborts_without_a_domain() {
 // write's one final value (docs/concept.md §2.2) ---
 
 #[test]
-fn nested_i64_overflow_aborts_even_when_the_target_column_clamps() {
+fn kiln_ir_26__nested_i64_overflow_aborts_even_when_the_target_column_clamps() {
     for via in [WriteVia::Insert, WriteVia::Update] {
         let declared_column = Column {
             name: column("c"),
@@ -121,7 +125,7 @@ fn nested_i64_overflow_aborts_even_when_the_target_column_clamps() {
 // final value returns inside it (docs/concept.md §2.2) ---
 
 #[test]
-fn a_nested_result_that_only_briefly_exceeds_the_width_still_commits() {
+fn kiln_ir_27__a_nested_result_that_only_briefly_exceeds_the_width_still_commits() {
     let declared_column = Column {
         name: column("c"),
         width: IntegerWidth::I8,
@@ -145,7 +149,7 @@ fn a_nested_result_that_only_briefly_exceeds_the_width_still_commits() {
 }
 
 #[test]
-fn overflow_abort_discards_every_effect_and_retains_every_attempted_access() {
+fn kiln_ir_29__overflow_abort_discards_every_effect_and_retains_every_attempted_access() {
     let declared_column = Column {
         name: column("c"),
         width: IntegerWidth::I8,
@@ -201,7 +205,7 @@ fn overflow_abort_discards_every_effect_and_retains_every_attempted_access() {
 // typed reason instead of panicking (docs/concept.md §2.2) ---
 
 #[test]
-fn response_arithmetic_overflow_aborts_with_a_typed_reason() {
+fn kiln_ir_28__response_arithmetic_overflow_aborts_with_a_typed_reason() {
     let program =
         support::single_function_program(vec![], vec![], Terminal::Return(add(i64::MAX, 1)));
     let store = Store::empty();
@@ -223,7 +227,7 @@ fn response_arithmetic_overflow_aborts_with_a_typed_reason() {
 // width-or-clamp decision both run only over integers (docs/concept.md §2.2) ---
 
 #[test]
-fn arithmetic_operand_resolving_to_a_non_integer_value_aborts_with_a_typed_reason() {
+fn kiln_ir_16__arithmetic_operand_resolving_to_a_non_integer_value_aborts_with_a_typed_reason() {
     let expr = Expr::Arithmetic(
         ArithmeticOp::Add,
         Box::new(Expr::Literal(Value::Text("not a number".to_owned()))),
@@ -245,7 +249,7 @@ fn arithmetic_operand_resolving_to_a_non_integer_value_aborts_with_a_typed_reaso
 }
 
 #[test]
-fn text_literal_written_into_a_declared_column_aborts_with_a_typed_reason() {
+fn kiln_ir_22__text_literal_written_into_a_declared_column_aborts_with_a_typed_reason() {
     let declared_column = Column {
         name: column("c"),
         width: IntegerWidth::I8,
@@ -272,7 +276,7 @@ fn text_literal_written_into_a_declared_column_aborts_with_a_typed_reason() {
 
 proptest! {
     #[test]
-    fn computed_and_literal_writes_clamp_to_their_columns_domain_alike(
+    fn kiln_ir_30__computed_and_literal_writes_clamp_to_their_columns_domain_alike(
         operand_a in -200i64..=200i64,
         operand_b in -200i64..=200i64,
         domain_bound_a in -128i64..=127i64,
@@ -308,7 +312,7 @@ proptest! {
 }
 
 #[test]
-fn value_already_inside_the_domain_is_left_unchanged() {
+fn kiln_ir_31__value_already_inside_the_domain_is_left_unchanged() {
     let declared_column = Column {
         name: column("c"),
         width: IntegerWidth::I32,
@@ -335,7 +339,7 @@ fn value_already_inside_the_domain_is_left_unchanged() {
 /// clamp"). The domain itself stays inside the width (D3 / `Schema::validate`); only the raw,
 /// pre-clamp arithmetic result exceeds it.
 #[test]
-fn overflow_into_a_clamped_column_clamps_even_past_the_columns_own_width() {
+fn kiln_ir_32__overflow_into_a_clamped_column_clamps_even_past_the_columns_own_width() {
     for via in [WriteVia::Insert, WriteVia::Update] {
         let declared_column = Column {
             name: column("c"),
@@ -367,7 +371,7 @@ fn overflow_into_a_clamped_column_clamps_even_past_the_columns_own_width() {
 // resolves exactly as it always has (docs/concept.md §2.2) ---
 
 #[test]
-fn write_to_a_column_the_schema_does_not_declare_is_never_clamped_or_aborted() {
+fn kiln_ir_33__write_to_a_column_the_schema_does_not_declare_is_never_clamped_or_aborted() {
     let program = support::single_function_program(
         vec![],
         vec![Effect::Insert {
@@ -396,7 +400,7 @@ fn write_to_a_column_the_schema_does_not_declare_is_never_clamped_or_aborted() {
 // arithmetic operand (docs/concept.md §2.2) ---
 
 #[test]
-fn arithmetic_can_use_a_value_projected_from_an_earlier_read() {
+fn kiln_ir_13__arithmetic_can_use_a_value_projected_from_an_earlier_read() {
     let key = Value::Integer(1);
     let store = Store::containing([(
         table("t"),

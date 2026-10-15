@@ -6,6 +6,10 @@
 //! never exceeds, the access log entry a range read leaves, dependent
 //! reads, and the argument-width check every other behaviour of `run`
 //! lives in `tests/evaluator.rs` and `tests/arithmetic.rs` instead.
+#![allow(
+    non_snake_case,
+    reason = "test names claim a criterion as kiln_ir_nn__name (specs/kiln-ir.spec.md)"
+)]
 
 mod support;
 
@@ -40,7 +44,7 @@ fn branch_on_slot_zero_present() -> Terminal {
 
 proptest! {
     #[test]
-    fn range_read_absence_is_branchable_like_a_point_reads(
+    fn kiln_ir_11__range_read_absence_is_branchable_like_a_point_reads(
         key in any::<i64>(),
         row_present in any::<bool>(),
     ) {
@@ -75,7 +79,7 @@ proptest! {
 
 proptest! {
     #[test]
-    fn range_read_exceeding_its_declared_bound_aborts_and_discards_every_effect(
+    fn kiln_ir_12__range_read_exceeding_its_declared_bound_aborts_and_discards_every_effect(
         matched_count in 2i64..8,
     ) {
         let store = Store::containing(
@@ -124,7 +128,7 @@ proptest! {
 // (docs/concept.md §2.2, D5) ---
 
 #[test]
-fn access_log_records_a_range_reads_bounds_including_when_the_range_is_empty() {
+fn kiln_ir_36__access_log_records_a_range_reads_bounds_including_when_the_range_is_empty() {
     for store in [
         Store::containing([(table("t"), Value::Integer(5), Row::default())]),
         Store::empty(),
@@ -163,7 +167,7 @@ fn access_log_records_a_range_reads_bounds_including_when_the_range_is_empty() {
 
 proptest! {
     #[test]
-    fn dependent_read_follows_a_key_projected_from_an_earlier_read(
+    fn kiln_ir_13__dependent_read_follows_a_key_projected_from_an_earlier_read(
         source_key in any::<i64>(),
         linked_key in any::<i64>(),
         linked_row_present in any::<bool>(),
@@ -217,7 +221,7 @@ proptest! {
 // ---
 
 #[test]
-fn argument_outside_its_parameters_declared_width_aborts_with_a_typed_reason() {
+fn kiln_ir_04__argument_outside_its_parameters_declared_width_aborts_with_a_typed_reason() {
     let program = single_function_program(
         vec![typed_parameter("amount", IntegerWidth::I8)],
         vec![],
@@ -244,7 +248,7 @@ fn argument_outside_its_parameters_declared_width_aborts_with_a_typed_reason() {
 }
 
 #[test]
-fn argument_inside_its_parameters_declared_width_commits() {
+fn kiln_ir_05__argument_inside_its_parameters_declared_width_commits() {
     let program = single_function_program(
         vec![typed_parameter("amount", IntegerWidth::I8)],
         vec![],
@@ -262,7 +266,7 @@ fn argument_inside_its_parameters_declared_width_commits() {
 }
 
 #[test]
-fn a_text_argument_matching_its_parameters_declared_type_commits() {
+fn kiln_ir_05__a_text_argument_matching_its_parameters_declared_type_commits() {
     let program = single_function_program(
         vec![text_parameter("name")],
         vec![],
@@ -287,7 +291,7 @@ fn a_text_argument_matching_its_parameters_declared_type_commits() {
 // (docs/concept.md §2.2, D3) ---
 
 #[test]
-fn a_text_argument_against_an_integer_parameter_aborts_with_a_typed_mismatch() {
+fn kiln_ir_04__a_text_argument_against_an_integer_parameter_aborts_with_a_typed_mismatch() {
     let program = single_function_program(
         vec![typed_parameter("amount", IntegerWidth::I8)],
         vec![],
@@ -314,7 +318,7 @@ fn a_text_argument_against_an_integer_parameter_aborts_with_a_typed_mismatch() {
 }
 
 #[test]
-fn an_integer_argument_against_a_text_parameter_aborts_with_a_typed_mismatch() {
+fn kiln_ir_04__an_integer_argument_against_a_text_parameter_aborts_with_a_typed_mismatch() {
     let program = single_function_program(
         vec![text_parameter("name")],
         vec![],
@@ -338,7 +342,7 @@ fn an_integer_argument_against_a_text_parameter_aborts_with_a_typed_mismatch() {
 // non-integer bound aborts with a typed reason instead of panicking (finding 3) ---
 
 #[test]
-fn range_read_bound_resolving_to_a_non_integer_value_aborts_with_a_typed_reason() {
+fn kiln_ir_16__range_read_bound_resolving_to_a_non_integer_value_aborts_with_a_typed_reason() {
     let program = single_function_program(
         vec![],
         vec![Effect::ReadRange {
@@ -367,7 +371,7 @@ fn range_read_bound_resolving_to_a_non_integer_value_aborts_with_a_typed_reason(
 // outside any iteration over it; this is a typed abort, not a panic (finding 1) ---
 
 #[test]
-fn projecting_from_a_range_bound_slot_outside_iteration_aborts_with_a_typed_reason() {
+fn kiln_ir_15__projecting_from_a_range_bound_slot_outside_iteration_aborts_with_a_typed_reason() {
     let store = Store::containing([(table("t"), Value::Integer(5), Row::default())]);
     let program = single_function_program(
         vec![],
@@ -401,7 +405,8 @@ fn projecting_from_a_range_bound_slot_outside_iteration_aborts_with_a_typed_reas
 // ---
 
 #[test]
-fn bounded_iteration_runs_its_body_once_per_row_in_key_order_with_dependent_reads_and_writes() {
+fn kiln_ir_14__bounded_iteration_runs_its_body_once_per_row_in_key_order_with_dependent_reads_and_writes(
+) {
     let orders = [(1, 10), (2, 20), (3, 30)]; // (order id, customer id)
     let store = Store::containing(
         orders
