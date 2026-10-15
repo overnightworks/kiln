@@ -1,10 +1,10 @@
 TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
 Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 93 and seed 1446853111305336067 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 3026597] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
-Starting... (2026-10-15 22:57:29)
+Running breadth-first search Model-Checking with fp 35 and seed -3361429564139579780 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 3097278] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-10-15 23:06:52)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-15 22:57:29.
+Finished computing initial states: 1 distinct state generated at 2026-10-15 23:06:53.
 Error: Invariant PinsReferencedUnreached is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
@@ -55,8 +55,8 @@ State 2: <Dispatch line 325, col 3 to line 327, col 66 of module Kernel>
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 3: <Acquire line 337, col 3 to line 343, col 47 of module Kernel>
-/\ seq = [t1 |-> 0, t2 |-> 1, t3 |-> 0]
+State 3: <Dispatch line 325, col 3 to line 327, col 66 of module Kernel>
+/\ seq = [t1 |-> 2, t2 |-> 1, t3 |-> 0]
 /\ resp = [t1 |-> <<>>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
@@ -75,13 +75,11 @@ State 3: <Acquire line 337, col 3 to line 343, col 47 of module Kernel>
       << [val |-> 0, bal |-> 0],
          [val |-> 0, bal |-> 0],
          [val |-> 0, bal |-> 0] >> ]
-/\ status = [t1 |-> "pending", t2 |-> "active", t3 |-> "pending"]
-/\ held = [ t1 |-> {},
-  t2 |-> {[kind |-> "CLAIM", cov |-> {2}], [kind |-> "PIN", cov |-> {1}]},
-  t3 |-> {} ]
+/\ status = [t1 |-> "pending", t2 |-> "pending", t3 |-> "pending"]
+/\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 4: <Dispatch line 325, col 3 to line 327, col 66 of module Kernel>
+State 4: <Acquire line 337, col 3 to line 343, col 47 of module Kernel>
 /\ seq = [t1 |-> 2, t2 |-> 1, t3 |-> 0]
 /\ resp = [t1 |-> <<>>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
@@ -311,7 +309,7 @@ State 12: <Commit line 380, col 3 to line 387, col 32 of module Kernel>
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-230 states generated, 136 distinct states found, 2 states left on queue.
+228 states generated, 135 distinct states found, 3 states left on queue.
 The depth of the complete state graph search is 12.
 The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 3 and the 95th percentile is 3).
-Finished in 00s at (2026-10-15 22:57:30)
+Finished in 00s at (2026-10-15 23:06:53)

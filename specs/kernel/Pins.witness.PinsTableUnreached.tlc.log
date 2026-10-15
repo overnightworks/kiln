@@ -1,10 +1,10 @@
 TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
 Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 28 and seed -8149110775736161297 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 3028013] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
-Starting... (2026-10-15 22:57:47)
+Running breadth-first search Model-Checking with fp 101 and seed 1893372945469548627 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 3097376] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-10-15 23:06:53)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-15 22:57:48.
+Finished computing initial states: 1 distinct state generated at 2026-10-15 23:06:54.
 Error: Invariant PinsTableUnreached is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
@@ -133,7 +133,7 @@ State 5: <Dispatch line 325, col 3 to line 327, col 66 of module Kernel>
   t3 |-> {} ]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-89 states generated, 62 distinct states found, 18 states left on queue.
+86 states generated, 60 distinct states found, 17 states left on queue.
 The depth of the complete state graph search is 6.
 The average outdegree of the complete state graph is 2 (minimum is 0, the maximum 3 and the 95th percentile is 3).
-Finished in 00s at (2026-10-15 22:57:48)
+Finished in 00s at (2026-10-15 23:06:54)
