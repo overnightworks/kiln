@@ -1,0 +1,6 @@
+--- Kernel.tla
++++ Kernel.tla
+@@ -76,3 +76,3 @@
+-    [] op.op = "BuyUnder" -> {Res("DRAW", {op.k}), Res("S", {op.k})}
++    [] op.op = "BuyUnder" -> {Res("DRAW", {op.k})}
+     [] op.op = "BuyVal" -> {Res("DRAW", {op.k}), Res("S", {op.j})}

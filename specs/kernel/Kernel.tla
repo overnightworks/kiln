@@ -43,7 +43,8 @@ Refs(v, k) == {c \in Keys : v[c].present /\ v[c].parent = k}
                         set (+ pin on k's own parent while unlinking)
      Buy(k, a)          escrow draw of a against k's bal, sold += 1
      BuyUnder(k, a, cap) the same draw, taken only while fewer than cap are
-                        sold (a branch the budget must cover either way)
+                        sold: a branch on the row, so it also reads k (S) and
+                        the budget covers it either way
      BuyVal(k, j)       draws row j's val from k: an amount the program
                         does not know statically (budget unbounded) *)
 Read(k) == [op |-> "Read", k |-> k]
@@ -72,7 +73,7 @@ Need(op, v) ==
                            \cup (IF v[op.k].present /\ v[op.k].parent # 0
                                  THEN {Res("PIN", {v[op.k].parent})} ELSE {})
     [] op.op = "Buy"    -> {Res("DRAW", {op.k})}
-    [] op.op = "BuyUnder" -> {Res("DRAW", {op.k})}
+    [] op.op = "BuyUnder" -> {Res("DRAW", {op.k}), Res("S", {op.k})}
     [] op.op = "BuyVal" -> {Res("DRAW", {op.k}), Res("S", {op.j})}
 
 (* Compatibility (§4, §5). Two resources whose coverage is disjoint never
@@ -256,12 +257,14 @@ Undrawn(t, k, row) ==
 View(t) ==
   [k \in Keys |-> Drawn(t, k, IF k \in DOMAIN wr[t] THEN wr[t][k] ELSE db[k])]
 
-(* A draw consumes the transaction's own reservation (§4, rule 1): the
-   balance a draw sees is what remains of that reservation, never the
-   committed balance other holders are drawing from. A transaction that
-   holds a resource on the key incompatible with DRAW is the key's only
-   draw holder; its draws see its own view, so an Update that raised the
-   balance in the same transaction is drawn from. *)
+(* One rule for draws (§4, rule 1). A draw consumes the transaction's own
+   reservation: the balance it sees is what remains of that reservation,
+   never the committed balance other holders are drawing from. The one
+   exception: a transaction that holds a covering resource whose kind is
+   incompatible with DRAW is the key's only draw holder, so no other
+   reservation can be outstanding on it, and it draws on its real view
+   (an Update that raised the balance in the same transaction is drawn
+   from; a branch that read the row sees what it read). *)
 SoleDrawHolder(t, k) == \E h \in held[t] : h.kind # "DRAW" /\ k \in h.cov
 
 DrawView(t, k) ==
@@ -422,15 +425,14 @@ FootprintCovers ==
 
 (* Escrow conservation (§4, rule 1). Live reservations are funded: their
    sum on a key never exceeds its committed balance. Draws stay within the
-   reservation: a transaction never draws more than it reserved, unless it
-   holds X on the key, in which case it is the key's only draw holder and
-   may draw from a balance its own update raised. *)
+   reservation, the one rule of DrawView: only the key's sole draw holder
+   draws on its real view and may exceed what it reserved. *)
 ReservationsFunded ==
   \A k \in Keys : SumOver({t \in Txns : Active(t)}, k) <= db[k].bal
 
 DrawsWithinReservation ==
   \A t \in Txns, k \in Keys :
-    Active(t) /\ Res("X", {k}) \notin held[t] => draws[t][k].bal <= reserved[t][k]
+    Active(t) /\ ~SoleDrawHolder(t, k) => draws[t][k].bal <= reserved[t][k]
 
 RECURSIVE Closure(_, _)
 Closure(R, n) ==
