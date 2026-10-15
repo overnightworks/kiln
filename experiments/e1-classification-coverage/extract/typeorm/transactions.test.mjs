@@ -229,6 +229,95 @@ test("KILN-E1TO-10 sequential transactions of one receiver stay separate units",
   ]);
 });
 
+const ALTERNATIVE_STARTS = `\
+async function open(a, shared) {
+  if (shared) await qr.startTransaction();
+  else await qr.startTransaction();
+  await qr.manager.save(a);
+  await qr.commitTransaction();
+  await audit.save(a);
+  await qr.startTransaction();
+  await qr.manager.insert(a);
+  await qr.commitTransaction();
+}
+`;
+
+const BRANCH_STARTS = {
+  "if and else": ALTERNATIVE_STARTS,
+  "the arms of a ternary": ALTERNATIVE_STARTS.replace(
+    "if (shared) await qr.startTransaction();\n  else await qr.startTransaction();",
+    "await (shared ? qr.startTransaction() : qr.startTransaction());",
+  ),
+  "switch clauses": ALTERNATIVE_STARTS.replace(
+    "if (shared) await qr.startTransaction();\n  else await qr.startTransaction();",
+    "switch (shared) {\n    case 1:\n      await qr.startTransaction();\n      break;\n    default:\n      await qr.startTransaction();\n  }",
+  ),
+};
+
+for (const [name, source] of Object.entries(BRANCH_STARTS)) {
+  test(`KILN-E1TO-10 starts in ${name} are one alternative opening, not a nesting`, () => {
+    const starts = [1, 2, 3].map((occurrence) => marker(source, "qr.startTransaction()", "startTransaction", { occurrence }));
+    const messages = [
+      ...starts,
+      site(source, "qr.manager.save(a)", "save", { methodType: "write" }),
+      site(source, "audit.save(a)", "save", { methodType: "write" }),
+      site(source, "qr.manager.insert(a)", "insert", { methodType: "write" }),
+    ];
+    const lineOf = (needle) => source.slice(0, source.indexOf(needle)).split("\n").length;
+    assert.deepEqual(unitsOf(source, messages).map(shape), [
+      ["S2", lineOf("qr.startTransaction()"), ["a", "shared"], [lineOf("qr.manager.save")]],
+      ["S3", lineOf("audit.save"), ["a"], [lineOf("audit.save")]],
+      ["S2", lineOf("qr.manager.insert") - 1, ["a", "shared"], [lineOf("qr.manager.insert")]],
+    ]);
+  });
+}
+
+test("KILN-E1TO-10 a start inside an open transaction nests even when it sits in a branch", () => {
+  const source = `\
+async function guarded(a, again) {
+  await qr.startTransaction();
+  if (again) {
+    await qr.startTransaction();
+  }
+  await qr.manager.save(a);
+  await qr.commitTransaction();
+  await qr.commitTransaction();
+}
+`;
+  const messages = [
+    marker(source, "qr.startTransaction()", "startTransaction"),
+    marker(source, "qr.startTransaction()", "startTransaction", { occurrence: 2 }),
+    site(source, "qr.manager.save(a)", "save", { methodType: "write" }),
+  ];
+  assert.deepEqual(unitsOf(source, messages).map(shape), [["S2", 2, ["a", "again"], [6]]]);
+});
+
+test("KILN-E1TO-10 each branch that commits inside itself is a transaction of its own", () => {
+  const source = `\
+async function either(a, shared) {
+  if (shared) {
+    await qr.startTransaction();
+    await qr.manager.save(a);
+    await qr.commitTransaction();
+  } else {
+    await qr.startTransaction();
+    await qr.manager.insert(a);
+    await qr.commitTransaction();
+  }
+}
+`;
+  const messages = [
+    marker(source, "qr.startTransaction()", "startTransaction"),
+    marker(source, "qr.startTransaction()", "startTransaction", { occurrence: 2 }),
+    site(source, "qr.manager.save(a)", "save", { methodType: "write" }),
+    site(source, "qr.manager.insert(a)", "insert", { methodType: "write" }),
+  ];
+  assert.deepEqual(unitsOf(source, messages).map(shape), [
+    ["S2", 3, ["a", "shared"], [4]],
+    ["S2", 7, ["a", "shared"], [8]],
+  ]);
+});
+
 test("KILN-E1TO-10 a commit and a rollback after a closed transaction still belong to it, up to the next start", () => {
   const messages = [
     marker(START_COMMIT, "queryRunner.startTransaction()", "startTransaction"),

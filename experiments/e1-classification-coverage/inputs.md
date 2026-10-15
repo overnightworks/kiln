@@ -664,9 +664,13 @@ it is applied to TypeScript.
   `X.commitTransaction()` or `X.rollbackTransaction()` with the same receiver
   text written directly in the same function before the next
   `X.startTransaction()` that does not nest in it; a start without one opens
-  no unit. A start written while the transaction of an earlier start is still
-  open (more starts than commits and rollbacks so far) nests in it, and the
-  outermost owns the nested one's sites.
+  no unit. Boundaries follow the syntax tree's control flow: starts written in
+  mutually exclusive branches of one conditional (the two arms of an
+  `if`/`else`, of a ternary, or different `switch` clauses) are one alternative
+  opening, not a nesting; a start written while a transaction is already open
+  on the same path nests in it, and the outermost owns the nested one's sites;
+  a commit or rollback closes the innermost open transaction of its receiver.
+  Branches that each commit inside themselves are transactions of their own.
   `X.transaction(...)` opens a unit when `X` is, or ends in a property named,
   `dataSource`, `manager` or `connection`, and its body is the last function
   or arrow function argument. A method decorated `@Transaction` or

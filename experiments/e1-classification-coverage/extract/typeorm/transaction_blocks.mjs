@@ -3,6 +3,7 @@
 import ts from "typescript";
 
 import { ExtractorError } from "./extractor_error.mjs";
+import { inExclusiveBranches } from "./exclusive_branches.mjs";
 import { isFunctionLike } from "./function_scopes.mjs";
 import { calledMethodName } from "./source_text.mjs";
 
@@ -92,9 +93,10 @@ function finalName(expression) {
 }
 
 /**
- * The start up to the last commit or rollback on the same receiver within the same function,
- * before the next start that is not nested in this one: a start written while an earlier start's
- * transaction is still open (more starts than commits and rollbacks so far) nests.
+ * The start up to the last commit or rollback on the same receiver within the same function, before
+ * the next start that is not nested in this one. Following the control flow: starts in exclusive
+ * branches of one conditional are one alternative opening, a start written while a transaction is
+ * open on its path nests, and a commit or rollback closes the innermost open one.
  */
 function startedBlock(start, sourceText) {
   const receiverOf = (call) => withoutWhitespace(call.expression.expression?.getText(sourceText.sourceFile) ?? "");
@@ -102,14 +104,17 @@ function startedBlock(start, sourceText) {
   const after = sourceText.calls
     .filter((call) => sameFunction(call, start) && receiverOf(call) === receiverOf(start) && startOf(call) >= start.getEnd())
     .sort((first, second) => startOf(first) - startOf(second));
-  let open = 1;
+  const openings = [[start]];
   let end;
   for (const call of after) {
     const name = calledMethodName(call);
-    if (name === START && open === 0) break;
-    if (name === START) open += 1;
-    else if (TERMINATORS.has(name)) {
-      open = Math.max(open - 1, 0);
+    if (name === START) {
+      if (openings.length === 0) break;
+      const alternative = openings.at(-1).every((opened) => inExclusiveBranches(opened, call));
+      if (alternative) openings.at(-1).push(call);
+      else openings.push([call]);
+    } else if (TERMINATORS.has(name)) {
+      openings.pop();
       end = call.getEnd();
     }
   }
