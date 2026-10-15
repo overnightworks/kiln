@@ -35,7 +35,30 @@ engine around exactly that set. A thirteenth, never-declared query (an ad hoc
 analyst query, say) still works, but through a slower, general path (see
 §7).
 
-## 2. The thesis: interference is decided at compile time, not by runtime locks
+## 2. Language (operator ruling 15.10.2026)
+
+kiln's engine is written in **Rust**. A parallel engine that AI agents help
+build and extend needs memory safety and data-race safety enforced by the
+compiler, not by agent discipline; Rust gives both with no garbage collector
+to add unpredictable pauses to the latency-sensitive paths in §4 and §6. The
+closest prior art made the same choice for the same reason: Turso's
+ground-up rewrite of SQLite (formerly Limbo) moved to Rust specifically
+because memory safety and async I/O were judged easier to get right outside
+a C codebase (`docs/research/notes/open_problems_and_challenged_assumptions.md`).
+
+What the compiler analyzes, however, is not Rust source. Application
+transactions, schema, and invariants are declared in a small,
+**host-language-neutral description language** — a closed vocabulary for
+naming transaction functions, their parameters, and the invariants they must
+keep — and it is this description that footprint extraction and
+classification (§3) operate on. Rust macros are **one front end** into that
+description language, convenient when the application itself is Rust, but
+not the only one: any host language can target the same description
+language by emitting the same declarations. This is why E1 (§10) can
+classify transactions from Django and TypeORM applications — neither
+written in Rust — without going through the Rust-macro front end at all.
+
+## 3. The thesis: interference is decided at compile time, not by runtime locks
 
 Every pair of things that might run at the same time and touch the same
 state — two transaction *instances*, i.e., two actual calls to a declared
@@ -97,7 +120,7 @@ its code and its declared invariants.
    what to write based on what it read, and the write target is not a
    function of the call's arguments alone (e.g., "look up the customer by
    last name, then update whichever row that finds"). This class always
-   falls back to a conservative, always-correct serializable path (§4). It
+   falls back to a conservative, always-correct serializable path (§5). It
    is a safety net, never a silent approximation.
 
 ```mermaid
@@ -115,7 +138,7 @@ flowchart LR
     T -->|mismatch| C4
 ```
 
-## 3. The isolation kernel: a proposal for the critic to rule on
+## 4. The isolation kernel: a proposal for the critic to rule on
 
 The two ideation sources that fed this concept
 (`docs/research/ideation/codex-astra-ideation.md`,
@@ -155,7 +178,7 @@ thing an invariant is about. A batch of class-3 calls acquires the resources
 its members need, in one fixed canonical order (to make deadlock structurally
 impossible rather than merely detected), proves the batch equivalent to some
 serial execution inside that protected interval, and only then applies the
-associative-summary/parallel-prefix-scan evaluation from §2.3 inside it.
+associative-summary/parallel-prefix-scan evaluation from §3.3 inside it.
 Class 4 (unknown) uses the same lock protocol directly, with conservative
 range or domain locks standing in for an un-derivable footprint — it is not a
 separate mechanism, it is this kernel with a wider, safe guess at what to
@@ -180,13 +203,13 @@ most real traffic (per the E1 hypothesis below), never take a lock under
 either proposal, so this cost is paid only where some coordination is
 unavoidable regardless of kernel choice.
 
-## 4. ACID and uniqueness
+## 5. ACID and uniqueness
 
 **Atomicity.** A transaction's effects are either all applied or none are,
 including across the typed-reservation mechanisms of class 2: a claim, a
 pin, and a row write inside one transaction either all commit together or
 all roll back together, because they are recorded as one durable commit
-group (§5).
+group (see Durability, below).
 
 **Consistency and serializable isolation (no write skew).** Class 1 is safe
 because the footprints are disjoint by proof. Class 2 is safe because each
@@ -223,7 +246,7 @@ the parent's existence for the duration of the transaction; deleting a
 parent requires an incompatible reservation that first checks no live pin
 remains.
 
-## 5. Trust model
+## 6. Trust model
 
 AI agents may propose new specializations — a new reservation type, a new
 associative summary for a transaction family the compiler could not
@@ -240,11 +263,11 @@ against the footprint the compiler predicted for it. A mismatch aborts that
 instance into the class-4 fallback and flags the specialization that
 produced the wrong prediction for review, rather than silently committing a
 possibly-unsound result. (This check is adapted from Fable's "runtime
-domain-tag check" concept, §3, but checks footprints against the chosen
+domain-tag check" concept, §4, but checks footprints against the chosen
 locking kernel rather than domain assignment against a partitioned
 executor.)
 
-## 6. Storage stance
+## 7. Storage stance
 
 The append-only log of committed facts is the only truth. Every index, every
 materialized view, and every partitioning scheme is a derived, rebuildable
@@ -261,7 +284,7 @@ support for queries outside that workload
 always go to the one log first, and an unanticipated read degrades rather
 than breaks.
 
-## 7. Workload migrations
+## 8. Workload migrations
 
 A new build of the application is a new, complete transaction/query set. The
 compiler diffs the old compiled program against the new one and derives
@@ -275,7 +298,7 @@ switch, run backward — because the old version's views were never deleted
 until the switch succeeded, going back is not a second migration, it is just
 re-pointing the live traffic.
 
-## 8. Kill criteria
+## 9. Kill criteria
 
 kiln's bet dies on either of these:
 
@@ -284,15 +307,15 @@ kiln's bet dies on either of these:
   (class 4 by construction), the compiler has nothing to classify and kiln
   degenerates into a deterministic database with an expensive compiler
   attached — "Calvin with extra steps" — and loses on latency to a
-  conventional engine. E1 (§9) measures this directly.
+  conventional engine. E1 (§10) measures this directly.
 - **Transaction summaries do not stay compact.** If the associative
-  summaries class 3 needs (§2.3) grow without bound for realistic
+  summaries class 3 needs (§3.3) grow without bound for realistic
   contended-state transaction families — or if most such families simply
   cannot be summarized at all and fall through to the serial path — class 3
   shrinks from a foundational mechanism to a narrow optimizer that only
-  helps a few hand-picked cases. E2 (§9) measures this directly.
+  helps a few hand-picked cases. E2 (§10) measures this directly.
 
-## 9. Experiments
+## 10. Experiments
 
 **E1 — classification coverage (issue #2).** Hypothesis: at least 70% of
 frequency-weighted transaction *instances*, measured on TPC-C and on a
@@ -307,13 +330,19 @@ with fully inferable read/write sets up front, and that about 27% of
 transactions query by a secondary attribute rather than a key — these are
 that study's numbers about its own corpus, not a kiln measurement, and E1 is
 how kiln checks whether its own classifier reaches 70% on that same ground
-and on TPC-C, not an assumption that it already does.
+and on TPC-C, not an assumption that it already does. Neither Django nor
+TypeORM is a Rust application, so E1 depends on the host-language-neutral
+description language (§2): its extractor reads each application's
+transaction functions directly into that description, not through the
+Rust-macro front end, which only exists for a Rust-hosted application.
 
 **E2 — parallel evaluation of ordered transactions (issue #3).** Hypothesis:
 at least 3× throughput on 16 cores, against an optimized serial-batching
 baseline with identical per-call outcomes, for class-3 transaction families
-such as quota allocation (the ticket-sale example, §2.3), conditional
-inventory, and mixed account operations, at batch sizes 1–256.
+such as quota allocation (capped refill plus partial allocation, evaluated
+by the associative-summary mechanism of §3.3 — a different technique from
+the class-2 escrow example in §3.2, even though both are about a quota),
+conditional inventory, and mixed account operations, at batch sizes 1–256.
 
 Both thresholds, corpora, and the TPC-C/YCSB-style methodology around them
 are carried over unmodified from the ideation brief
@@ -321,23 +350,23 @@ are carried over unmodified from the ideation brief
 `docs/research/ideation/fable-ideation.md`); this document does not change
 them, only states them as the thing #2 and #3 must prove or falsify.
 
-## 10. Prior art, confidence, and the closest collisions
+## 11. Prior art, confidence, and the closest collisions
 
 Confidence levels below are the prior-art report's own, not restated
 stronger or weaker here.
 
 | Part of the thesis | Closest prior art | Where it stops | Confidence it is still open |
 |---|---|---|---|
-| Compiling a whole engine from a known workload (§1, §2.1) | **Bespoke OLAP** (2026) — LLM-agent pipeline synthesizing a whole OLAP engine from a workload contract | OLAP-only, single-threaded, in-memory; explicitly leaves transactions/concurrency as future work; no cost bound, sidesteps cost modeling entirely | Medium (`prior-art-report.md`) |
-| Every index as a parameterized incremental view (§6) | DBSP/Feldera (general IVM theory), Materialize (shared "arrangement" mechanism), Noria (partial-state dataflow, 5× a hand-tuned MySQL baseline) | None sit inside an OLTP engine's own serializable transaction as the *sole* access path with no separate index concept; pg_ivm gets closest (same-transaction maintenance) but is an opt-in Postgres extension, not a replacement for indexing | Medium (`notes/incremental_views_as_unifying_concept.md`) |
-| Static, build-time read/write-set derivation driving lock-free scheduling (§2.1, §2.3) | **Calvin lineage** (Calvin, Bohm, Aria, Caracal) — all derive footprints by declaration or by one runtime pass, never by static analysis of compiled code; **VoltDB** — abort-free, but by partitioning the schema and serializing cross-partition work through a coordinator | No system derives read/write sets purely as a function of a transaction's parameters, at build time | Medium-high (`notes/static_analysis_deterministic_scheduling.md`) |
-| Invariants replacing isolation levels (§2.2, §3) | **Homeostasis** (2015), I-confluence, escrow, IPA/Hamsaz/Katara | Every system in this lineage targets geo-replication; none applies this reasoning to single-node, many-core concurrency control, and all live as research prototypes or CRDT-store middleware, never inside a production relational engine | Medium-high (`notes/invariant_driven_coordination.md`) |
-| Migration as a diff of two compiled workloads (§7) | Schema-diff tooling (F1, CockroachDB, Atlas) and schema-less log-replay (XTDB, Datomic); Noria's "fast migrations" by reusing dataflow state | No source diffs two compiled query/transaction sets to derive a migration; the two camps (schema-diff, log-replay) have never been connected to per-query incremental materialization | Medium-high (`notes/migrations_and_combined_systems.md`) |
+| Compiling a whole engine from a known workload (§1, §3) | **Bespoke OLAP** (2026) — LLM-agent pipeline synthesizing a whole OLAP engine from a workload contract | OLAP-only, single-threaded, in-memory; explicitly leaves transactions/concurrency as future work; no cost bound, sidesteps cost modeling entirely | Medium (`prior-art-report.md`) |
+| Every index as a parameterized incremental view (§7) | DBSP/Feldera (general IVM theory), Materialize (shared "arrangement" mechanism), Noria (partial-state dataflow, 5× a hand-tuned MySQL baseline) | None sit inside an OLTP engine's own serializable transaction as the *sole* access path with no separate index concept; pg_ivm gets closest (same-transaction maintenance) but is an opt-in Postgres extension, not a replacement for indexing | Medium (`notes/incremental_views_as_unifying_concept.md`) |
+| Static, build-time read/write-set derivation driving lock-free scheduling (§3.1, §3.3) | **Calvin lineage** (Calvin, Bohm, Aria, Caracal) — all derive footprints by declaration or by one runtime pass, never by static analysis of compiled code; **VoltDB** — abort-free, but by partitioning the schema and serializing cross-partition work through a coordinator | No system derives read/write sets purely as a function of a transaction's parameters, at build time | Medium-high (`notes/static_analysis_deterministic_scheduling.md`) |
+| Invariants replacing isolation levels (§3.2, §4) | **Homeostasis** (2015), I-confluence, escrow, IPA/Hamsaz/Katara | Every system in this lineage targets geo-replication; none applies this reasoning to single-node, many-core concurrency control, and all live as research prototypes or CRDT-store middleware, never inside a production relational engine | Medium-high (`notes/invariant_driven_coordination.md`) |
+| Migration as a diff of two compiled workloads (§8) | Schema-diff tooling (F1, CockroachDB, Atlas) and schema-less log-replay (XTDB, Datomic); Noria's "fast migrations" by reusing dataflow state | No source diffs two compiled query/transaction sets to derive a migration; the two camps (schema-diff, log-replay) have never been connected to per-query incremental materialization | Medium-high (`notes/migrations_and_combined_systems.md`) |
 | Compile-time cost bounds, build-time rejection (not built in this item) | Castor (cost-guided search, no bound — "can produce layouts too large to be compiled efficiently"), AARA (proves bounds for general programs, never pointed at a query language) | No paper connects AARA-style static bounds to a database query engine | Medium-high (`notes/workload_derived_design_and_cost_bounds.md`) |
 | The whole combination (all parts at once) | — | No system combines more than two of the six parts in this thesis | Medium (`prior-art-report.md`) |
 
 The two sharpest named collisions for kiln's riskiest part (class 3,
-§2.3/§9's E2) are, in order: **TransactionMerger** (submitted January
+§3.3/§10's E2) are, in order: **TransactionMerger** (submitted January
 2026), which already merges contended transactions and reconstructs
 per-caller results including allocated IDs — but its merged procedures are
 developer-written, not compiler-synthesized, so kiln's claim narrows to
@@ -346,26 +375,26 @@ not attempt (`docs/research/ideation/codex-astra-ideation.md`); and
 **VoltDB**, the closest mechanism match for abort-free determinism generally,
 which sidesteps the hard problem by requiring the developer to declare a
 partition key rather than deriving one, and serializes exactly the
-cross-partition case kiln's §3 kernel is chosen to avoid serializing.
+cross-partition case kiln's §4 kernel is chosen to avoid serializing.
 
-## 11. Open questions for the critic
+## 12. Open questions for the critic
 
-1. Is the proposed isolation kernel (§3, strict two-phase locking over
+1. Is the proposed isolation kernel (§4, strict two-phase locking over
    logical resources) actually sound for class 3's associative-summary
    evaluation, or does holding locks through the parallel-prefix-scan
    computation reintroduce the serialization it was meant to avoid?
-2. Does the footprint-tag runtime check (§5) catch every way a wrong
+2. Does the footprint-tag runtime check (§6) catch every way a wrong
    specialization could silently produce a non-serializable result, or only
    the ones where the actual footprint is a superset/mismatch of the
    predicted one?
 3. Classes 1 and 2 are proven never to need a lock under either kernel
    proposal — is that proof itself kernel-independent, or does it quietly
    assume the rejected domain model somewhere?
-4. The "one-hop single-domain" criterion E1 measures (§9) is borrowed
+4. The "one-hop single-domain" criterion E1 measures (§10) is borrowed
    directly from the ideation brief without this document re-deriving it —
    is it precise enough for a fresh builder to implement a classifier
    against without guessing?
-5. §7's migration story assumes the old and new compiled versions can run
+5. §8's migration story assumes the old and new compiled versions can run
    against the same log concurrently during backfill — does that assumption
    hold if a migration also changes an invariant (not just adds a view),
    where old and new versions could legitimately disagree about whether a
