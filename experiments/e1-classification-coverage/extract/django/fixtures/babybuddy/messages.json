@@ -1,0 +1,260 @@
+{
+  "messages": [
+    {
+      "filePath": "babybuddy/core/views.py",
+      "fromLine": 51,
+      "toLine": 51,
+      "fromColumn": 20,
+      "toColumn": 57,
+      "content": {
+        "name": "get",
+        "methodType": "read",
+        "object": "self.request.GET",
+        "objectTypes": [
+          "django.http.request._ImmutableQueryDict",
+          "django.http.request.QueryDict",
+          "django.utils.datastructures.MultiValueDict"
+        ],
+        "attributes": [],
+        "type": "method"
+      }
+    },
+    {
+      "filePath": "babybuddy/core/views.py",
+      "fromLine": 124,
+      "toLine": 124,
+      "fromColumn": 15,
+      "toColumn": 70,
+      "content": {
+        "name": "get",
+        "methodType": "read",
+        "object": "self.request.GET",
+        "objectTypes": [
+          "django.http.request._ImmutableQueryDict",
+          "django.http.request.QueryDict",
+          "django.utils.datastructures.MultiValueDict"
+        ],
+        "attributes": [],
+        "type": "method"
+      }
+    },
+    {
+      "filePath": "babybuddy/core/views.py",
+      "fromLine": 395,
+      "toLine": 395,
+      "fromColumn": 19,
+      "toColumn": 47,
+      "content": {
+        "name": "count",
+        "methodType": "read",
+        "object": "models.Child.objects",
+        "objectTypes": [
+          "django.db.models.manager.Manager[core.models.Child]",
+          "django.db.models.manager.Manager",
+          "django.db.models.manager.BaseManager"
+        ],
+        "attributes": [],
+        "type": "method"
+      }
+    },
+    {
+      "filePath": "babybuddy/core/views.py",
+      "fromLine": 398,
+      "toLine": 398,
+      "fromColumn": 44,
+      "toColumn": 72,
+      "content": {
+        "name": "first",
+        "methodType": "read",
+        "object": "models.Child.objects",
+        "objectTypes": [
+          "django.db.models.manager.Manager[core.models.Child]",
+          "django.db.models.manager.Manager",
+          "django.db.models.manager.BaseManager"
+        ],
+        "attributes": [],
+        "type": "method"
+      }
+    },
+    {
+      "filePath": "babybuddy/core/views.py",
+      "fromLine": 404,
+      "toLine": 404,
+      "fromColumn": 15,
+      "toColumn": 70,
+      "content": {
+        "name": "get",
+        "methodType": "read",
+        "object": "self.request.GET",
+        "objectTypes": [
+          "django.http.request._ImmutableQueryDict",
+          "django.http.request.QueryDict",
+          "django.utils.datastructures.MultiValueDict"
+        ],
+        "attributes": [],
+        "type": "method"
+      }
+    },
+    {
+      "filePath": "babybuddy/core/views.py",
+      "fromLine": 457,
+      "toLine": 457,
+      "fromColumn": 19,
+      "toColumn": 65,
+      "content": {
+        "name": "create",
+        "methodType": "write",
+        "object": "models.Timer.objects",
+        "objectTypes": [
+          "django.db.models.manager.Manager[core.models.Timer]",
+          "django.db.models.manager.Manager",
+          "django.db.models.manager.BaseManager"
+        ],
+        "attributes": [],
+        "type": "method"
+      }
+    },
+    {
+      "filePath": "babybuddy/core/views.py",
+      "fromLine": 459,
+      "toLine": 459,
+      "fromColumn": 19,
+      "toColumn": 51,
+      "content": {
+        "name": "get",
+        "methodType": "read",
+        "object": "request.POST",
+        "objectTypes": [
+          "Any"
+        ],
+        "attributes": [],
+        "type": "method"
+      }
+    },
+    {
+      "filePath": "babybuddy/core/views.py",
+      "fromLine": 460,
+      "toLine": 460,
+      "fromColumn": 16,
+      "toColumn": 53,
+      "content": {
+        "name": "get",
+        "methodType": "read",
+        "object": "models.Child.objects",
+        "objectTypes": [
+          "django.db.models.manager.Manager[core.models.Child]",
+          "django.db.models.manager.Manager",
+          "django.db.models.manager.BaseManager"
+        ],
+        "attributes": [
+          {
+            "name": "pk",
+            "startLine": 460,
+            "endLine": 460,
+            "startColumn": 41,
+            "endColumn": 52
+          }
+        ],
+        "type": "method"
+      }
+    },
+    {
+      "filePath": "babybuddy/core/views.py",
+      "fromLine": 464,
+      "toLine": 464,
+      "fromColumn": 13,
+      "toColumn": 33,
+      "content": {
+        "name": "count",
+        "methodType": "read",
+        "object": "models.Child",
+        "objectTypes": [
+          "def (*args: Any, **kwargs: Any) -> core.models.Child"
+        ],
+        "attributes": [],
+        "type": "method"
+      }
+    },
+    {
+      "filePath": "babybuddy/core/views.py",
+      "fromLine": 465,
+      "toLine": 465,
+      "fromColumn": 29,
+      "toColumn": 57,
+      "content": {
+        "name": "first",
+        "methodType": "read",
+        "object": "models.Child.objects",
+        "objectTypes": [
+          "django.db.models.manager.Manager[core.models.Child]",
+          "django.db.models.manager.Manager",
+          "django.db.models.manager.BaseManager"
+        ],
+        "attributes": [],
+        "type": "method"
+      }
+    },
+    {
+      "filePath": "babybuddy/core/views.py",
+      "fromLine": 466,
+      "toLine": 466,
+      "fromColumn": 8,
+      "toColumn": 23,
+      "content": {
+        "name": "save",
+        "methodType": "write",
+        "object": "instance",
+        "objectTypes": [
+          "core.models.Timer",
+          "django.db.models.base.Model"
+        ],
+        "attributes": [],
+        "type": "method"
+      }
+    },
+    {
+      "filePath": "babybuddy/core/views.py",
+      "fromLine": 467,
+      "toLine": 469,
+      "fromColumn": 19,
+      "toColumn": 9,
+      "content": {
+        "name": "get",
+        "methodType": "read",
+        "object": "request.GET",
+        "objectTypes": [
+          "Any"
+        ],
+        "attributes": [],
+        "type": "method"
+      }
+    },
+    {
+      "filePath": "babybuddy/core/views.py",
+      "fromLine": 478,
+      "toLine": 478,
+      "fromColumn": 19,
+      "toColumn": 60,
+      "content": {
+        "name": "get",
+        "methodType": "read",
+        "object": "models.Timer.objects",
+        "objectTypes": [
+          "django.db.models.manager.Manager[core.models.Timer]",
+          "django.db.models.manager.Manager",
+          "django.db.models.manager.BaseManager"
+        ],
+        "attributes": [
+          {
+            "name": "id",
+            "startLine": 478,
+            "endLine": 478,
+            "startColumn": 44,
+            "endColumn": 59
+          }
+        ],
+        "type": "method"
+      }
+    }
+  ]
+}
