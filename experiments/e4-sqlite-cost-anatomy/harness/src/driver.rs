@@ -139,13 +139,38 @@ pub struct DriverRun<T> {
 /// collected repetition outcomes to a [`CellOutcome`] — "the remaining
 /// cells still run to completion" even once one repetition has already
 /// exhausted its retries, so a late cell is never skipped because an
-/// earlier one failed.
+/// earlier one failed. Equivalent to [`run_with_logging`] with a no-op
+/// rejection hook — the one caller (a test, or a caller that only wants
+/// the final tally) that genuinely has nothing to do per rejection.
 pub fn run<T>(
     cell_count: usize,
     repetitions_per_cell: usize,
     max_retries: usize,
     now: impl Fn() -> std::time::Duration,
+    attempt: impl FnMut(AttemptId) -> AttemptOutcome<T>,
+) -> DriverRun<T> {
+    run_with_logging(
+        cell_count,
+        repetitions_per_cell,
+        max_retries,
+        now,
+        attempt,
+        |_| {},
+    )
+}
+
+/// Like [`run`], but also calls `on_rejected` for every discarded attempt
+/// as it happens — before the next attempt starts, not batched until the
+/// whole run finishes — so a caller can append it to protocol §9's
+/// rejected-attempt log immediately (`data/rejected.log`: "never
+/// overwritten").
+pub fn run_with_logging<T>(
+    cell_count: usize,
+    repetitions_per_cell: usize,
+    max_retries: usize,
+    now: impl Fn() -> std::time::Duration,
     mut attempt: impl FnMut(AttemptId) -> AttemptOutcome<T>,
+    mut on_rejected: impl FnMut(&RejectedAttempt),
 ) -> DriverRun<T> {
     let mut per_cell_successes: Vec<Vec<T>> = (0..cell_count).map(|_| Vec::new()).collect();
     let mut rejected_attempts = Vec::new();
@@ -163,7 +188,10 @@ pub fn run<T>(
                     attempt_index,
                 })
             },
-            |rejected| rejected_attempts.push(rejected),
+            |rejected| {
+                on_rejected(&rejected);
+                rejected_attempts.push(rejected);
+            },
         );
         if let RepetitionOutcome::Succeeded(value) = outcome {
             per_cell_successes[cell_index].push(value);
@@ -188,6 +216,43 @@ pub fn run<T>(
         cell_outcomes,
         rejected_attempts,
     }
+}
+
+/// Which (cell, repetition) pairs exhausted their whole retry budget
+/// (protocol §9: "a 4th shows sustained contention for that repetition,
+/// marked `FAILED-INTERFERENCE`"): every attempt index `0..=max_retries`
+/// for that pair was rejected, i.e. it contributed exactly
+/// `max_retries + 1` entries to `rejected_attempts` and no success.
+/// Pure over an already-collected rejection list, so the terminal marker
+/// [`failed_interference_log_line`] can be logged once per exhausted
+/// repetition without re-deriving it from [`DriverRun::cell_outcomes`],
+/// which only carries the per-cell count, not which repetition indices.
+pub fn exhausted_repetitions(
+    rejected_attempts: &[RejectedAttempt],
+    max_retries: usize,
+) -> Vec<(usize, usize)> {
+    let mut counts: std::collections::HashMap<(usize, usize), usize> =
+        std::collections::HashMap::new();
+    for rejected in rejected_attempts {
+        *counts
+            .entry((rejected.id.cell_index, rejected.id.repetition_index))
+            .or_insert(0) += 1;
+    }
+    let mut exhausted: Vec<(usize, usize)> = counts
+        .into_iter()
+        .filter(|(_, count)| *count == max_retries + 1)
+        .map(|(key, _)| key)
+        .collect();
+    exhausted.sort_unstable();
+    exhausted
+}
+
+/// One exhausted repetition's terminal log line (protocol §9: "marked
+/// `FAILED-INTERFERENCE` and logged") — distinct from the per-attempt
+/// rejection lines [`RejectedAttempt::to_log_line`] already wrote for
+/// each of its `max_retries + 1` attempts.
+pub fn failed_interference_log_line(cell_index: usize, repetition_index: usize) -> String {
+    format!("FAILED-INTERFERENCE\tcell={cell_index}\trepetition={repetition_index}")
 }
 
 /// The real clock, for a real driver run: seconds since the Unix epoch, as
@@ -418,6 +483,115 @@ mod tests {
         // Any time after this file was written; proves it reads the real
         // clock rather than returning a stub zero duration.
         assert!(now.as_secs() > 1_760_000_000);
+    }
+
+    #[test]
+    fn run_with_logging_calls_on_rejected_for_every_discarded_attempt_before_the_run_ends() {
+        let mut logged = Vec::new();
+        let result: DriverRun<()> = run_with_logging(
+            1,
+            1,
+            3,
+            fixed_clock(5),
+            |_id| AttemptOutcome::Rejected("sibling not idle".to_string()),
+            |rejected| logged.push(rejected.clone()),
+        );
+        // "up to 3 retries (4 attempts)" — every one of them logged, in
+        // the same order as the final rejected_attempts list.
+        assert_eq!(logged.len(), 4);
+        assert_eq!(logged.len(), result.rejected_attempts.len());
+        for (a, b) in logged.iter().zip(result.rejected_attempts.iter()) {
+            assert_eq!(a.id, b.id);
+            assert_eq!(a.reason, b.reason);
+        }
+    }
+
+    #[test]
+    fn run_delegates_to_run_with_logging_and_reports_identically() {
+        let plain: DriverRun<usize> = run(2, 2, 1, fixed_clock(0), |id| {
+            if id.cell_index == 0 && id.attempt_index == 0 {
+                AttemptOutcome::Rejected("noise".to_string())
+            } else {
+                AttemptOutcome::Accepted(id.repetition_index)
+            }
+        });
+        assert_eq!(plain.rejected_attempts.len(), 2);
+        assert_eq!(plain.cell_outcomes.len(), 2);
+    }
+
+    #[test]
+    fn exhausted_repetitions_finds_only_the_pair_that_used_its_whole_retry_budget() {
+        let rejected_attempts = vec![
+            // Cell 0, repetition 1: all 4 attempts (0..=3) rejected.
+            RejectedAttempt {
+                id: AttemptId {
+                    cell_index: 0,
+                    repetition_index: 1,
+                    attempt_index: 0,
+                },
+                unix_time: Duration::from_secs(0),
+                reason: "a".to_string(),
+            },
+            RejectedAttempt {
+                id: AttemptId {
+                    cell_index: 0,
+                    repetition_index: 1,
+                    attempt_index: 1,
+                },
+                unix_time: Duration::from_secs(0),
+                reason: "a".to_string(),
+            },
+            RejectedAttempt {
+                id: AttemptId {
+                    cell_index: 0,
+                    repetition_index: 1,
+                    attempt_index: 2,
+                },
+                unix_time: Duration::from_secs(0),
+                reason: "a".to_string(),
+            },
+            RejectedAttempt {
+                id: AttemptId {
+                    cell_index: 0,
+                    repetition_index: 1,
+                    attempt_index: 3,
+                },
+                unix_time: Duration::from_secs(0),
+                reason: "a".to_string(),
+            },
+            // Cell 1, repetition 0: only one retry, then it succeeded —
+            // never exhausted, must not be reported.
+            RejectedAttempt {
+                id: AttemptId {
+                    cell_index: 1,
+                    repetition_index: 0,
+                    attempt_index: 0,
+                },
+                unix_time: Duration::from_secs(0),
+                reason: "b".to_string(),
+            },
+        ];
+        assert_eq!(exhausted_repetitions(&rejected_attempts, 3), vec![(0, 1)]);
+    }
+
+    #[test]
+    fn exhausted_repetitions_is_empty_when_nothing_exhausted_its_budget() {
+        let rejected_attempts = vec![RejectedAttempt {
+            id: AttemptId {
+                cell_index: 0,
+                repetition_index: 0,
+                attempt_index: 0,
+            },
+            unix_time: Duration::from_secs(0),
+            reason: "a".to_string(),
+        }];
+        assert_eq!(exhausted_repetitions(&rejected_attempts, 3), Vec::new());
+    }
+
+    #[test]
+    fn failed_interference_log_line_names_the_cell_and_repetition() {
+        let line = failed_interference_log_line(4, 2);
+        assert_eq!(line, "FAILED-INTERFERENCE\tcell=4\trepetition=2");
     }
 
     #[test]

@@ -1,0 +1,16 @@
+# cargo-mutants configuration.
+#
+# exclude_re entries are narrow, verified exceptions, not a blanket
+# ignore (coding conventions: an exception is versioned next to its
+# reason). Each one below is a mathematically equivalent mutant, proven
+# by hand, not merely a test gap:
+#
+# - "replace | with ^ in measure_cell_in_process": the bitwise-OR
+#   combines two disjoint SQLite OpenFlags bits
+#   (SQLITE_OPEN_READ_WRITE = 0x02, SQLITE_OPEN_CREATE = 0x04). XOR and
+#   OR are identical for disjoint bit sets, so this mutant can never be
+#   killed by any test — replacing `|` with `&` on the same line (which
+#   zeroes both bits) IS a real, behaviorally different mutant and is
+#   caught by measure_cell_in_process_reports_a_positive_mean_wall_time_for_both_workloads
+#   (verified by hand: triggers SQLITE_MISUSE).
+exclude_re = ["replace \\| with \\^ in measure_cell_in_process"]

@@ -243,11 +243,17 @@ passthrough!(shim_unfetch, xUnfetch, (offset: ffi::sqlite3_int64, buf: *mut c_vo
 /// `CLOCK_MONOTONIC`, unless the `passthrough_shim` feature is enabled, in
 /// which case `body` still runs through the exact same call site but the
 /// two `clock_gettime` calls around it are skipped and the recorded
-/// elapsed time is zero (protocol §5's overhead-acceptance bound: "A
-/// second, identical build with a passthrough shim (no timer calls)
-/// measures what the two `clock_gettime` calls... cost"). Kept as one
-/// function so both timed methods below select the same way, instead of
-/// each repeating its own `#[cfg(...)]` pair.
+/// elapsed time is a compile-time constant zero (protocol §5's
+/// overhead-acceptance bound: "A second, identical build with a
+/// passthrough shim (no timer calls) measures what the two
+/// `clock_gettime` calls... cost"). Because `elapsed` is provably zero on
+/// this path, not merely zero at run time, the optimizer is free to fold
+/// away `counters::record`'s duration-to-nanoseconds conversion and its
+/// atomic adds downstream of it too — the passthrough build's measured
+/// overhead removal is therefore the two clock reads *plus* whatever of
+/// that bookkeeping the compiler elides, never the clock reads alone.
+/// Kept as one function so both timed methods below select the same way,
+/// instead of each repeating its own `#[cfg(...)]` pair.
 #[cfg(not(feature = "passthrough_shim"))]
 fn timed<R>(body: impl FnOnce() -> R) -> (R, Duration) {
     let start = Instant::now();

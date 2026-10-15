@@ -49,6 +49,23 @@ impl Size {
             Size::Medium => 10_000_000,
         }
     }
+
+    /// The CLI/file-path spelling every `kiln-e4-harness` subcommand uses
+    /// for this size — the one owner [`Self::parse`] round-trips against.
+    pub fn label(self) -> &'static str {
+        match self {
+            Size::Small => "small",
+            Size::Medium => "medium",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "small" => Some(Size::Small),
+            "medium" => Some(Size::Medium),
+            _ => None,
+        }
+    }
 }
 
 /// The two `synchronous` settings (protocol §4), judged separately.
@@ -63,6 +80,25 @@ impl Synchronous {
         match self {
             Synchronous::Full => "FULL",
             Synchronous::Normal => "NORMAL",
+        }
+    }
+
+    /// The CLI/file-path spelling every `kiln-e4-harness` subcommand uses
+    /// for this setting — the one owner [`Self::parse`] round-trips
+    /// against. Lowercase, distinct from [`Self::pragma_value`]'s
+    /// uppercase SQL literal, which stays private to this module.
+    pub fn label(self) -> &'static str {
+        match self {
+            Synchronous::Full => "full",
+            Synchronous::Normal => "normal",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "full" => Some(Synchronous::Full),
+            "normal" => Some(Synchronous::Normal),
+            _ => None,
         }
     }
 }
@@ -497,6 +533,22 @@ mod tests {
     use rand_chacha::ChaCha8Rng;
     use rand_chacha::rand_core::{Rng, SeedableRng};
     use rusqlite::StatementStatus;
+
+    #[test]
+    fn size_label_round_trips_through_parse() {
+        for size in [Size::Small, Size::Medium] {
+            assert_eq!(Size::parse(size.label()), Some(size));
+        }
+        assert_eq!(Size::parse("huge"), None);
+    }
+
+    #[test]
+    fn synchronous_label_round_trips_through_parse() {
+        for synchronous in [Synchronous::Full, Synchronous::Normal] {
+            assert_eq!(Synchronous::parse(synchronous.label()), Some(synchronous));
+        }
+        assert_eq!(Synchronous::parse("off"), None);
+    }
 
     fn loaded_connection(row_count: u64) -> Connection {
         let conn = Connection::open_in_memory().expect("open in-memory connection");
