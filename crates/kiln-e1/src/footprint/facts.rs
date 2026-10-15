@@ -154,8 +154,13 @@ impl PathFacts {
     }
 
     pub fn assuming(&self, read: &ReadRef, present: bool) -> Self {
+        self.deciding(&read.node, present)
+    }
+
+    /// The path after the selector at `node` took `outcome`.
+    pub fn deciding(&self, node: &NodePath, outcome: bool) -> Self {
         let mut facts = self.clone();
-        facts.presence.push((read.node.clone(), present));
+        facts.presence.push((node.clone(), outcome));
         facts
     }
 

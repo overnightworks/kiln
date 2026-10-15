@@ -1,5 +1,7 @@
 //! Data-selected branches (`inputs.md` §5, Q1 and Q3): a branch decided by a
-//! read whose outcome changes which targets the function accesses. Such a read
+//! read, or by a comparison over a read result, whose outcome changes which
+//! targets the function accesses. A comparison over arguments and literals
+//! alone selects by argument and never appears here. Such a read
 //! determines targets without the identifiable index or foreign key Q3 asks
 //! for, so the function is unknown.
 //!

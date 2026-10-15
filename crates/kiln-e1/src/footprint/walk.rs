@@ -53,10 +53,18 @@ impl Walker<'_> {
         match &block.terminal {
             Terminal::Return(_) | Terminal::Abort(_) => Ok(vec![FeasiblePath { facts, terminal }]),
             Terminal::Branch {
-                condition: Condition::RowPresent(slot),
+                condition,
                 when_present,
                 when_absent,
-            } => self.branch(*slot, [when_present, when_absent], terminal, facts),
+            } => {
+                let arms = [&**when_present, &**when_absent];
+                match condition {
+                    Condition::RowPresent(slot) => self.branch(*slot, arms, terminal, facts),
+                    Condition::Compare { left, right, .. } => {
+                        self.comparison_branch([left, right], arms, terminal, facts)
+                    }
+                }
+            }
         }
     }
 
@@ -85,6 +93,32 @@ impl Walker<'_> {
             &terminal.when_absent(),
             facts.assuming(&selector, false),
         )?);
+        Ok(paths)
+    }
+
+    /// An argument-selected comparison (no operand involves a read result)
+    /// forks into arms that classify on their own (Q1); one that does is
+    /// data-selected, with the branch itself as selector (Q3).
+    fn comparison_branch(
+        &self,
+        operands: [&Expr; 2],
+        [when_holds, when_fails]: [&Block; 2],
+        terminal: NodePath,
+        facts: PathFacts,
+    ) -> Result<Vec<FeasiblePath>, ClassifyError> {
+        let mut data_selected = false;
+        for operand in operands {
+            data_selected |= !operand_of(&facts, operand, &terminal)?.uses().is_empty();
+        }
+        let arm = |holds: bool| {
+            if data_selected {
+                facts.deciding(&terminal, holds)
+            } else {
+                facts.clone()
+            }
+        };
+        let mut paths = self.block(when_holds, &terminal.when_present(), arm(true))?;
+        paths.extend(self.block(when_fails, &terminal.when_absent(), arm(false))?);
         Ok(paths)
     }
 
