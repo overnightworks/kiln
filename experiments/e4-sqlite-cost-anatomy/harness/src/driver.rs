@@ -313,311 +313,332 @@ mod tests {
         move || Duration::from_secs(seconds)
     }
 
-    #[test]
-    fn interleaved_order_runs_every_cells_repetition_zero_before_any_repetition_one() {
-        let order = interleaved_order(3, 2);
-        assert_eq!(order, vec![(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1)]);
-    }
+    mod kiln_e4_01 {
+        use super::*;
 
-    #[test]
-    fn interleaved_order_is_empty_for_zero_cells_or_zero_repetitions() {
-        assert_eq!(interleaved_order(0, 5), Vec::new());
-        assert_eq!(interleaved_order(5, 0), Vec::new());
-    }
+        #[test]
+        fn interleaved_order_runs_every_cells_repetition_zero_before_any_repetition_one() {
+            let order = interleaved_order(3, 2);
+            assert_eq!(order, vec![(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1)]);
+        }
 
-    #[test]
-    fn a_repetition_succeeds_on_its_first_attempt_without_any_rejection() {
-        let mut rejections = Vec::new();
-        let outcome = run_repetition(
-            0,
-            0,
-            3,
-            fixed_clock(10),
-            |_attempt_index| AttemptOutcome::Accepted(42),
-            |r| rejections.push(r),
-        );
-        assert!(matches!(outcome, RepetitionOutcome::Succeeded(42)));
-        assert!(rejections.is_empty());
-    }
-
-    #[test]
-    fn a_repetition_retries_after_a_rejection_and_then_succeeds() {
-        let mut rejections = Vec::new();
-        let mut calls = 0;
-        let outcome = run_repetition(
-            1,
-            2,
-            3,
-            fixed_clock(10),
-            |attempt_index| {
-                calls += 1;
-                if attempt_index == 0 {
-                    AttemptOutcome::Rejected("load average too high".to_string())
-                } else {
-                    AttemptOutcome::Accepted(attempt_index)
-                }
-            },
-            |r| rejections.push(r),
-        );
-        assert!(matches!(outcome, RepetitionOutcome::Succeeded(1)));
-        assert_eq!(calls, 2);
-        assert_eq!(rejections.len(), 1);
-        assert_eq!(rejections[0].id.cell_index, 1);
-        assert_eq!(rejections[0].id.repetition_index, 2);
-        assert_eq!(rejections[0].id.attempt_index, 0);
-        assert_eq!(rejections[0].reason, "load average too high");
-    }
-
-    #[test]
-    fn a_repetition_that_exhausts_every_retry_fails_interference() {
-        let mut rejections = Vec::new();
-        let outcome: RepetitionOutcome<()> = run_repetition(
-            0,
-            0,
-            3,
-            fixed_clock(10),
-            |_attempt_index| AttemptOutcome::Rejected("sibling not idle".to_string()),
-            |r| rejections.push(r),
-        );
-        assert!(matches!(outcome, RepetitionOutcome::FailedInterference));
-        // "up to 3 retries (4 attempts)" — attempts 0..=3.
-        assert_eq!(rejections.len(), 4);
-        assert_eq!(
-            rejections
-                .iter()
-                .map(|r| r.id.attempt_index)
-                .collect::<Vec<_>>(),
-            vec![0, 1, 2, 3]
-        );
-    }
-
-    #[test]
-    fn a_cell_with_every_repetition_succeeding_is_completed() {
-        let result: DriverRun<usize> = run(2, 3, 3, fixed_clock(0), |id| {
-            AttemptOutcome::Accepted(id.repetition_index)
-        });
-        assert_eq!(result.rejected_attempts.len(), 0);
-        assert_eq!(result.cell_outcomes.len(), 2);
-        for outcome in &result.cell_outcomes {
-            match outcome {
-                CellOutcome::Completed(successes) => assert_eq!(successes, &vec![0, 1, 2]),
-                CellOutcome::InsufficientRepetitions { .. } => panic!("expected Completed"),
-            }
+        #[test]
+        fn interleaved_order_is_empty_for_zero_cells_or_zero_repetitions() {
+            assert_eq!(interleaved_order(0, 5), Vec::new());
+            assert_eq!(interleaved_order(5, 0), Vec::new());
         }
     }
 
-    #[test]
-    fn a_cell_whose_one_repetition_exhausts_its_retries_is_insufficient_but_the_run_continues() {
-        // Cell 0's repetition 1 (of 3) always rejects; every other
-        // (cell, repetition) pair always accepts — proving the driver
-        // keeps running the remaining cells and repetitions rather than
-        // stopping the whole run (protocol §9: "the remaining cells still
-        // run to completion").
-        let result: DriverRun<usize> = run(2, 3, 3, fixed_clock(0), |id| {
-            if id.cell_index == 0 && id.repetition_index == 1 {
-                AttemptOutcome::Rejected("pinned cpu waited".to_string())
-            } else {
-                AttemptOutcome::Accepted(id.repetition_index)
-            }
-        });
+    mod kiln_e4_02 {
+        use super::*;
 
-        match &result.cell_outcomes[0] {
-            CellOutcome::InsufficientRepetitions {
-                succeeded,
-                required,
-            } => {
-                assert_eq!(*succeeded, 2);
-                assert_eq!(*required, 3);
-            }
-            CellOutcome::Completed(_) => panic!("expected cell 0 to be insufficient"),
+        #[test]
+        fn a_repetition_succeeds_on_its_first_attempt_without_any_rejection() {
+            let mut rejections = Vec::new();
+            let outcome = run_repetition(
+                0,
+                0,
+                3,
+                fixed_clock(10),
+                |_attempt_index| AttemptOutcome::Accepted(42),
+                |r| rejections.push(r),
+            );
+            assert!(matches!(outcome, RepetitionOutcome::Succeeded(42)));
+            assert!(rejections.is_empty());
         }
-        match &result.cell_outcomes[1] {
-            CellOutcome::Completed(successes) => assert_eq!(successes, &vec![0, 1, 2]),
-            CellOutcome::InsufficientRepetitions { .. } => panic!("expected cell 1 completed"),
-        }
-        // 4 attempts (1 original + 3 retries), all rejected, for exactly
-        // the one failing repetition.
-        assert_eq!(result.rejected_attempts.len(), 4);
-        assert!(
-            result
-                .rejected_attempts
-                .iter()
-                .all(|r| r.id.cell_index == 0 && r.id.repetition_index == 1)
-        );
-    }
 
-    #[test]
-    fn rejected_attempt_log_line_carries_timestamp_cell_attempt_and_reason() {
-        let rejected = RejectedAttempt {
-            id: AttemptId {
-                cell_index: 4,
-                repetition_index: 2,
-                attempt_index: 1,
-            },
-            unix_time: Duration::from_secs(1_700_000_000),
-            reason: "load average too high".to_string(),
-        };
-        let line = rejected.to_log_line();
-        assert!(line.contains("1700000000"));
-        assert!(line.contains("cell=4"));
-        assert!(line.contains("repetition=2"));
-        assert!(line.contains("attempt=1"));
-        assert!(line.contains("reason=load average too high"));
-    }
-
-    #[test]
-    fn append_log_line_creates_the_file_and_never_overwrites_earlier_lines() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("rejected.log");
-
-        append_log_line(&path, "first line").unwrap();
-        append_log_line(&path, "second line").unwrap();
-
-        let contents = fs::read_to_string(&path).unwrap();
-        assert_eq!(contents, "first line\nsecond line\n");
-    }
-
-    #[test]
-    fn real_clock_reports_a_plausible_unix_time() {
-        let now = real_clock();
-        // Any time after this file was written; proves it reads the real
-        // clock rather than returning a stub zero duration.
-        assert!(now.as_secs() > 1_760_000_000);
-    }
-
-    #[test]
-    fn run_with_logging_calls_on_rejected_for_every_discarded_attempt_before_the_run_ends() {
-        let mut logged = Vec::new();
-        let result: DriverRun<()> = run_with_logging(
-            1,
-            1,
-            3,
-            fixed_clock(5),
-            |_id| AttemptOutcome::Rejected("sibling not idle".to_string()),
-            |rejected| logged.push(rejected.clone()),
-        );
-        // "up to 3 retries (4 attempts)" — every one of them logged, in
-        // the same order as the final rejected_attempts list.
-        assert_eq!(logged.len(), 4);
-        assert_eq!(logged.len(), result.rejected_attempts.len());
-        for (a, b) in logged.iter().zip(result.rejected_attempts.iter()) {
-            assert_eq!(a.id, b.id);
-            assert_eq!(a.reason, b.reason);
-        }
-    }
-
-    #[test]
-    fn run_delegates_to_run_with_logging_and_reports_identically() {
-        let plain: DriverRun<usize> = run(2, 2, 1, fixed_clock(0), |id| {
-            if id.cell_index == 0 && id.attempt_index == 0 {
-                AttemptOutcome::Rejected("noise".to_string())
-            } else {
-                AttemptOutcome::Accepted(id.repetition_index)
-            }
-        });
-        assert_eq!(plain.rejected_attempts.len(), 2);
-        assert_eq!(plain.cell_outcomes.len(), 2);
-    }
-
-    #[test]
-    fn exhausted_repetitions_finds_only_the_pair_that_used_its_whole_retry_budget() {
-        let rejected_attempts = vec![
-            // Cell 0, repetition 1: all 4 attempts (0..=3) rejected.
-            RejectedAttempt {
-                id: AttemptId {
-                    cell_index: 0,
-                    repetition_index: 1,
-                    attempt_index: 0,
+        #[test]
+        fn a_repetition_retries_after_a_rejection_and_then_succeeds() {
+            let mut rejections = Vec::new();
+            let mut calls = 0;
+            let outcome = run_repetition(
+                1,
+                2,
+                3,
+                fixed_clock(10),
+                |attempt_index| {
+                    calls += 1;
+                    if attempt_index == 0 {
+                        AttemptOutcome::Rejected("load average too high".to_string())
+                    } else {
+                        AttemptOutcome::Accepted(attempt_index)
+                    }
                 },
-                unix_time: Duration::from_secs(0),
-                reason: "a".to_string(),
-            },
-            RejectedAttempt {
+                |r| rejections.push(r),
+            );
+            assert!(matches!(outcome, RepetitionOutcome::Succeeded(1)));
+            assert_eq!(calls, 2);
+            assert_eq!(rejections.len(), 1);
+            assert_eq!(rejections[0].id.cell_index, 1);
+            assert_eq!(rejections[0].id.repetition_index, 2);
+            assert_eq!(rejections[0].id.attempt_index, 0);
+            assert_eq!(rejections[0].reason, "load average too high");
+        }
+
+        #[test]
+        fn a_repetition_that_exhausts_every_retry_fails_interference() {
+            let mut rejections = Vec::new();
+            let outcome: RepetitionOutcome<()> = run_repetition(
+                0,
+                0,
+                3,
+                fixed_clock(10),
+                |_attempt_index| AttemptOutcome::Rejected("sibling not idle".to_string()),
+                |r| rejections.push(r),
+            );
+            assert!(matches!(outcome, RepetitionOutcome::FailedInterference));
+            // "up to 3 retries (4 attempts)" — attempts 0..=3.
+            assert_eq!(rejections.len(), 4);
+            assert_eq!(
+                rejections
+                    .iter()
+                    .map(|r| r.id.attempt_index)
+                    .collect::<Vec<_>>(),
+                vec![0, 1, 2, 3]
+            );
+        }
+    }
+
+    mod kiln_e4_03 {
+        use super::*;
+
+        #[test]
+        fn a_cell_with_every_repetition_succeeding_is_completed() {
+            let result: DriverRun<usize> = run(2, 3, 3, fixed_clock(0), |id| {
+                AttemptOutcome::Accepted(id.repetition_index)
+            });
+            assert_eq!(result.rejected_attempts.len(), 0);
+            assert_eq!(result.cell_outcomes.len(), 2);
+            for outcome in &result.cell_outcomes {
+                match outcome {
+                    CellOutcome::Completed(successes) => assert_eq!(successes, &vec![0, 1, 2]),
+                    CellOutcome::InsufficientRepetitions { .. } => panic!("expected Completed"),
+                }
+            }
+        }
+
+        #[test]
+        fn a_cell_whose_one_repetition_exhausts_its_retries_is_insufficient_but_the_run_continues()
+        {
+            // Cell 0's repetition 1 (of 3) always rejects; every other
+            // (cell, repetition) pair always accepts — proving the driver
+            // keeps running the remaining cells and repetitions rather than
+            // stopping the whole run (protocol §9: "the remaining cells still
+            // run to completion").
+            let result: DriverRun<usize> = run(2, 3, 3, fixed_clock(0), |id| {
+                if id.cell_index == 0 && id.repetition_index == 1 {
+                    AttemptOutcome::Rejected("pinned cpu waited".to_string())
+                } else {
+                    AttemptOutcome::Accepted(id.repetition_index)
+                }
+            });
+
+            match &result.cell_outcomes[0] {
+                CellOutcome::InsufficientRepetitions {
+                    succeeded,
+                    required,
+                } => {
+                    assert_eq!(*succeeded, 2);
+                    assert_eq!(*required, 3);
+                }
+                CellOutcome::Completed(_) => panic!("expected cell 0 to be insufficient"),
+            }
+            match &result.cell_outcomes[1] {
+                CellOutcome::Completed(successes) => assert_eq!(successes, &vec![0, 1, 2]),
+                CellOutcome::InsufficientRepetitions { .. } => panic!("expected cell 1 completed"),
+            }
+            // 4 attempts (1 original + 3 retries), all rejected, for exactly
+            // the one failing repetition.
+            assert_eq!(result.rejected_attempts.len(), 4);
+            assert!(
+                result
+                    .rejected_attempts
+                    .iter()
+                    .all(|r| r.id.cell_index == 0 && r.id.repetition_index == 1)
+            );
+        }
+    }
+
+    mod kiln_e4_04 {
+        use super::*;
+
+        #[test]
+        fn rejected_attempt_log_line_carries_timestamp_cell_attempt_and_reason() {
+            let rejected = RejectedAttempt {
                 id: AttemptId {
-                    cell_index: 0,
-                    repetition_index: 1,
+                    cell_index: 4,
+                    repetition_index: 2,
                     attempt_index: 1,
                 },
-                unix_time: Duration::from_secs(0),
-                reason: "a".to_string(),
-            },
-            RejectedAttempt {
+                unix_time: Duration::from_secs(1_700_000_000),
+                reason: "load average too high".to_string(),
+            };
+            let line = rejected.to_log_line();
+            assert!(line.contains("1700000000"));
+            assert!(line.contains("cell=4"));
+            assert!(line.contains("repetition=2"));
+            assert!(line.contains("attempt=1"));
+            assert!(line.contains("reason=load average too high"));
+        }
+
+        #[test]
+        fn append_log_line_creates_the_file_and_never_overwrites_earlier_lines() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("rejected.log");
+
+            append_log_line(&path, "first line").unwrap();
+            append_log_line(&path, "second line").unwrap();
+
+            let contents = fs::read_to_string(&path).unwrap();
+            assert_eq!(contents, "first line\nsecond line\n");
+        }
+
+        #[test]
+        fn real_clock_reports_a_plausible_unix_time() {
+            let now = real_clock();
+            // Any time after this file was written; proves it reads the real
+            // clock rather than returning a stub zero duration.
+            assert!(now.as_secs() > 1_760_000_000);
+        }
+
+        #[test]
+        fn run_with_logging_calls_on_rejected_for_every_discarded_attempt_before_the_run_ends() {
+            let mut logged = Vec::new();
+            let result: DriverRun<()> = run_with_logging(
+                1,
+                1,
+                3,
+                fixed_clock(5),
+                |_id| AttemptOutcome::Rejected("sibling not idle".to_string()),
+                |rejected| logged.push(rejected.clone()),
+            );
+            // "up to 3 retries (4 attempts)" — every one of them logged, in
+            // the same order as the final rejected_attempts list.
+            assert_eq!(logged.len(), 4);
+            assert_eq!(logged.len(), result.rejected_attempts.len());
+            for (a, b) in logged.iter().zip(result.rejected_attempts.iter()) {
+                assert_eq!(a.id, b.id);
+                assert_eq!(a.reason, b.reason);
+            }
+        }
+
+        #[test]
+        fn run_delegates_to_run_with_logging_and_reports_identically() {
+            let plain: DriverRun<usize> = run(2, 2, 1, fixed_clock(0), |id| {
+                if id.cell_index == 0 && id.attempt_index == 0 {
+                    AttemptOutcome::Rejected("noise".to_string())
+                } else {
+                    AttemptOutcome::Accepted(id.repetition_index)
+                }
+            });
+            assert_eq!(plain.rejected_attempts.len(), 2);
+            assert_eq!(plain.cell_outcomes.len(), 2);
+        }
+
+        #[test]
+        fn exhausted_repetitions_finds_only_the_pair_that_used_its_whole_retry_budget() {
+            let rejected_attempts = vec![
+                // Cell 0, repetition 1: all 4 attempts (0..=3) rejected.
+                RejectedAttempt {
+                    id: AttemptId {
+                        cell_index: 0,
+                        repetition_index: 1,
+                        attempt_index: 0,
+                    },
+                    unix_time: Duration::from_secs(0),
+                    reason: "a".to_string(),
+                },
+                RejectedAttempt {
+                    id: AttemptId {
+                        cell_index: 0,
+                        repetition_index: 1,
+                        attempt_index: 1,
+                    },
+                    unix_time: Duration::from_secs(0),
+                    reason: "a".to_string(),
+                },
+                RejectedAttempt {
+                    id: AttemptId {
+                        cell_index: 0,
+                        repetition_index: 1,
+                        attempt_index: 2,
+                    },
+                    unix_time: Duration::from_secs(0),
+                    reason: "a".to_string(),
+                },
+                RejectedAttempt {
+                    id: AttemptId {
+                        cell_index: 0,
+                        repetition_index: 1,
+                        attempt_index: 3,
+                    },
+                    unix_time: Duration::from_secs(0),
+                    reason: "a".to_string(),
+                },
+                // Cell 1, repetition 0: only one retry, then it succeeded —
+                // never exhausted, must not be reported.
+                RejectedAttempt {
+                    id: AttemptId {
+                        cell_index: 1,
+                        repetition_index: 0,
+                        attempt_index: 0,
+                    },
+                    unix_time: Duration::from_secs(0),
+                    reason: "b".to_string(),
+                },
+            ];
+            assert_eq!(exhausted_repetitions(&rejected_attempts, 3), vec![(0, 1)]);
+        }
+
+        #[test]
+        fn exhausted_repetitions_is_empty_when_nothing_exhausted_its_budget() {
+            let rejected_attempts = vec![RejectedAttempt {
                 id: AttemptId {
                     cell_index: 0,
-                    repetition_index: 1,
-                    attempt_index: 2,
-                },
-                unix_time: Duration::from_secs(0),
-                reason: "a".to_string(),
-            },
-            RejectedAttempt {
-                id: AttemptId {
-                    cell_index: 0,
-                    repetition_index: 1,
-                    attempt_index: 3,
-                },
-                unix_time: Duration::from_secs(0),
-                reason: "a".to_string(),
-            },
-            // Cell 1, repetition 0: only one retry, then it succeeded —
-            // never exhausted, must not be reported.
-            RejectedAttempt {
-                id: AttemptId {
-                    cell_index: 1,
                     repetition_index: 0,
                     attempt_index: 0,
                 },
                 unix_time: Duration::from_secs(0),
-                reason: "b".to_string(),
-            },
-        ];
-        assert_eq!(exhausted_repetitions(&rejected_attempts, 3), vec![(0, 1)]);
+                reason: "a".to_string(),
+            }];
+            assert_eq!(exhausted_repetitions(&rejected_attempts, 3), Vec::new());
+        }
+
+        #[test]
+        fn failed_interference_log_line_names_the_cell_and_repetition() {
+            let line = failed_interference_log_line(4, 2);
+            assert_eq!(line, "FAILED-INTERFERENCE\tcell=4\trepetition=2");
+        }
     }
 
-    #[test]
-    fn exhausted_repetitions_is_empty_when_nothing_exhausted_its_budget() {
-        let rejected_attempts = vec![RejectedAttempt {
-            id: AttemptId {
-                cell_index: 0,
-                repetition_index: 0,
-                attempt_index: 0,
-            },
-            unix_time: Duration::from_secs(0),
-            reason: "a".to_string(),
-        }];
-        assert_eq!(exhausted_repetitions(&rejected_attempts, 3), Vec::new());
-    }
+    mod kiln_e4_05 {
+        use super::*;
 
-    #[test]
-    fn failed_interference_log_line_names_the_cell_and_repetition() {
-        let line = failed_interference_log_line(4, 2);
-        assert_eq!(line, "FAILED-INTERFERENCE\tcell=4\trepetition=2");
-    }
+        #[test]
+        fn operation_plan_uses_the_smaller_insert_count_only_for_insert() {
+            use crate::machine;
+            use crate::workloads::Workload;
 
-    #[test]
-    fn operation_plan_uses_the_smaller_insert_count_only_for_insert() {
-        use crate::machine;
-        use crate::workloads::Workload;
-
-        assert_eq!(
-            operation_plan(Workload::Insert),
-            OperationPlan {
-                warmup: machine::WARMUP_OPERATIONS,
-                timed: machine::OPERATION_COUNT_C,
-            }
-        );
-        for workload in [
-            Workload::PointRead,
-            Workload::PointUpdate,
-            Workload::Transfer,
-        ] {
             assert_eq!(
-                operation_plan(workload),
+                operation_plan(Workload::Insert),
                 OperationPlan {
                     warmup: machine::WARMUP_OPERATIONS,
-                    timed: machine::OPERATION_COUNT_AB_D,
+                    timed: machine::OPERATION_COUNT_C,
                 }
             );
+            for workload in [
+                Workload::PointRead,
+                Workload::PointUpdate,
+                Workload::Transfer,
+            ] {
+                assert_eq!(
+                    operation_plan(workload),
+                    OperationPlan {
+                        warmup: machine::WARMUP_OPERATIONS,
+                        timed: machine::OPERATION_COUNT_AB_D,
+                    }
+                );
+            }
         }
     }
 }

@@ -53,7 +53,7 @@ impl Build {
 /// is odd and the passthrough build first when `k` is even. Takes the
 /// driver's 0-based repetition index, so index 0 is pair 1.
 pub fn first_build(repetition_index: usize) -> Build {
-    if repetition_index % 2 == 0 {
+    if repetition_index.is_multiple_of(2) {
         Build::Instrumented
     } else {
         Build::Passthrough

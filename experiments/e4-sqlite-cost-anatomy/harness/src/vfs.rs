@@ -710,4 +710,41 @@ mod tests {
             }
         );
     }
+
+    mod kiln_e4_10 {
+        use super::*;
+
+        /// Totals the WAL's timed nanoseconds over one real commit under
+        /// `synchronous=FULL`, where both `xWrite` and `xSync` are called.
+        fn committed_wal_durations() -> (u64, u64) {
+            let _guard = crate::test_support::lock_vfs_counters();
+            let dir = tempfile::tempdir().expect("tempdir");
+            let conn = open_through_shim(&dir.path().join("passthrough-test.db"));
+            conn.execute_batch(
+                "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; CREATE TABLE t (x INTEGER);",
+            )
+            .unwrap();
+            time_operation(|| -> rusqlite::Result<()> {
+                conn.execute_batch("BEGIN IMMEDIATE; INSERT INTO t (x) VALUES (1); COMMIT;")
+            })
+            .unwrap();
+            let wal = counters::snapshot().wal;
+            assert!(wal.xwrite_count > 0 && wal.xsync_count > 0);
+            (wal.xwrite_ns, wal.xsync_ns)
+        }
+
+        #[cfg(not(feature = "passthrough_shim"))]
+        #[test]
+        fn the_instrumented_build_times_the_wal_writes_and_syncs_of_a_commit() {
+            let (write, sync) = committed_wal_durations();
+            assert!(write > 0 && sync > 0);
+        }
+
+        #[cfg(feature = "passthrough_shim")]
+        #[test]
+        fn the_passthrough_build_still_commits_but_records_no_time() {
+            let (write, sync) = committed_wal_durations();
+            assert_eq!((write, sync), (0, 0));
+        }
+    }
 }

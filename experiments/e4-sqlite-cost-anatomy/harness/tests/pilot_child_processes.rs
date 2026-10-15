@@ -7,6 +7,7 @@
 //! correctness check, not a benchmark or a feasibility-pilot run.
 
 use std::path::Path;
+use std::sync::OnceLock;
 
 use kiln_e4_harness::comparison::{CellComparison, WorkloadComparison, run_pilot_comparisons};
 use kiln_e4_harness::machine::REPETITIONS_PER_CELL;
@@ -24,6 +25,16 @@ fn run_tiny_pilot(rejected_log: &Path) -> Vec<WorkloadComparison> {
     run_pilot_comparisons(harness_binary(), harness_binary(), 1, 1, rejected_log)
         .expect("run_pilot_comparisons must succeed against the real compiled binary")
         .0
+}
+
+/// One shared tiny pilot for the tests that only read its rows: nine
+/// interference-gated pairs are the slow part of this file.
+fn shared_tiny_pilot() -> &'static [WorkloadComparison] {
+    static CELLS: OnceLock<Vec<WorkloadComparison>> = OnceLock::new();
+    CELLS.get_or_init(|| {
+        let output_dir = tempfile::tempdir().expect("tempdir");
+        run_tiny_pilot(&output_dir.path().join("rejected.log"))
+    })
 }
 
 mod kiln_e4_07 {
@@ -74,8 +85,7 @@ mod kiln_e4_11 {
 
     #[test]
     fn the_pilot_reports_the_write_workload_gated_and_the_read_workload_not_gated() {
-        let output_dir = tempfile::tempdir().expect("tempdir");
-        let cells = run_tiny_pilot(&output_dir.path().join("rejected.log"));
+        let cells = shared_tiny_pilot();
 
         let read = cells
             .iter()
@@ -96,8 +106,7 @@ mod kiln_e4_13 {
 
     #[test]
     fn a_judged_write_cell_holds_exactly_the_protocols_nine_pairs() {
-        let output_dir = tempfile::tempdir().expect("tempdir");
-        let cells = run_tiny_pilot(&output_dir.path().join("rejected.log"));
+        let cells = shared_tiny_pilot();
 
         // The machine's real interference gate may reject every attempt of
         // a pair; then the cell is insufficient and has no pairs to count.

@@ -534,22 +534,6 @@ mod tests {
     use rand_chacha::rand_core::{Rng, SeedableRng};
     use rusqlite::StatementStatus;
 
-    #[test]
-    fn size_label_round_trips_through_parse() {
-        for size in [Size::Small, Size::Medium] {
-            assert_eq!(Size::parse(size.label()), Some(size));
-        }
-        assert_eq!(Size::parse("huge"), None);
-    }
-
-    #[test]
-    fn synchronous_label_round_trips_through_parse() {
-        for synchronous in [Synchronous::Full, Synchronous::Normal] {
-            assert_eq!(Synchronous::parse(synchronous.label()), Some(synchronous));
-        }
-        assert_eq!(Synchronous::parse("off"), None);
-    }
-
     fn loaded_connection(row_count: u64) -> Connection {
         let conn = Connection::open_in_memory().expect("open in-memory connection");
         configure_connection(&conn, Synchronous::Full).expect("configure connection");
@@ -945,6 +929,26 @@ mod tests {
             self.record();
             self.inner.fill_bytes(dst);
             Ok(())
+        }
+    }
+
+    mod kiln_e4_18 {
+        use super::*;
+
+        #[test]
+        fn size_label_round_trips_through_parse() {
+            for size in [Size::Small, Size::Medium] {
+                assert_eq!(Size::parse(size.label()), Some(size));
+            }
+            assert_eq!(Size::parse("huge"), None);
+        }
+
+        #[test]
+        fn synchronous_label_round_trips_through_parse() {
+            for synchronous in [Synchronous::Full, Synchronous::Normal] {
+                assert_eq!(Synchronous::parse(synchronous.label()), Some(synchronous));
+            }
+            assert_eq!(Synchronous::parse("off"), None);
         }
     }
 }

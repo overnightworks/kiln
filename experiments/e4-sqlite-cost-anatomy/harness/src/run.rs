@@ -285,69 +285,77 @@ pub fn run_cell(
 mod tests {
     use super::*;
 
-    #[test]
-    fn repetition_measurement_round_trips_through_its_own_line_format() {
-        let measurement = RepetitionMeasurement {
-            xsync_ns: 123,
-            xwrite_ns: 456,
-            remainder_ns: 789,
-            wall_ns: 1368,
-            cpu_ns: 42,
-        };
-        let line = measurement.to_line();
-        assert_eq!(RepetitionMeasurement::parse_line(&line), Some(measurement));
+    mod kiln_e4_06 {
+        use super::*;
+
+        #[test]
+        fn judge_attempt_accepts_a_fully_idle_quiet_window() {
+            let interval = machine::SAMPLE_INTERVAL;
+            let expected_ticks = interval.as_millis() as u64 * machine::USER_HZ / 1000;
+            let start = monitor::Sample {
+                sibling_idle_ticks: 0,
+                pinned_wait_ns: 0,
+                load_average_1m: 1.0,
+            };
+            let end = monitor::Sample {
+                sibling_idle_ticks: expected_ticks,
+                pinned_wait_ns: 0,
+                load_average_1m: 1.0,
+            };
+            assert_eq!(judge_attempt(&start, &end, interval), None);
+        }
+
+        #[test]
+        fn judge_attempt_rejects_with_a_reason_naming_the_violation() {
+            let start = monitor::Sample {
+                sibling_idle_ticks: 0,
+                pinned_wait_ns: 0,
+                load_average_1m: machine::MAX_LOAD_AVERAGE,
+            };
+            let reason = judge_attempt(&start, &start, Duration::from_millis(0))
+                .expect("a load average at the gate must be rejected");
+            assert!(reason.contains("LoadAverageTooHigh"));
+        }
     }
 
-    #[test]
-    fn repetition_measurement_parse_line_rejects_a_line_missing_a_field() {
-        assert_eq!(
-            RepetitionMeasurement::parse_line("xsync_ns=1\txwrite_ns=2"),
-            None
-        );
-    }
+    mod kiln_e4_08 {
+        use super::*;
 
-    #[test]
-    fn sample_line_round_trips_through_render_and_parse() {
-        let sample = monitor::Sample {
-            sibling_idle_ticks: 100,
-            pinned_wait_ns: 5000,
-            load_average_1m: 2.5,
-        };
-        let line = render_sample_line(&sample);
-        assert_eq!(parse_sample_line(&line), Some(sample));
-    }
+        #[test]
+        fn repetition_measurement_round_trips_through_its_own_line_format() {
+            let measurement = RepetitionMeasurement {
+                xsync_ns: 123,
+                xwrite_ns: 456,
+                remainder_ns: 789,
+                wall_ns: 1368,
+                cpu_ns: 42,
+            };
+            let line = measurement.to_line();
+            assert_eq!(RepetitionMeasurement::parse_line(&line), Some(measurement));
+        }
 
-    #[test]
-    fn parse_sample_line_rejects_a_line_missing_a_field() {
-        assert_eq!(parse_sample_line("sibling_idle_ticks=1"), None);
-    }
+        #[test]
+        fn repetition_measurement_parse_line_rejects_a_line_missing_a_field() {
+            assert_eq!(
+                RepetitionMeasurement::parse_line("xsync_ns=1\txwrite_ns=2"),
+                None
+            );
+        }
 
-    #[test]
-    fn judge_attempt_accepts_a_fully_idle_quiet_window() {
-        let interval = machine::SAMPLE_INTERVAL;
-        let expected_ticks = interval.as_millis() as u64 * machine::USER_HZ / 1000;
-        let start = monitor::Sample {
-            sibling_idle_ticks: 0,
-            pinned_wait_ns: 0,
-            load_average_1m: 1.0,
-        };
-        let end = monitor::Sample {
-            sibling_idle_ticks: expected_ticks,
-            pinned_wait_ns: 0,
-            load_average_1m: 1.0,
-        };
-        assert_eq!(judge_attempt(&start, &end, interval), None);
-    }
+        #[test]
+        fn sample_line_round_trips_through_render_and_parse() {
+            let sample = monitor::Sample {
+                sibling_idle_ticks: 100,
+                pinned_wait_ns: 5000,
+                load_average_1m: 2.5,
+            };
+            let line = render_sample_line(&sample);
+            assert_eq!(parse_sample_line(&line), Some(sample));
+        }
 
-    #[test]
-    fn judge_attempt_rejects_with_a_reason_naming_the_violation() {
-        let start = monitor::Sample {
-            sibling_idle_ticks: 0,
-            pinned_wait_ns: 0,
-            load_average_1m: machine::MAX_LOAD_AVERAGE,
-        };
-        let reason = judge_attempt(&start, &start, Duration::from_millis(0))
-            .expect("a load average at the gate must be rejected");
-        assert!(reason.contains("LoadAverageTooHigh"));
+        #[test]
+        fn parse_sample_line_rejects_a_line_missing_a_field() {
+            assert_eq!(parse_sample_line("sibling_idle_ticks=1"), None);
+        }
     }
 }

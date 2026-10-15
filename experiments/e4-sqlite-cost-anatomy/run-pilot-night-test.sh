@@ -13,9 +13,9 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 night_script="$script_dir/run-pilot-night.sh"
 
 failures=0
-pass() { echo "PASS: $1"; }
+pass() { echo "PASS [KILN-E4-19]: $1"; }
 fail() {
-  echo "FAIL: $1" >&2
+  echo "FAIL [KILN-E4-19]: $1" >&2
   failures=$((failures + 1))
 }
 

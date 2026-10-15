@@ -545,83 +545,6 @@ mod tests {
     }
 
     #[test]
-    fn manifest_render_round_trips_through_read_binary_sha256() {
-        let manifest = Manifest {
-            binary_sha256: "deadbeef".repeat(8),
-            rustc_version_output: "rustc 1.99.1 (58cf8f9c3 2026-10-13)\n".to_string(),
-            sqlite_version: "3.53.2".to_string(),
-        };
-        let rendered = manifest.render();
-        assert_eq!(read_binary_sha256(&rendered), Some(manifest.binary_sha256));
-    }
-
-    #[test]
-    fn read_binary_sha256_is_none_for_a_manifest_missing_the_field() {
-        assert_eq!(read_binary_sha256("rustc_version = \"1.99.1\"\n"), None);
-    }
-
-    #[test]
-    fn check_binary_hash_matches_when_the_rendered_manifest_agrees() {
-        let manifest = Manifest {
-            binary_sha256: "abc123".to_string(),
-            rustc_version_output: "rustc 1.99.1".to_string(),
-            sqlite_version: "3.53.2".to_string(),
-        };
-        let rendered = manifest.render();
-        assert_eq!(
-            check_binary_hash(&rendered, "abc123"),
-            BinaryHashCheck::Match
-        );
-    }
-
-    #[test]
-    fn check_binary_hash_reports_a_mismatch_against_a_rebuilt_binary() {
-        let manifest = Manifest {
-            binary_sha256: "original-hash".to_string(),
-            rustc_version_output: "rustc 1.99.1".to_string(),
-            sqlite_version: "3.53.2".to_string(),
-        };
-        let rendered = manifest.render();
-        assert_eq!(
-            check_binary_hash(&rendered, "rebuilt-hash"),
-            BinaryHashCheck::Mismatch {
-                manifest: "original-hash".to_string(),
-                current: "rebuilt-hash".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn check_binary_hash_fails_closed_on_an_unreadable_manifest() {
-        assert_eq!(
-            check_binary_hash("not a manifest at all", "any-hash"),
-            BinaryHashCheck::ManifestUnreadable
-        );
-    }
-
-    #[test]
-    fn write_manifest_writes_a_file_read_binary_sha256_can_read_back() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("manifest.txt");
-        let manifest = Manifest {
-            binary_sha256: "0123456789abcdef".to_string(),
-            rustc_version_output: "rustc 1.99.1".to_string(),
-            sqlite_version: "3.53.2".to_string(),
-        };
-        write_manifest(&path, &manifest).unwrap();
-        let contents = fs::read_to_string(&path).unwrap();
-        assert_eq!(read_binary_sha256(&contents), Some(manifest.binary_sha256));
-    }
-
-    #[test]
-    fn build_manifest_reports_the_current_binarys_own_hash() {
-        let manifest = build_manifest().expect("build_manifest against the real environment");
-        let expected = hash_current_binary().expect("hash the current binary directly");
-        assert_eq!(manifest.binary_sha256, expected);
-        assert_eq!(manifest.sqlite_version, machine::PINNED_SQLITE_VERSION);
-    }
-
-    #[test]
     fn report_passes_only_when_every_check_passes() {
         let report = PreflightReport {
             rustc_version: CheckResult::Pass,
@@ -631,5 +554,86 @@ mod tests {
             shim_vfs: CheckResult::Pass,
         };
         assert!(report.all_passed());
+    }
+
+    mod kiln_e4_09 {
+        use super::*;
+
+        #[test]
+        fn manifest_render_round_trips_through_read_binary_sha256() {
+            let manifest = Manifest {
+                binary_sha256: "deadbeef".repeat(8),
+                rustc_version_output: "rustc 1.99.1 (58cf8f9c3 2026-10-13)\n".to_string(),
+                sqlite_version: "3.53.2".to_string(),
+            };
+            let rendered = manifest.render();
+            assert_eq!(read_binary_sha256(&rendered), Some(manifest.binary_sha256));
+        }
+
+        #[test]
+        fn read_binary_sha256_is_none_for_a_manifest_missing_the_field() {
+            assert_eq!(read_binary_sha256("rustc_version = \"1.99.1\"\n"), None);
+        }
+
+        #[test]
+        fn check_binary_hash_matches_when_the_rendered_manifest_agrees() {
+            let manifest = Manifest {
+                binary_sha256: "abc123".to_string(),
+                rustc_version_output: "rustc 1.99.1".to_string(),
+                sqlite_version: "3.53.2".to_string(),
+            };
+            let rendered = manifest.render();
+            assert_eq!(
+                check_binary_hash(&rendered, "abc123"),
+                BinaryHashCheck::Match
+            );
+        }
+
+        #[test]
+        fn check_binary_hash_reports_a_mismatch_against_a_rebuilt_binary() {
+            let manifest = Manifest {
+                binary_sha256: "original-hash".to_string(),
+                rustc_version_output: "rustc 1.99.1".to_string(),
+                sqlite_version: "3.53.2".to_string(),
+            };
+            let rendered = manifest.render();
+            assert_eq!(
+                check_binary_hash(&rendered, "rebuilt-hash"),
+                BinaryHashCheck::Mismatch {
+                    manifest: "original-hash".to_string(),
+                    current: "rebuilt-hash".to_string(),
+                }
+            );
+        }
+
+        #[test]
+        fn check_binary_hash_fails_closed_on_an_unreadable_manifest() {
+            assert_eq!(
+                check_binary_hash("not a manifest at all", "any-hash"),
+                BinaryHashCheck::ManifestUnreadable
+            );
+        }
+
+        #[test]
+        fn write_manifest_writes_a_file_read_binary_sha256_can_read_back() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("manifest.txt");
+            let manifest = Manifest {
+                binary_sha256: "0123456789abcdef".to_string(),
+                rustc_version_output: "rustc 1.99.1".to_string(),
+                sqlite_version: "3.53.2".to_string(),
+            };
+            write_manifest(&path, &manifest).unwrap();
+            let contents = fs::read_to_string(&path).unwrap();
+            assert_eq!(read_binary_sha256(&contents), Some(manifest.binary_sha256));
+        }
+
+        #[test]
+        fn build_manifest_reports_the_current_binarys_own_hash() {
+            let manifest = build_manifest().expect("build_manifest against the real environment");
+            let expected = hash_current_binary().expect("hash the current binary directly");
+            assert_eq!(manifest.binary_sha256, expected);
+            assert_eq!(manifest.sqlite_version, machine::PINNED_SQLITE_VERSION);
+        }
     }
 }

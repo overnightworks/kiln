@@ -45,34 +45,38 @@ pub fn pin_current_process(cpus: &[usize]) -> io::Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn complement_excludes_the_named_cpus() {
-        assert_eq!(
-            complement(12, &[2, 8]),
-            vec![0, 1, 3, 4, 5, 6, 7, 9, 10, 11]
-        );
-    }
+    mod kiln_e4_07 {
+        use super::*;
 
-    #[test]
-    fn complement_of_every_cpu_is_empty() {
-        assert_eq!(complement(2, &[0, 1]), Vec::<usize>::new());
-    }
+        #[test]
+        fn complement_excludes_the_named_cpus() {
+            assert_eq!(
+                complement(12, &[2, 8]),
+                vec![0, 1, 3, 4, 5, 6, 7, 9, 10, 11]
+            );
+        }
 
-    #[test]
-    fn complement_ignores_an_excluded_id_outside_the_range() {
-        assert_eq!(complement(3, &[0, 99]), vec![1, 2]);
-    }
+        #[test]
+        fn complement_of_every_cpu_is_empty() {
+            assert_eq!(complement(2, &[0, 1]), Vec::<usize>::new());
+        }
 
-    #[test]
-    fn pinning_to_every_available_cpu_succeeds() {
-        // Pinning to the host's whole available set is always legal,
-        // proving the real syscall path works without depending on
-        // which specific CPU ids this test process happens to run
-        // under (a CI container may restrict the host to fewer than
-        // the 12 machine.rs assumes for the frozen pin/sibling ids).
-        let total = std::thread::available_parallelism()
-            .expect("available_parallelism")
-            .get();
-        pin_current_process(&(0..total).collect::<Vec<_>>()).expect("pin to every CPU");
+        #[test]
+        fn complement_ignores_an_excluded_id_outside_the_range() {
+            assert_eq!(complement(3, &[0, 99]), vec![1, 2]);
+        }
+
+        #[test]
+        fn pinning_to_every_available_cpu_succeeds() {
+            // Pinning to the host's whole available set is always legal,
+            // proving the real syscall path works without depending on
+            // which specific CPU ids this test process happens to run
+            // under (a CI container may restrict the host to fewer than
+            // the 12 machine.rs assumes for the frozen pin/sibling ids).
+            let total = std::thread::available_parallelism()
+                .expect("available_parallelism")
+                .get();
+            pin_current_process(&(0..total).collect::<Vec<_>>()).expect("pin to every CPU");
+        }
     }
 }
