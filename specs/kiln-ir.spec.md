@@ -88,7 +88,7 @@ module; several tests may share it.
 
 ## Check constraints
 
-- [KILN-IR-51] A check constraint is declared in the schema on one column of one table as a comparison (at least, at most) against a literal. A schema that declares one on an undeclared table or column is rejected with a typed schema error. The operand's type is not validated against the column's type: text compares lexicographically and a mismatched type compares by variant order.
+- [KILN-IR-51] A check constraint is declared in the schema on one column of one table as a comparison (at least, at most) against a literal. A schema that declares one on an undeclared table or column is rejected with a typed schema error.
 - [KILN-IR-52] A row the transaction wrote the constrained column on, whose final state violates a check constraint aborts the call with a typed reason naming the constraint and the row's key; the call changes no state. A violation that exists only in the middle of the transaction commits.
 - [KILN-IR-53] The same out-of-range write has three distinct outcomes: a check constraint aborts with a check violation, a clamping domain writes the clamped value and commits, and a value outside the column's width without a domain aborts with an overflow.
 - [KILN-IR-54] A check constraint reads only the row it judges: it logs no access of constraint origin, and the log holds only the row's own write.
@@ -96,3 +96,21 @@ module; several tests may share it.
 ## Constraint order
 
 - [KILN-IR-55] Constraints are checked serially in one order: unique constraints, then foreign keys, then check constraints, each in declaration order. The first violation aborts the call, and constraints after it log no checks.
+
+## Typed constraint declarations
+
+- [KILN-IR-56] A check constraint whose operand is an integer on an integer column, or text on a text column, is accepted. An operand of the other type is rejected with a typed schema error, because such a comparison would hold or fail for every row regardless of the data.
+- [KILN-IR-57] Tables are keyed by integers, so a foreign key on an integer column is accepted and one on a text column is rejected with a typed schema error: no row's key could ever equal its value.
+
+## Replay
+
+- [KILN-IR-58] `replay` returns one execution per call, each at the position of its call; an empty sequence returns no executions.
+- [KILN-IR-59] `replay` runs each call against the store the previous call left, as `run` would: a committed call's changes are visible to the calls after it, an aborted call changes no state and does not stop the calls after it.
+- [KILN-IR-60] `replay` returns the typed schema error for an invalid schema instead of panicking, whether or not the call sequence is empty.
+
+## Example transactions
+
+- [KILN-IR-61] Ticket quota: buying a ticket raises an event's sold count by one under a check constraint that the count stay at most the quota. Replayed serially, the purchase that would pass the quota aborts with a check violation, the purchases before and after it commit, and the final store holds the counts of the committed purchases.
+- [KILN-IR-62] Unique sign-up: signing up inserts a user with an email under a unique constraint on the email. Replayed serially, a second sign-up with a taken email aborts with a unique violation naming the email, and the sign-ups before and after it commit.
+- [KILN-IR-63] Doctors on call: going off call deletes the doctor from the on-call table only when the range of the other doctors on call is not empty, and aborts with a declared reason otherwise. Replayed serially, the call that would leave nobody on call aborts, and the calls before and after it commit.
+- [KILN-IR-64] Mixed functions (concept §2.2): replaying `transfer` then a `sign_up` with a taken email in one program commits the transfer and aborts the sign-up with a unique violation, and the final store keeps the transfer's balances.
