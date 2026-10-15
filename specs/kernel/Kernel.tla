@@ -355,9 +355,10 @@ Dispatch(t) ==
    compatibility check and the escrow reservations (§4: registered
    "atomically at dispatch, held through commit"; a covering resource is
    acquired "before any read or write touches the underlying state"). The
-   implementation acquires the same set resource by resource in canonical
-   order; the step abstracts that sequence, so no partial footprint is
-   ever held. *)
+   logical contract is this one step: no partial footprint is ever held or
+   observable. How an implementation realises it (an internal ordering of
+   individual acquisitions, say) is not specified here and is not part of
+   the contract. *)
 Acquire(t) ==
   /\ Queued(t)
   /\ WaitsOn(t) = {}

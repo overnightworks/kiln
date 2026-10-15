@@ -458,11 +458,14 @@ discards its tentative writes, draws and reservations, releases everything,
 and re-requests the widened footprint as a new request that joins the
 admission queue at its tail, under the same atomic admission and
 reservations as any call. The response it gives is the one of its final
-attempt. Each restart adds a resource the call had not requested before, so
-restarts are finite. The kernel model checks this (`specs/README.md`):
-serializability with exact responses, absence of wait cycles and §9.5's
-liveness hold with restarts, and acquiring in place or keeping tentative
-effects across a restart are each refuted.
+attempt. Each restart adds a resource the call had not requested before;
+over a fixed, finite resource universe (the model's `Keys`) restarts are
+therefore finite. The kernel model checks this (`specs/README.md`) for
+data-dependent point reads (`Follow`) only, not for a widened range or
+table resource: serializability with exact responses, absence of wait
+cycles and §9.5's liveness hold with restarts, including a restart that
+discards a positive escrow reservation and draw, and acquiring in place or
+keeping tentative effects across a restart are each refuted.
 
 **Why this is the proposal.** The class-3 mechanism the thesis already
 commits to — associative summaries evaluated by a parallel prefix scan —
@@ -1016,8 +1019,9 @@ parallel prefix scan computes every caller's result inside *one* batch
 that already holds the kernel's locks (§4) — this is parallel work inside a
 protected interval, not concurrency between conflicting batches. Two
 batches whose members' footprints genuinely conflict are still fully
-serialized by the strict-2PL kernel, in canonical lock order, exactly like
-any class-4 pair. Avoiding Fable's domain-executor model removes a *static*
+serialized by the strict-2PL kernel's atomic admission (§4), exactly like
+any class-4 pair; any internal ordering of individual acquisitions is an
+implementation detail, not part of that contract. Avoiding Fable's domain-executor model removes a *static*
 partitioning bottleneck (a wrong ownership-key guess becoming a permanent
 hot spot); it does not remove the *dynamic* serialization strict 2PL
 imposes once two live batches actually conflict, and this document does
