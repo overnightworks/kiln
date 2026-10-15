@@ -605,8 +605,7 @@ rather than a hypothetical:
   exactly the double-count S5 exists to prevent.
 
 **Clarification 16.10.2026 (Django enumeration).** Three readings of the
-text above, ruled before any enumeration result exists, so the extractor
-applies them mechanically. They add no rule; none states or implies a count.
+text above, ruled so the extractor applies them mechanically. They add no rule; none states or implies a count.
 
 - **S3 parameters.** Reads "the variables feeding that one call: its enclosing
   function's own arguments, plus any local value already read earlier". The
