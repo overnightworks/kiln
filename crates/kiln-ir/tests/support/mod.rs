@@ -1,21 +1,22 @@
-//! Shared builders for `tests/evaluator.rs` and `tests/arithmetic.rs`, so
-//! each test states its behaviour and not its `Program`/`Call` plumbing.
+//! Shared builders for `tests/evaluator.rs`, `tests/arithmetic.rs`, and
+//! `tests/arithmetic_boundaries.rs`, so each test states its behaviour and
+//! not its `Program`/`Call` plumbing.
 //!
 //! Not a test target itself: cargo only turns a file directly under
 //! `tests/` into its own binary, so this module is free to be imported by
-//! both without running as a third, empty test suite.
+//! all three without running as a fourth, empty test suite.
 //!
-//! Each of the two binaries compiles this module on its own and only some
-//! of its helpers are called from any one binary, so a helper unused by one
-//! binary is still live via the other — `dead_code` is allowed module-wide
-//! rather than disabled per unused helper.
+//! Each binary compiles this module on its own and only some of its
+//! helpers are called from any one binary, so a helper unused by one is
+//! still live via another — `dead_code` is allowed module-wide rather than
+//! disabled per unused helper.
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
 
 use kiln_ir::{
     run, Call, Column, ColumnName, Effect, Execution, Expr, Function, FunctionName, ParameterName,
-    Program, Schema, Store, Table, TableName, Terminal, Value,
+    Program, Row, Schema, Store, Table, TableName, Terminal, Value,
 };
 use proptest::prelude::*;
 
@@ -117,4 +118,56 @@ pub fn committed_response(execution: &Execution) -> &Value {
             panic!("expected a commit, got an abort: {reason:?}")
         }
     }
+}
+
+/// Which write effect `run_write` makes: an `Insert` of a fresh key, or an
+/// `Update` of a key the store already carries that same column on — so a
+/// D3 case can prove itself through both write kinds (`tests/arithmetic.rs`,
+/// `tests/arithmetic_boundaries.rs`).
+#[derive(Debug, Clone, Copy)]
+pub enum WriteVia {
+    Insert,
+    Update,
+}
+
+/// Runs a single write of `write_expr` into the column named "c", declared
+/// as `declared_column`, via `via` — the one shape every D3 arithmetic,
+/// width, and clamp test builds on.
+pub fn run_write(declared_column: Column, write_expr: Expr, via: WriteVia) -> Execution {
+    assert_eq!(
+        declared_column.name,
+        column("c"),
+        "run_write always writes into the column named \"c\""
+    );
+    let key = Value::Integer(1);
+    let store = match via {
+        WriteVia::Insert => Store::empty(),
+        WriteVia::Update => Store::containing([(
+            table("t"),
+            key.clone(),
+            Row {
+                columns: columns_of_values([("c", Value::Integer(0))]),
+            },
+        )]),
+    };
+    let effect = match via {
+        WriteVia::Insert => Effect::Insert {
+            table: table("t"),
+            key: Expr::Literal(key),
+            columns: columns_of([("c", write_expr)]),
+        },
+        WriteVia::Update => Effect::Update {
+            table: table("t"),
+            key: Expr::Literal(key),
+            columns: columns_of([("c", write_expr)]),
+        },
+    };
+    let program = program_with_column(
+        declared_column,
+        vec![],
+        vec![effect],
+        Terminal::Return(Expr::Literal(Value::Integer(0))),
+    );
+
+    run_ok(&program, &call_under_test(vec![]), &store)
 }
