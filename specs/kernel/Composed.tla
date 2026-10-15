@@ -1,7 +1,7 @@
 ----------------------------- MODULE Composed -----------------------------
-(* Scenario: escrow, claim, pin, delete and a table scan whose first
-   operations do not serialize the run. Key 1 is an event row with a
-   quota of 2; key 2 is absent; key 3 is a present row with no parent.
+(* Scenario: escrow, claim, pin and delete contending through a table
+   scan. Key 1 is an event row with a quota of 2; key 2 is absent; key 3
+   is a present row with no parent.
      t1 draws one ticket from the event's escrow, then inserts key 2 as a
         child of key 3 (claim on 2, pin on 3);
      t2 draws one ticket as well, then deletes key 3 (exclusive against
@@ -11,8 +11,8 @@
    waits on both, and whichever of t1 and t2 reaches key 3 second waits on
    the other while still holding its draw. The order decides the outcome:
    insert first rejects the delete with "referenced", delete first rejects
-   the insert with "noparent", and a rejected transaction's draw leaves
-   no effect on the quota. *)
+   the insert with "noparent", and the loser's draw leaves no effect on
+   the quota. *)
 
 EXTENDS Kernel
 

@@ -4,9 +4,10 @@
      t1 scans the whole table (a table resource);
      t2 reads key 2 (S point lock), then draws from key 3's escrow;
      t3 updates key 2 (X point lock).
-   The table scan and the point read coexist; the update waits on both
-   and t2's draw waits on the scan covering key 3. Scan and read see
-   key 2's value before or after the update, in one consistent order. *)
+   The table scan and the point read coexist, and t3's update waits on
+   both; t2's draw on key 3 lies outside the scan's range (1..2), so it
+   coexists freely instead of waiting. Scan and read see key 2's value
+   before or after the update, in one consistent order. *)
 
 EXTENDS Kernel
 

@@ -70,12 +70,13 @@ one to `val`, rejected with `insufficient`.
 **Protocol.** A transaction starts `pending`: dispatched, holding nothing.
 `Acquire` takes its complete footprint — every resource its program needs
 (`Footprint(t)`, below) — in one step, atomically with the compatibility
-check against every live holder, as §4 prescribes: a keyed resource is
-registered "atomically at dispatch, held through commit", and a covering
-resource is acquired "before any read or write touches the underlying
-state". §4's canonical order is how an implementation acquires the same
-set piece by piece; the step abstracts that sequence, so the model never
-holds a partial footprint. The transaction is then `active` and `DoOp`
+check against every live holder. This is the model's abstraction of §4's
+atomic-at-dispatch registration: a keyed resource is registered
+"atomically at dispatch, held through commit", and a covering resource is
+acquired "before any read or write touches the underlying state". §4's
+canonical order is how an implementation acquires the same set piece by
+piece; the step abstracts that sequence, so the model never holds a
+partial footprint. The transaction is then `active` and `DoOp`
 executes its program in order on its view — committed rows overlaid with
 its own tentative writes and draws — acquiring nothing more. A rejection
 is a constraint failure returned to the caller: the transaction ends as
@@ -168,7 +169,7 @@ runs, while the trace length (breadth-first, hence shortest) is stable.
 
 | Scenario | What runs | Outcome | Distinct states | Depth | Log |
 |---|---|---|---|---|---|
-| `Composed` | t1: `Buy(1,1)`, `Insert(2,3)`; t2: `Buy(1,1)`, `Delete(3)`; t3: `Scan(1,3)` (table) — claim, pin, delete, two draws on key 1 (quota 2) and a table scan in one key space; the pin on 3 conflicts with its delete and the scan with everything, so the three serialize: insert first rejects the delete with `referenced`, delete first the insert with `noparent`, and a rejected draw leaves no effect | checked, passes | 48 | 11 | `Composed.tlc.log` |
+| `Composed` | t1: `Buy(1,1)`, `Insert(2,3)`; t2: `Buy(1,1)`, `Delete(3)`; t3: `Scan(1,3)` (table) — claim, pin, delete, two draws on key 1 (quota 2) and a table scan in one key space; the pin on 3 conflicts with its delete and the scan with everything, so the three serialize: insert first rejects the delete with `referenced`, delete first the insert with `noparent`, and a draw from a later-rejected transaction leaves no effect | checked, passes | 48 | 11 | `Composed.tlc.log` |
 | `Pins` | t1: `Delete(1)`, `Scan(1,3)` (table); t2: `Insert(2,1)`; t3: `Insert(3,1)` — two pins on parent 1 coexist against its delete, two claims meet the table scan | checked, passes | 38 | 9 | `Pins.tlc.log` |
 | `RangePoint` | t1: `Scan(1,2)`; t2: `Read(2)`, `Buy(3,1)`; t3: `Update(2,1,0)` — a range scan and a point read coexist against an update; the draw on 3 lies outside the range | checked, passes | 58 | 11 | `RangePoint.tlc.log` |
 | `Phantom` | t1: `Scan(2,3)` twice; t2: `Insert(2,0)` — round-1 phantom | checked, passes | 15 | 8 | `Phantom.tlc.log` |
@@ -189,7 +190,7 @@ scenario's decisive state is reachable. Logs:
 | Witness | State reached | Trace length |
 |---|---|---|
 | `ComposedPinDeleteUnreached` | t1 holds its draw on 1 and its pin on 3; t2's delete and t3's table scan both wait on t1 | 2 |
-| `ComposedReferencedUnreached` | t2 was told `ok, referenced`, t1 committed key 2 under parent 3, and key 1's quota is 1: the rejected draw left no effect | 8 |
+| `ComposedReferencedUnreached` | t2 was told `ok, referenced`, t1 committed key 2 under parent 3, and key 1's quota is 1: the draw from the later-rejected transaction left no effect | 8 |
 | `ComposedNoParentUnreached` | t1 was told `ok, noparent`, t2 committed the delete of 3, and key 1's quota is 1 | 8 |
 | `PinsConcurrentUnreached` | t2 and t3 both hold a pin on 1; t1's delete waits on both | 3 |
 | `PinsTableUnreached` | t1 holds the table scan with its delete; both claims wait on t1 | 2 |
