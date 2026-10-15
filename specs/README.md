@@ -319,17 +319,30 @@ state and every ended transaction's exact responses):
 | `RecoveredPrefix` | the engine's history is a prefix of the log, and equal to it while the engine is up |
 | `NoKnownAbortAfterFsyncFailure` | no transaction whose commit met an fsync failure is answered `aborted` |
 | `KnownAbortNotInLog` | nothing answered or recorded `aborted` has a durable commit record |
-| `UnknownKeepsReservations` | until recovery, an unknown-outcome transaction is still `active` and holds its whole footprint and its escrow reservations |
+| `UnknownKeepsReservations` | until recovery, an unknown-outcome transaction is still `active`, holds its whole footprint and holds exactly the escrow reservations it held when the flush failed (recorded at the failure, so an unused part and a legitimate zero reservation are covered) |
 
 `CrashFree` instantiates `Durable` with `Failures = 0` on the `Composed`
 programs: every Kernel invariant and `RequestedLeadsToTerminal` hold when
 commit is three steps and nothing fails. `Recovery` runs up to two
 failures over t1: `Buy(1,1)`; t2: `Buy(1,1)`, `Insert(2,0)`; t3:
 `Update(3,7,0)` (quota 2, key 2 absent): the two draws coexist, so two
-records can sit in the tail at once.
+records can sit in the tail at once. `RecoveryEscrow` holds a reservation
+larger than its draw and a zero one through an fsync failure.
+`RecoveryDependent` has three transactions on one key, so a response
+depends on a predecessor whose commit survived or was lost.
 
 **Bounds.** One log, one writer, three transactions, at most two
-failures; a failure discards every volatile transaction. Not covered: the
+failures; a failure discards every volatile transaction. Recovery
+discards every queued or active request; only a request not yet
+dispatched stays runnable.
+
+**Not proved.** `DFairness` covers the protocol steps and `Flush`, but
+neither `Ack` nor `Recover`: a failure-free run may flush everything and
+leave a caller unanswered forever, and a fenced engine may stay fenced.
+`RequestedLeadsToTerminal` (checked on `CrashFree` only) speaks of
+terminal transaction status, not of the caller's answer. Eventual
+acknowledgement and eventual recovery are unproved, and no temporal
+claim is made for them. Not covered: the
 publication pointer (§9.1), torn writes that reach acknowledged bytes and
 a device that lies about a flush (outside §9.2's model), retried commits
 after an unknown outcome, storage layout. Records are abstract effect
@@ -346,9 +359,9 @@ also passes `RequestedLeadsToTerminal` under `Fairness`. `Starvation`
 `NoWaitCycle`, `ReferentialIntegrity`, `BalanceNonNegative` and
 `RequestedLeadsToTerminal`; it is exempt from `Serializable` and
 `Uniqueness` because `Rearrive` resets the histories they read. Every
-other scenario checks `Serializable` and `Uniqueness` too. `CrashFree` and `Recovery`
-check `DTypeOK` (`TypeOK` plus the durable state) in place of `TypeOK`,
-and `Recovery` checks no liveness property (failures are not owed by
+other scenario checks `Serializable` and `Uniqueness` too. `CrashFree` and the three
+`Recovery` scenarios check `DTypeOK` (`TypeOK` plus the durable state) in
+place of `TypeOK`, and the `Recovery` scenarios check no liveness property (failures are not owed by
 fairness). `CrashFree` checks `RequestedLeadsToTerminal` under `DSpec`'s
 fairness.
 Depth is the length of the longest shortest path (breadth-first).
@@ -380,7 +393,9 @@ Depth is the length of the longest shortest path (breadth-first).
 | `WidenCycle` | no pointers; t1: `Update(2,1,0)`, `Follow(2)`; t2: `Update(1,2,0)`, `Follow(1)` — each discovers the key the other holds from a pointer it just wrote; restarting discards the pointer and the two serialize | 65 | 17 | `WidenCycle.tlc.log` |
 | `WidenEscrow` | quota 1; key 3 has no pointer; t1: `Buy(1,1)`, `Follow(3)`; t2: `Update(3,2,0)`; t3: `Buy(1,1)` — if t2 commits first, t1 has reserved and drawn the ticket when its follow needs `S 2`; the restart discards both, t3 (waiting on the reservation) takes the ticket and t1's buy then fails on committed state | 130 | 16 | `WidenEscrow.tlc.log` |
 | `CrashFree` | the `Composed` programs on `Durable` with no failure — commit is append, flush, acknowledge; the Kernel invariants and `RequestedLeadsToTerminal` still hold | 273 | 18 | `CrashFree.tlc.log` |
-| `Recovery` | t1: `Buy(1,1)`; t2: `Buy(1,1)`, `Insert(2,0)`; t3: `Update(3,7,0)` (quota 2) with up to two crashes or fsync failures at any step; checks the Kernel invariants and the five durability properties | 10188 | 24 | `Recovery.tlc.log` |
+| `Recovery` | t1: `Buy(1,1)`; t2: `Buy(1,1)`, `Insert(2,0)`; t3: `Update(3,7,0)` (quota 2) with up to two crashes or fsync failures at any step; checks the Kernel invariants and the five durability properties | 10891 | 24 | `Recovery.tlc.log` |
+| `RecoveryEscrow` | balances 2 (key 1) and 0 (key 2); t1: `BuyUnder(1,1,1)` twice (reservation 2, draw 1); t2: `BuyUnder(2,1,0)` (skipped on an empty balance, reservation 0), one failure — the reservations an unknown outcome keeps are compared exactly | 337 | 16 | `RecoveryEscrow.tlc.log` |
+| `RecoveryDependent` | key 1 present; t1: `Update(1,5,0)`; t2: `Update(1,6,0)`; t3: `Read(1)`, with up to two failures — t2's and t3's responses depend on t1, whose commit may be durable but unacknowledged, or lost; `Serializable` compares them exactly | 6864 | 23 | `RecoveryDependent.tlc.log` |
 
 **Reachability witnesses.** Each scenario names negated state predicates
 (`*Unreached`); TLC's counterexample is the proof that the scenario's
@@ -426,10 +441,13 @@ assert membership.
 | `WidenEscrowDiscardedUnreached` | t1 restarted: it is queued and widened with reservation 0 and draw 0 | 9 |
 | `UnknownBudgetInsufficientUnreached` | after t3 raised the amount to 3, t1's draw failed on the committed balance 2 | 8 |
 | `RecoveryDurableUnackedUnreached` | the engine crashed after t1's flush made its record durable and before t1 was acknowledged | 7 |
-| `RecoveryUnackedCommittedUnreached` | after that crash, recovery serves t1 as committed and answers `unknown` — no fsync failure involved | 7 |
+| `RecoveryUnackedCommittedUnreached` | recovery serves t1 as committed and answers `unknown`, with no fsync failure: t1's record was in the tail when the crash persisted it (Enqueue, Crash, Recover; no Flush) | 7 |
 | `RecoveryFencedUnreached` | a flush failed: the engine is fenced, t1 is answered `unknown`, still active and holds its escrow reservation | 6 |
 | `RecoveryResolvedCommittedUnreached` | an fsync failure, then recovery: t1's unknown outcome resolved to committed, its record had reached storage | 7 |
 | `RecoveryResolvedAbortedUnreached` | an fsync failure, then recovery: t1's unknown outcome resolved to aborted, its record had not | 7 |
+| `RecoveryEscrowFencedUnreached` | the engine is fenced with both outcomes unknown; t1 holds a reservation of 2 against a draw of 1, t2 a reservation of 0 after a skipped branch | 11 |
+| `RecoveryDependentSeesUnackedUnreached` | t1 durable and unacknowledged (`unknown`) after a failure; t2 committed and was told the row t1 wrote | 12 |
+| `RecoveryDependentIgnoresLostUnreached` | t1's record was lost (`aborted`); t2 committed and was told the initial row | 8 |
 
 ## Mutants (specs/kernel/mutants/)
 
@@ -472,6 +490,8 @@ lengths below are the states of the committed logs.
 | `FsyncFailureAsAbort` — an fsync failure answers `aborted`, marks the transactions aborted and releases their footprint and reservations | `Recovery` | `NoKnownAbortAfterFsyncFailure` | 6 |
 | `FsyncFailureAsAbort` | `Recovery` | `KnownAbortNotInLog` (the record had reached storage: recovery finds it for a transaction told `aborted`) | 6 |
 | `FsyncFailureAsAbort` | `Recovery` | `UnknownKeepsReservations` (the footprint is released while the outcome is unknown) | 6 |
+| `FsyncFailureShrinksReservation` — an fsync failure releases one unit of any reservation above 1 and keeps the rest | `RecoveryEscrow` | `UnknownKeepsReservations` (t1's reservation falls from 2 to 1, still positive: only the exact comparison sees it) | 7 |
+| `ReleaseAtEnqueue` — a transaction releases its footprint and reservations when its record enters the tail, before the flush | `RecoveryDependent` | `Serializable` (t2 passes t1's lock and is told the initial row although t1's record precedes its own in the log; no serial order yields both responses) | 11 |
 | `AckBeforeDurable` — the caller is acknowledged when the record is appended, before the flush | `Recovery` | `AcknowledgedSurvive` (t1 answered `committed`, its record in no log) | 5 |
 | `RecoverSkipsTail` — recovery drops the last durable record | `Recovery` | `AcknowledgedSurvive` (an acknowledged commit missing after recovery) | 9 |
 | `RecoverSkipsTail` | `Recovery` | `RecoveredPrefix` (the served history is shorter than the log) | 7 |

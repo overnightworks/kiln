@@ -579,10 +579,14 @@ replaying only commit groups that validate completely.
 **Status: checked within bounds** — the unknown-outcome rule above is
 checked on the kernel model (`Durable.tla`, `specs/README.md`): an `fsync`
 failure answers `unknown`, the transaction keeps its footprint and
-reservations until recovery, recovery resolves it to whatever the log
-shows, and a mutant that answers an abort and releases the reservations is
-refuted. Bounds: 3 transactions, one log, at most two failures; the
-publication pointer (§9.1) and torn writes are not modelled.
+reservations (each exactly as held when the flush failed) until recovery,
+recovery resolves it to whatever the log shows, and mutants that answer an
+abort and release the reservations, or release part of one, are refuted.
+Bounds: 3 transactions, one log, at most two failures; the publication
+pointer (§9.1) and torn writes are not modelled. Not proved: that a caller
+is eventually acknowledged or that recovery eventually runs (fairness
+covers neither, and recovery discards queued requests; only undispatched
+ones stay runnable).
 
 ## 6. Trust model
 
@@ -719,10 +723,13 @@ crashes or `fsync` failures at any step of 3 transactions and one log:
 every acknowledged commit is in the recovered history, the recovered history
 is a prefix of the log's commit order (and the whole log once the engine
 serves again), an `fsync` failure is answered `unknown` and never as an
-abort, and recovered histories are serializable with exact responses
-(`specs/README.md`, `Durable.tla`). Three mutants (an `fsync` failure
-answered as an abort, an acknowledgement before the flush, a recovery that
-drops a durable record) are each refuted. That is a bounded check of an
+abort, and recovered histories are serializable with exact responses,
+including responses that depend on a predecessor whose commit is durable
+but unacknowledged (`specs/README.md`, `Durable.tla`). Mutants (an `fsync`
+failure answered as an abort or shrinking a reservation, an acknowledgement
+before the flush, a recovery that drops a durable record, locks released
+before the flush) are each refuted. Eventual acknowledgement and eventual
+recovery are not proved. That is a bounded check of an
 abstract log, not of bytes, framing, checksums or a device that lies; the
 visible-version pointer (§9.1) is not covered. The exact extent size, the
 allocation and reclaim policy, and the checkpoint layout that make "never
