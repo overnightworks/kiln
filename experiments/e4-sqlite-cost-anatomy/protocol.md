@@ -1,11 +1,13 @@
 # E4: where SQLite spends its time on small transactions
 
-Status: preregistered protocol, not yet reviewed or frozen. No benchmark,
-build, or profiler has run against this document. Every number below is a
-setting, a threshold, or a measured machine fact, decided in advance. Once
-frozen, nothing below changes after a measurement run is seen (the freeze
-rule in `docs/experiments.md`). A different agent must be able to build and
-run E4 from this file alone.
+Status: frozen. Record: frozen in PR #12; the feasibility pilot ran in
+#28 (mechanics only, never result-bearing, §13); amended and re-frozen in
+#30 on 2026-10-15 (§15). No result-bearing run has happened: the
+pilot's numbers judge only whether the harness works, never the verdict
+quantity. Every number below is a setting, a threshold, or a measured
+machine fact, decided in advance. Nothing below changes after a
+result-bearing run is seen (the freeze rule in `docs/experiments.md`). A
+different agent must be able to build and run E4 from this file alone.
 
 ## 1. Question and verdict quantity
 
@@ -237,18 +239,28 @@ is a separate invocation of the same binary afterward.
 **Which cells the bound gates.** The bound gates exactly the cells whose
 timed transaction (§8.3's window) calls `xWrite` or `xSync` at least
 once over the repetition: workloads B, C, D, at both sizes and under
-both `synchronous` settings — every commit of a `BEGIN IMMEDIATE` write
+both `synchronous` settings — every commit of these workloads' mutations
 appends to the WAL ("Writers merely append new content to the end of
-the WAL file," https://www.sqlite.org/wal.html, fetched 2026-10-15),
-and even under NORMAL a checkpoint still syncs ("with `PRAGMA
-synchronous` set to NORMAL, the checkpoint is the only operation to
-issue an I/O barrier or sync operation," same page). Workload A's
+the WAL file," https://www.sqlite.org/wal.html, fetched 2026-10-15), so
+`xWrite` is called under both settings. `xSync` differs: under FULL every
+commit syncs; under NORMAL commits do not sync each time, but SQLite
+syncs the WAL before each checkpoint, the database file after each
+completed checkpoint, and the WAL file header when the WAL begins to be
+reused after a checkpoint ("no sync operations occur during most
+transactions,"
+https://www.sqlite.org/pragma.html#pragma_synchronous, fetched
+2026-10-15; also https://www.sqlite.org/wal.html, same date). A NORMAL
+cell's `xSync` calls are therefore rare, not absent, and its `xWrite`
+calls alone put it in the gated set. Workload A's
 transaction (`BEGIN DEFERRED; SELECT...; COMMIT;`) starts a read
 transaction, not a write one — "If the first statement after BEGIN
 DEFERRED is a SELECT, then a read transaction is started"
 (https://www.sqlite.org/lang_transaction.html, fetched 2026-10-15) —
-and a reader never appends a commit record to the WAL the way a
-writer does; the same holds for the `:memory:` control (§4: "no
+and a read transaction never writes, so it never calls `xWrite` on the
+WAL. Automatic checkpoints run from the write-commit hook
+(https://www.sqlite.org/c3ref/wal_hook.html, fetched 2026-10-15), which a
+read transaction does not trigger, so it never reaches `xSync` either;
+the same holds for the `:memory:` control (§4: "no
 `xSync`/`xWrite` to measure"). For these read-only cells the
 instrumented and passthrough builds execute the identical path inside
 the timed window — there is nothing for the shim's timer calls to
@@ -259,17 +271,25 @@ variation, not timer overhead, and is never grounds to waive, widen,
 or otherwise reinterpret the bound for a gated cell.
 
 **How the bound is judged.** For each gated cell, the pilot (§13) runs
-**9** interleaved instrumented/passthrough pairs — alternating
-instrumented, passthrough, instrumented, ... the same way §8.6
-interleaves cells, so a load spike biases both sides of the comparison
-equally — each pair running that cell's full warm-up and operation
+**9** instrumented/passthrough pairs, in a frozen counterbalanced
+order: pair `k` (1 to 9) runs instrumented then passthrough when `k` is
+odd and passthrough then instrumented when `k` is even (I P | P I | I P
+| P I | I P ...), so neither build always goes first and a load trend or
+order effect does not push every pair the same way. The order is fixed
+per pair index in advance, not chosen at run time; five pairs start
+with the instrumented build and four with the passthrough one, an
+imbalance of one pair that the min–max range would expose. Each pair runs that cell's full warm-up and operation
 count (§8.1–§8.3) once per build, from the same restored pristine
 state and input trace (§2.1). 9 is not a new number invented for this
 check: it is §8.4's own frozen repetition count, and its confidence
 argument carries over unchanged — the min and max of 9 i.i.d. per-pair
 overhead ratios bound the true population median with
 `(1 − 2×0.5⁹) ≈ 99.609%` confidence, exactly as §8.4 states for the
-gating repetitions. One convention governs every min/max bound in this
+gating repetitions — conditional on the pairs' ratios being independent
+draws from one distribution. Restoring pristine state and the
+counterbalanced order make that assumption plausible, not established;
+the confidence figure is a property of the rule under the assumption,
+not a measured guarantee. One convention governs every min/max bound in this
 protocol, not a second one for this check. Each pair's **overhead
 ratio** is `instrumented Σwall/N ÷ passthrough Σwall/N − 1`. The judged
 statistic is the **median** of the 9 pairs' overhead ratios together
@@ -283,20 +303,48 @@ Three outcomes, mutually exclusive, mirroring §10's own bound structure:
 - **Pass** if the range's **max** `< 2%` — every one of the 9 pairs
   clears the bound, so the 2% ceiling holds even at its noisiest pair.
 - **Fail** if the range's **min** `> 2%` — every one of the 9 pairs
-  exceeds the bound, so the excess is overhead, not noise.
+  exceeds the bound; under the independence assumption above, the
+  excess is then attributed to the instrumentation rather than to
+  noise.
 - **Inconclusive** if the range straddles 2% (`min ≤ 2% ≤ max`) — the
-  pairs disagree among themselves by more than the bound itself, so
-  this check cannot separate real timer overhead from run-to-run noise
-  for that cell.
+  pairs do not agree on which side of the bound they fall, so this
+  check cannot establish either that the overhead is within the bound
+  or that it exceeds it for that cell. (A narrow range around 2% is
+  inconclusive too; straddling does not by itself show that run-to-run
+  variation exceeds 2%.)
 
 A **fail** or an **inconclusive** result keeps that cell out of the
 result-bearing run: it is not measured for §10's verdict until the
 bound passes. The bound itself is never loosened, widened, or waived
 for a failing or straddling cell — the only repair is cheaper
-instrumentation (fewer or lighter timer calls in the shim), re-checked
-by the same nine-pair procedure before that cell may run. Cells whose
-bound already passed, and cells the bound does not gate, are
-unaffected and proceed on schedule.
+instrumentation (fewer or lighter timer calls in the shim), which is a
+change to the measuring instrument and therefore goes through review and
+re-freeze (§13), then is re-checked by the same nine-pair procedure
+before that cell may run. Cells whose bound already passed, and cells
+the bound does not gate, are unaffected and proceed on schedule.
+
+**Repeat policy.** §9's interference rules apply to a pair as a unit. A
+pair whose either half is rejected (§9 limits) is discarded and retried
+as a pair, from warm-up, under §9's same budget (3 retries, 4 attempts),
+and every rejected attempt goes to `data/rejected.log`. A pair that
+exhausts the budget is reported as `FAILED-INTERFERENCE` and counts as
+missing; the judgement then lacks its 9th pair and the cell is
+`inconclusive — insufficient repetitions` (§9). Every completed
+comparison outcome is retained in the outputs (§11), pass, fail, or
+inconclusive alike. A completed comparison is never repeated to obtain
+a pass: the only way to a new comparison is the reviewed instrumentation
+repair above, which discards nothing already recorded.
+
+**When exclusions dominate.** If fail, inconclusive, or exhausted-pair
+results exclude most or all write cells, that is an unsuccessful
+measurement attempt, not a reason to relax anything. Every excluded
+cell stays visible in §11's tables with its reason; E4 reports that
+write-path conclusions are unavailable for those cells; persistent
+inconclusiveness (the same cells excluded in a repeated attempt after a
+reviewed remedy) stops those measurements pending a further reviewed
+remedy, since cheaper instrumentation cannot fix environmental noise;
+and nothing is extrapolated from the surviving read cells to the write
+path.
 
 The shim's own code is reviewed, not benchmarked; it adds two timer calls
 around two already-existing method calls, nothing else.
@@ -486,7 +534,12 @@ collapsed number — the four workloads need not land on the same side.
 size), columns: the median and min–max range, across repetitions, of
 `Σwall/N`, the 99th-percentile and maximum per-operation `wall`, and the
 `xsync_time`/`xwrite_time`/`remainder`/`cpu_time` shares (§8.5), plus the
-§10 verdict. A separate table holds the in-memory and flush-only controls.
+§10 verdict. A separate table holds the in-memory and flush-only controls. A cell
+excluded by §5's overhead bound (fail, inconclusive, or exhausted pair)
+keeps its row, marked with its reason and no verdict; every §5
+instrumented/passthrough comparison outcome, with its 9 overhead
+ratios, is tabulated for the gated cells. When exclusions dominate, the
+tables state that write-path conclusions are unavailable.
 If §7 ran, its module breakdown is a separate, clearly labeled secondary
 table.
 
@@ -559,6 +612,10 @@ so it cannot leak the verdict quantity into how the protocol is judged.
 its reason and the binary's SHA-256 before/after, to
 `data/amendments.log`: monitor CPU mask, sampling method/interval,
 bracketing, perf FIFO ack handling, retry mechanics, logging.
+Instrumentation (the shim's timer calls, §5) is not a free knob: its
+repair changes the measuring instrument, so it goes through review and
+re-freeze like any other protocol change, then through §5's nine-pair
+check, never through `amendments.log` alone.
 **Everything else is untouchable** — workloads (§2), inputs (§2.1),
 verdict quantity (§1, §10), thresholds (§10), repetition count (§8.4),
 operation count (§8.1), overhead bound (§5). The operation count is
@@ -613,9 +670,15 @@ continuous; the current binary's hash matches the last logged "after"
   protocol's own existing conventions (§8.4's confidence argument,
   §8.5's median/min–max preference, §10's three-way bound structure)
   and SQLite's documented transaction/WAL semantics, before any
-  result-bearing run, and without using the pilot's measured numbers —
-  including its reported 3.66% point-read overhead — to set, tune, or
-  waive any threshold.
+  result-bearing run. Provenance: git history shows the nine
+  repetitions, min–max reporting, and the 2% threshold predate this
+  amendment. That the pilot's measured numbers — including its reported
+  3.66% point-read overhead — were not used to set, tune, or waive any
+  threshold is the author's attestation; history cannot prove it. A
+  review of the amendment added the counterbalanced pair order, the
+  repeat policy, the exclusion-dominates outcome, and the corrected sync
+  rationale (all in §5), the instrumentation-repair rule (§13), and
+  this record, before re-freeze.
 
 ## References
 
