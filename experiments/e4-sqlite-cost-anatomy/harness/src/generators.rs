@@ -181,6 +181,48 @@ mod tests {
         assert!(trace.iter().all(|p| (1..=37).contains(&p.id)));
     }
 
+    /// Pins workload A's trace against draws computed independently of
+    /// [`uniform_in_range`] — a fresh `ChaCha8Rng` seeded exactly as
+    /// protocol §2.1 specifies, reduced by the same `1 + next_u64() %
+    /// span` arithmetic written out here rather than called — so a
+    /// future change to either the seed formula or the generator is
+    /// caught even though the two sides never call the same function.
+    #[test]
+    fn point_read_trace_matches_independently_computed_draws() {
+        let seed = seed_for(0, 0);
+        let row_count = 37u64;
+        let mut reference_rng = ChaCha8Rng::seed_from_u64(seed);
+        let expected: Vec<u64> = (0..5)
+            .map(|_| 1 + reference_rng.next_u64() % row_count)
+            .collect();
+
+        let trace = point_read_trace(seed, row_count, 5);
+        let actual: Vec<u64> = trace.iter().map(|p| p.id).collect();
+        assert_eq!(actual, expected);
+    }
+
+    /// Pins workload D's sender/receiver draws the same independent way,
+    /// including the redraw-on-collision for the receiver.
+    #[test]
+    fn transfer_trace_matches_independently_computed_draws() {
+        let seed = seed_for(1, 0);
+        let row_count = 11u64;
+        let mut reference_rng = ChaCha8Rng::seed_from_u64(seed);
+        let mut expected = Vec::new();
+        for _ in 0..5 {
+            let sender = 1 + reference_rng.next_u64() % row_count;
+            let mut receiver = 1 + reference_rng.next_u64() % row_count;
+            while receiver == sender {
+                receiver = 1 + reference_rng.next_u64() % row_count;
+            }
+            expected.push((sender, receiver));
+        }
+
+        let trace = transfer_trace(seed, row_count, 5);
+        let actual: Vec<(u64, u64)> = trace.iter().map(|p| (p.sender, p.receiver)).collect();
+        assert_eq!(actual, expected);
+    }
+
     #[test]
     fn transfer_trace_never_pairs_a_sender_with_itself() {
         let trace = transfer_trace(seed_for(1, 0), 11, 2_000);

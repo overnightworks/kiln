@@ -12,6 +12,7 @@
 //! pointer instead of the private struct they expect, corrupting memory
 //! the moment one dereferenced it.
 
+use std::cell::Cell;
 use std::ffi::{CStr, c_int, c_void};
 use std::mem::size_of;
 use std::ptr;
@@ -49,8 +50,10 @@ fn install_once() -> Result<(), String> {
 
         // Bitwise-duplicate the real VFS struct: every field it doesn't
         // own (mxPathname, pAppData, every method but xOpen) must stay
-        // exactly as the real unix VFS set it, since our *other* method
-        // slots are trampolines calling back into that same real struct.
+        // exactly as the real unix VFS set it. These are VFS-level
+        // slots — copied callbacks, called with the real VFS's own
+        // pAppData — not trampolines; only the per-file io_methods built
+        // in shim_open (below) recompute a pointer and forward.
         let mut shim_vfs: ffi::sqlite3_vfs = ptr::read(real_vfs);
         shim_vfs.szOsFile = HEADER_SIZE as c_int + (*real_vfs).szOsFile;
         shim_vfs.zName = VFS_NAME.as_ptr();
@@ -133,6 +136,13 @@ unsafe extern "C" fn shim_open(
     unsafe {
         let header = file as *mut ShimFileHeader;
         (*header).kind = FileKind::from_open_flags(flags);
+        // SQLite's xOpen contract (https://www.sqlite.org/c3ref/vfs.html)
+        // requires pMethods to stay null on a failed open, and SQLite
+        // does not promise the memory it hands us is zeroed first. Set
+        // it explicitly before delegating, so a non-zero-filled
+        // allocation still reports null on failure — never rely on
+        // caller-zeroed memory.
+        (*header).base.pMethods = ptr::null();
 
         let real = real_vfs();
         let real_file = real_file_ptr(file);
@@ -143,12 +153,10 @@ unsafe extern "C" fn shim_open(
         }
 
         let real_methods_ptr = (*real_file).pMethods;
-        (*header).base.pMethods = if real_methods_ptr.is_null() {
-            ptr::null()
-        } else {
+        if !real_methods_ptr.is_null() {
             (*header).methods = build_shim_methods(&*real_methods_ptr);
-            &(*header).methods
-        };
+            (*header).base.pMethods = &(*header).methods;
+        }
         ffi::SQLITE_OK
     }
 }
@@ -406,42 +414,116 @@ pub struct OperationTiming {
     pub cpu: Duration,
 }
 
+/// `xsync + xwrite` exceeded `wall`: the three can never sum to `wall` as
+/// §5 requires, so this is an inconsistent measurement — a pathological
+/// clock reading or a shim/harness bug — never silently saturated to a
+/// remainder of zero, which would hide the very inconsistency it masks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InconsistentTiming {
+    pub wall: Duration,
+    pub xsync: Duration,
+    pub xwrite: Duration,
+}
+
+impl std::fmt::Display for InconsistentTiming {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "inconsistent measurement: xsync ({:?}) + xwrite ({:?}) exceeds wall ({:?})",
+            self.xsync, self.xwrite, self.wall
+        )
+    }
+}
+
+impl std::error::Error for InconsistentTiming {}
+
 impl OperationTiming {
-    pub fn from_measurements(wall: Duration, cpu: Duration, snapshot: &counters::Snapshot) -> Self {
+    pub fn from_measurements(
+        wall: Duration,
+        cpu: Duration,
+        snapshot: &counters::Snapshot,
+    ) -> Result<Self, InconsistentTiming> {
         let xsync = snapshot.xsync_duration();
         let xwrite = snapshot.xwrite_duration();
-        // wall is measured outside the shim and so never shrinks below
-        // xsync + xwrite in practice, but a saturating subtraction keeps
-        // this type's invariant (the three sum to wall) total rather than
-        // panicking on a pathological clock reading.
-        let remainder = wall.saturating_sub(xsync).saturating_sub(xwrite);
-        OperationTiming {
+        let remainder = wall
+            .checked_sub(xsync)
+            .and_then(|r| r.checked_sub(xwrite))
+            .ok_or(InconsistentTiming {
+                wall,
+                xsync,
+                xwrite,
+            })?;
+        Ok(OperationTiming {
             wall,
             xsync,
             xwrite,
             remainder,
             cpu,
-        }
+        })
+    }
+}
+
+/// Either the timed operation itself failed (`Operation`), or its
+/// measurement came back inconsistent (`Measurement`, [`InconsistentTiming`]).
+#[derive(Debug)]
+pub enum TimingError<E> {
+    Operation(E),
+    Measurement(InconsistentTiming),
+}
+
+/// Accumulates durations an operation explicitly excludes from `wall` —
+/// work that is the call's own input (PRNG draws, key formatting, §5),
+/// not SQLite's, but that cannot be done before the window opens because
+/// it is only known to be needed partway through the transaction (e.g.
+/// workload C's collision redraw, protocol §2). [`time_operation`]
+/// subtracts the total from the measured elapsed time.
+pub struct Excluded(Cell<Duration>);
+
+impl Excluded {
+    pub fn new() -> Self {
+        Excluded(Cell::new(Duration::ZERO))
+    }
+
+    /// Runs `f`, timing it, and adds that duration to the excluded total.
+    pub fn exclude<T>(&self, f: impl FnOnce() -> T) -> T {
+        let start = Instant::now();
+        let value = f();
+        self.0.set(self.0.get() + start.elapsed());
+        value
+    }
+
+    fn total(&self) -> Duration {
+        self.0.get()
+    }
+}
+
+impl Default for Excluded {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 /// Times one operation end to end: resets the shim counters, runs `op`,
 /// and reports the wall/xsync/xwrite/remainder/cpu split (protocol §5).
-/// The caller is responsible for the operation's inputs (PRNG draws, key
-/// formatting) happening *before* calling this, since those are the
-/// call's inputs, not SQLite's own work.
-pub fn time_operation<T, E>(op: impl FnOnce() -> Result<T, E>) -> Result<(T, OperationTiming), E> {
+/// `op` receives an [`Excluded`] handle for any sub-interval that must
+/// not count toward `wall` even though it cannot run before this
+/// function is called; everything else — bind, step, reset, materializing
+/// a `SELECT`'s rows — is SQLite's own work and stays timed.
+pub fn time_operation<T, E>(
+    op: impl FnOnce(&Excluded) -> Result<T, E>,
+) -> Result<(T, OperationTiming), TimingError<E>> {
     counters::reset();
+    let excluded = Excluded::new();
     let cpu_start = thread_cpu_time();
     let start = Instant::now();
-    let value = op()?;
-    let wall = start.elapsed();
+    let value = op(&excluded).map_err(TimingError::Operation)?;
+    let elapsed = start.elapsed();
+    let wall = elapsed.saturating_sub(excluded.total());
     let cpu = thread_cpu_time().saturating_sub(cpu_start);
     let snapshot = counters::snapshot();
-    Ok((
-        value,
-        OperationTiming::from_measurements(wall, cpu, &snapshot),
-    ))
+    let timing = OperationTiming::from_measurements(wall, cpu, &snapshot)
+        .map_err(TimingError::Measurement)?;
+    Ok((value, timing))
 }
 
 #[cfg(test)]
@@ -482,7 +564,7 @@ mod tests {
             .unwrap();
         conn.execute_batch("CREATE TABLE t (x INTEGER);").unwrap();
 
-        let (_, timing) = time_operation(|| -> rusqlite::Result<()> {
+        let (_, timing) = time_operation(|_excluded| -> rusqlite::Result<()> {
             conn.execute_batch("BEGIN IMMEDIATE; INSERT INTO t (x) VALUES (1); COMMIT;")
         })
         .unwrap();
@@ -503,6 +585,46 @@ mod tests {
         assert_eq!(after_reset.wal.xwrite_count, 0);
         assert_eq!(after_reset.main.xsync_count, 0);
         assert_eq!(after_reset.wal.xsync_count, 0);
+
+        // Per-file-kind accounting (protocol §5: "an ordinary commit
+        // never calls xSync on the main-file handle, only the WAL
+        // file, so the main-file xSync count is exactly the checkpoint
+        // count"). Reusing this test, not a fresh #[test], because the
+        // shim's counters are process-wide globals (see above).
+        // `time_operation` resets the counters itself, so no manual
+        // reset is needed between scenarios.
+        let (_, ordinary_commit) = time_operation(|_excluded| -> rusqlite::Result<()> {
+            conn.execute_batch("BEGIN IMMEDIATE; INSERT INTO t (x) VALUES (2); COMMIT;")
+        })
+        .unwrap();
+        let after_ordinary_commit = counters::snapshot();
+        assert!(
+            after_ordinary_commit.wal.xwrite_count > 0,
+            "an ordinary commit must write the WAL file"
+        );
+        assert!(
+            after_ordinary_commit.wal.xsync_count > 0,
+            "synchronous=FULL must sync the WAL file on commit"
+        );
+        assert_eq!(
+            after_ordinary_commit.main.xsync_count, 0,
+            "an ordinary commit must not sync the main file at all"
+        );
+        assert_eq!(
+            ordinary_commit.xsync,
+            after_ordinary_commit.xsync_duration()
+        );
+
+        let (_, _checkpoint_timing) = time_operation(|_excluded| -> rusqlite::Result<()> {
+            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        })
+        .unwrap();
+        let after_checkpoint = counters::snapshot();
+        assert_eq!(
+            after_checkpoint.main.xsync_count, 1,
+            "one forced checkpoint must sync the main file exactly once: \
+             the main-file xSync count equals the checkpoint count"
+        );
     }
 
     #[test]
@@ -516,5 +638,76 @@ mod tests {
             FileKind::Wal
         );
         assert_eq!(FileKind::from_open_flags(0), FileKind::Other);
+    }
+
+    #[test]
+    fn xopen_leaves_pmethods_null_in_nonzero_memory_on_a_failing_open() {
+        install().expect("install");
+
+        // A real header-sized-plus-real-file-sized buffer, filled with a
+        // nonzero byte pattern, 8-byte aligned (a `Vec<u64>` guarantees
+        // that; sqlite3_file/our header hold pointers, which a plain
+        // `Vec<u8>` is not guaranteed to align for) — standing in for
+        // memory SQLite did *not* zero before calling xOpen, so the test
+        // fails if shim_open ever relied on that zeroing instead of
+        // setting pMethods itself.
+        let real_size = unsafe { (*real_vfs()).szOsFile } as usize;
+        let total_bytes = HEADER_SIZE + real_size;
+        let words = total_bytes.div_ceil(size_of::<u64>());
+        let mut buf = vec![u64::MAX; words];
+        let file_ptr = buf.as_mut_ptr() as *mut ffi::sqlite3_file;
+
+        // A path in a directory that does not exist, with no CREATE flag:
+        // the real unix VFS's xOpen fails (SQLITE_CANTOPEN), never
+        // reaching the success path that builds real io_methods.
+        let missing_dir_path: &CStr = c"/nonexistent-kiln-e4-harness-dir/db.sqlite";
+        let mut out_flags: c_int = 0;
+        let rc = unsafe {
+            shim_open(
+                ptr::null_mut(),
+                missing_dir_path.as_ptr(),
+                file_ptr,
+                ffi::SQLITE_OPEN_MAIN_DB | ffi::SQLITE_OPEN_READWRITE,
+                &mut out_flags,
+            )
+        };
+
+        assert_ne!(
+            rc,
+            ffi::SQLITE_OK,
+            "opening a path inside a missing directory, without SQLITE_OPEN_CREATE, must fail"
+        );
+        let header = file_ptr as *mut ShimFileHeader;
+        assert!(
+            unsafe { (*header).base.pMethods }.is_null(),
+            "a failed xOpen must leave pMethods null even when the memory SQLite \
+             handed us was not zero-filled"
+        );
+    }
+
+    #[test]
+    fn an_inconsistent_measurement_where_xsync_plus_xwrite_exceeds_wall_is_an_explicit_error() {
+        let snapshot = counters::Snapshot {
+            main: counters::BucketTotals {
+                xwrite_count: 1,
+                xwrite_ns: 5,
+                xsync_count: 1,
+                xsync_ns: 8,
+            },
+            wal: counters::BucketTotals::default(),
+            other: counters::BucketTotals::default(),
+        };
+
+        let result =
+            OperationTiming::from_measurements(Duration::from_nanos(10), Duration::ZERO, &snapshot);
+
+        assert_eq!(
+            result.unwrap_err(),
+            InconsistentTiming {
+                wall: Duration::from_nanos(10),
+                xsync: Duration::from_nanos(8),
+                xwrite: Duration::from_nanos(5),
+            }
+        );
     }
 }

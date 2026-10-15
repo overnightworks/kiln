@@ -2,7 +2,11 @@
 //! against real (tiny) SQLite files — never a benchmark or pilot run,
 //! just proof that the pieces compose correctly.
 
-use kiln_e4_harness::workloads::Synchronous;
+use kiln_e4_harness::vfs::Excluded;
+use kiln_e4_harness::workloads::{
+    InsertStatements, PointReadStatements, PointUpdateStatements, Synchronous,
+    TransactionStatements, TransferStatements,
+};
 use kiln_e4_harness::{generators, restore, workloads};
 use rusqlite::Connection;
 use tempfile::TempDir;
@@ -32,10 +36,13 @@ fn reopen(db_path: &std::path::Path, synchronous: Synchronous) -> Connection {
 fn point_read_returns_the_row_it_asked_for() {
     let (_dir, db_path, _wal) = setup(50, Synchronous::Full);
     let conn = reopen(&db_path, Synchronous::Full);
+    let mut txn = TransactionStatements::prepare(&conn).unwrap();
+    let mut stmts = PointReadStatements::prepare(&conn).unwrap();
 
     let trace = generators::point_read_trace(generators::seed_for(0, 0), 50, 5);
     for params in &trace {
-        let (id, _email, _balance) = workloads::execute_point_read(&conn, params).unwrap();
+        let (id, _email, _balance) =
+            workloads::execute_point_read(&mut txn, &mut stmts, params).unwrap();
         assert_eq!(id as u64, params.id);
     }
 }
@@ -44,10 +51,12 @@ fn point_read_returns_the_row_it_asked_for() {
 fn point_update_never_drives_a_balance_negative() {
     let (_dir, db_path, _wal) = setup(50, Synchronous::Full);
     let conn = reopen(&db_path, Synchronous::Full);
+    let mut txn = TransactionStatements::prepare(&conn).unwrap();
+    let mut stmts = PointUpdateStatements::prepare(&conn).unwrap();
 
     let trace = generators::point_update_trace(generators::seed_for(1, 0), 50, 20);
     for params in &trace {
-        workloads::execute_point_update(&conn, params).unwrap();
+        workloads::execute_point_update(&mut txn, &mut stmts, params).unwrap();
     }
     assert!(workloads::checks::no_negative_balances(&conn).unwrap());
 }
@@ -56,6 +65,9 @@ fn point_update_never_drives_a_balance_negative() {
 fn insert_grows_the_row_count_by_exactly_the_operation_count() {
     let (_dir, db_path, _wal) = setup(50, Synchronous::Full);
     let conn = reopen(&db_path, Synchronous::Full);
+    let mut txn = TransactionStatements::prepare(&conn).unwrap();
+    let mut stmts = InsertStatements::prepare(&conn).unwrap();
+    let excluded = Excluded::new();
     let before = workloads::checks::row_count(&conn).unwrap();
 
     // A real driver threads one rng across both generation and
@@ -68,7 +80,8 @@ fn insert_grows_the_row_count_by_exactly_the_operation_count() {
             id: row_count + ordinal,
             email: generators::inserted_email(&mut rng, ordinal),
         };
-        workloads::execute_insert(&conn, &params, &mut rng, ordinal).unwrap();
+        workloads::execute_insert(&mut txn, &mut stmts, &params, &mut rng, ordinal, &excluded)
+            .unwrap();
     }
 
     let after = workloads::checks::row_count(&conn).unwrap();
@@ -79,11 +92,13 @@ fn insert_grows_the_row_count_by_exactly_the_operation_count() {
 fn transfer_keeps_the_sum_of_balances_invariant_and_never_goes_negative() {
     let (_dir, db_path, _wal) = setup(50, Synchronous::Full);
     let conn = reopen(&db_path, Synchronous::Full);
+    let mut txn = TransactionStatements::prepare(&conn).unwrap();
+    let mut stmts = TransferStatements::prepare(&conn).unwrap();
     let before_sum = workloads::checks::sum_of_balances(&conn).unwrap();
 
     let trace = generators::transfer_trace(generators::seed_for(3, 0), 50, 30);
     for params in &trace {
-        workloads::execute_transfer(&conn, params).unwrap();
+        workloads::execute_transfer(&mut txn, &mut stmts, params).unwrap();
     }
 
     assert_eq!(
@@ -96,13 +111,18 @@ fn transfer_keeps_the_sum_of_balances_invariant_and_never_goes_negative() {
 #[test]
 fn restoring_pristine_state_undoes_a_real_write() {
     let (dir, db_path, wal_path) = setup(50, Synchronous::Full);
-    restore::checkpoint_truncate(&db_path).unwrap();
+    restore::checkpoint_truncate(&db_path, &wal_path).unwrap();
     let pristine_dir = dir.path().join("pristine");
     restore::save_pristine(&db_path, &wal_path, &pristine_dir).unwrap();
 
     let conn = reopen(&db_path, Synchronous::Full);
+    let mut txn = TransactionStatements::prepare(&conn).unwrap();
+    let mut stmts = PointUpdateStatements::prepare(&conn).unwrap();
     let before_row_count = workloads::checks::row_count(&conn).unwrap();
-    workloads::execute_point_update(&conn, &generators::UpdateParams { id: 1 }).unwrap();
+    workloads::execute_point_update(&mut txn, &mut stmts, &generators::UpdateParams { id: 1 })
+        .unwrap();
+    drop(stmts);
+    drop(txn);
     drop(conn);
 
     restore::restore_pristine(&pristine_dir, &db_path, &wal_path).unwrap();

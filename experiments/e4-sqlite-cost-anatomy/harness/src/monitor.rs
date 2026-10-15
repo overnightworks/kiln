@@ -27,7 +27,13 @@ pub struct Sample {
 /// and is appended to the rejected-attempt log by the caller.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Violation {
-    /// The sibling CPU showed non-idle time during the window.
+    /// The sibling CPU's idle counter advanced by fewer whole USER_HZ
+    /// ticks (10 ms each) than the window's length, in ticks, implies —
+    /// the sampling method's actual resolution, not a literal proof of
+    /// "any non-idle time": non-idle activity shorter than one tick can
+    /// still round away and pass undetected. The threshold itself (zero
+    /// tolerance, any shortfall) is unchanged; this only names what the
+    /// check can and cannot see.
     SiblingNotIdle { idle_ticks_short: u64 },
     /// The pinned CPU's scheduler wait grew past the 1 ms limit.
     PinnedCpuWaited { delta_ns: u64 },

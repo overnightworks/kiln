@@ -99,7 +99,11 @@ pub fn check_build_env(offending_vars: &[String]) -> CheckResult {
 
 /// Collects which of [`machine::UNSET_BUILD_ENV_VARS`] are set, via an
 /// injectable reader so a test never touches real process environment.
-pub fn build_env_offenders(read_var: impl Fn(&str) -> Option<String>) -> Vec<String> {
+/// Reads as `OsString` (never `String`): a present value that is not
+/// valid UTF-8 is still set and still able to change the bundled SQLite
+/// build, so it must still be caught (see [`run_real`], which reads via
+/// `std::env::var_os`).
+pub fn build_env_offenders(read_var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<String> {
     machine::UNSET_BUILD_ENV_VARS
         .iter()
         .filter(|name| read_var(name).is_some())
@@ -208,7 +212,7 @@ pub fn run_real() -> io::Result<PreflightReport> {
     };
     let sqlite_version = check_sqlite_version(&sqlite_version_actual);
 
-    let offenders = build_env_offenders(|name| std::env::var(name).ok());
+    let offenders = build_env_offenders(|name| std::env::var_os(name));
     let build_env = check_build_env(&offenders);
 
     let siblings_path = format!(
@@ -277,7 +281,7 @@ mod tests {
     fn build_env_rejects_any_offending_variable_set() {
         let offenders = build_env_offenders(|name| {
             if name == "CFLAGS" {
-                Some("-O0".to_string())
+                Some(std::ffi::OsString::from("-O0"))
             } else {
                 None
             }
@@ -285,6 +289,25 @@ mod tests {
         let result = check_build_env(&offenders);
         assert!(!result.is_pass());
         assert!(matches!(result, CheckResult::Fail(msg) if msg.contains("CFLAGS")));
+    }
+
+    #[test]
+    fn build_env_detects_a_present_value_that_is_not_valid_utf8() {
+        // `std::env::var(...).ok()` would collapse this to `None` (an
+        // unset-looking Err(NotUnicode)); `var_os` still reports it set.
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let non_utf8 = std::ffi::OsString::from_vec(vec![0xFF, 0xFE]);
+            let offenders = build_env_offenders(|name| {
+                if name == "LIBSQLITE3_FLAGS" {
+                    Some(non_utf8.clone())
+                } else {
+                    None
+                }
+            });
+            assert_eq!(offenders, vec!["LIBSQLITE3_FLAGS".to_string()]);
+        }
     }
 
     #[test]
