@@ -1,18 +1,18 @@
 TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
 Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 63 and seed -4420376138021908054 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 2423960] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
-Starting... (2026-10-15 21:40:47)
+Running breadth-first search Model-Checking with fp 15 and seed 3609004811921536935 with 4 workers on 12 cores with 15518MB heap and 64MB offheap memory [pid: 2588111] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-10-15 22:02:57)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-15 21:40:47.
+Finished computing initial states: 1 distinct state generated at 2026-10-15 22:02:57.
 Error: Invariant MutualExclusion is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
 /\ resp = [t1 |-> <<>>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
-/\ db = << [present |-> TRUE, val |-> 10, bal |-> 1, parent |-> 0],
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 2, parent |-> 0],
    [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0],
-   [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 1] >>
+   [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >>
 /\ draws = [ t1 |->
       << [val |-> 0, bal |-> 0],
          [val |-> 0, bal |-> 0],
@@ -29,61 +29,53 @@ State 1: <Initial predicate>
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 2: <DoOp line 241, col 3 to line 262, col 17 of module Kernel>
-/\ resp = [ t1 |-> <<[present |-> TRUE, val |-> 10, bal |-> 1, parent |-> 0]>>,
-  t2 |-> <<>>,
-  t3 |-> <<>> ]
+State 2: <DoOp line 276, col 3 to line 297, col 17 of module Kernel>
+/\ resp = [t1 |-> <<"ok">>, t2 |-> <<>>, t3 |-> <<>>]
 /\ pc = [t1 |-> 1, t2 |-> 0, t3 |-> 0]
-/\ db = << [present |-> TRUE, val |-> 10, bal |-> 1, parent |-> 0],
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 2, parent |-> 0],
    [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0],
-   [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 1] >>
+   [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >>
 /\ draws = [ t1 |->
-      << [val |-> 0, bal |-> 0],
-         [val |-> 0, bal |-> 0],
-         [val |-> 0, bal |-> 0] >>,
-  t2 |->
-      << [val |-> 0, bal |-> 0],
-         [val |-> 0, bal |-> 0],
-         [val |-> 0, bal |-> 0] >>,
-  t3 |->
-      << [val |-> 0, bal |-> 0],
-         [val |-> 0, bal |-> 0],
-         [val |-> 0, bal |-> 0] >> ]
-/\ status = [t1 |-> "active", t2 |-> "active", t3 |-> "active"]
-/\ held = [t1 |-> {[kind |-> "X", cov |-> {1}]}, t2 |-> {}, t3 |-> {}]
-/\ wr = [ t1 |-> <<[present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0]>>,
-  t2 |-> << >>,
-  t3 |-> << >> ]
-
-State 3: <DoOp line 241, col 3 to line 262, col 17 of module Kernel>
-/\ resp = [ t1 |-> <<[present |-> TRUE, val |-> 10, bal |-> 1, parent |-> 0]>>,
-  t2 |-> <<"ok">>,
-  t3 |-> <<>> ]
-/\ pc = [t1 |-> 1, t2 |-> 1, t3 |-> 0]
-/\ db = << [present |-> TRUE, val |-> 10, bal |-> 1, parent |-> 0],
-   [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0],
-   [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 1] >>
-/\ draws = [ t1 |->
-      << [val |-> 0, bal |-> 0],
-         [val |-> 0, bal |-> 0],
-         [val |-> 0, bal |-> 0] >>,
-  t2 |->
       << [val |-> 1, bal |-> 1],
          [val |-> 0, bal |-> 0],
          [val |-> 0, bal |-> 0] >>,
+  t2 |->
+      << [val |-> 0, bal |-> 0],
+         [val |-> 0, bal |-> 0],
+         [val |-> 0, bal |-> 0] >>,
   t3 |->
       << [val |-> 0, bal |-> 0],
          [val |-> 0, bal |-> 0],
          [val |-> 0, bal |-> 0] >> ]
 /\ status = [t1 |-> "active", t2 |-> "active", t3 |-> "active"]
-/\ held = [ t1 |-> {[kind |-> "X", cov |-> {1}]},
-  t2 |-> {[kind |-> "DRAW", cov |-> {1}]},
-  t3 |-> {} ]
-/\ wr = [ t1 |-> <<[present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0]>>,
-  t2 |-> << >>,
-  t3 |-> << >> ]
+/\ held = [t1 |-> {[kind |-> "DRAW", cov |-> {1}]}, t2 |-> {}, t3 |-> {}]
+/\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-14 states generated, 13 distinct states found, 3 states left on queue.
+State 3: <DoOp line 276, col 3 to line 297, col 17 of module Kernel>
+/\ resp = [t1 |-> <<"ok">>, t2 |-> <<>>, t3 |-> <<{<<1, 0>>, <<3, 0>>}>>]
+/\ pc = [t1 |-> 1, t2 |-> 0, t3 |-> 1]
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 2, parent |-> 0],
+   [present |-> FALSE, val |-> 0, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >>
+/\ draws = [ t1 |->
+      << [val |-> 1, bal |-> 1],
+         [val |-> 0, bal |-> 0],
+         [val |-> 0, bal |-> 0] >>,
+  t2 |->
+      << [val |-> 0, bal |-> 0],
+         [val |-> 0, bal |-> 0],
+         [val |-> 0, bal |-> 0] >>,
+  t3 |->
+      << [val |-> 0, bal |-> 0],
+         [val |-> 0, bal |-> 0],
+         [val |-> 0, bal |-> 0] >> ]
+/\ status = [t1 |-> "active", t2 |-> "active", t3 |-> "active"]
+/\ held = [ t1 |-> {[kind |-> "DRAW", cov |-> {1}]},
+  t2 |-> {},
+  t3 |-> {[kind |-> "RS", cov |-> 1..3]} ]
+/\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
+
+21 states generated, 17 distinct states found, 6 states left on queue.
 The depth of the complete state graph search is 5.
-The average outdegree of the complete state graph is 3 (minimum is 2, the maximum 3 and the 95th percentile is 3).
-Finished in 00s at (2026-10-15 21:40:47)
+The average outdegree of the complete state graph is 2 (minimum is 1, the maximum 3 and the 95th percentile is 3).
+Finished in 00s at (2026-10-15 22:02:57)

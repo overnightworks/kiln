@@ -1,28 +1,48 @@
 ----------------------------- MODULE Composed -----------------------------
-(* Scenario: every mechanism in one state space. Key 1 is an event row
-   (sold = 10, quota = 1) and the parent of key 3; key 2 is absent.
-     t1 closes the event under an X lock (observes sold and quota, sets
-        both to 0), then scans keys 2..3 under a range lock;
-     t2 draws one ticket from the event's escrow, then inserts key 2 as a
-        child of key 1 (claim on 2, pin on 1);
-     t3 deletes child 3 (exclusive against 3's reverse references, pin on
-        its parent 1), then scans the whole table (a table resource).
-   X meets DRAW on key 1, the two pins on key 1 are compatible, the claim
-   on 2 and the delete of 3 both meet t1's range, t3's table scan covers
-   every point, and the serial orders differ in every response. *)
+(* Scenario: escrow, claim, pin, delete and a table scan whose first
+   operations do not serialize the run. Key 1 is an event row with a
+   quota of 2; key 2 is absent; key 3 is a present row with no parent.
+     t1 draws one ticket from the event's escrow, then inserts key 2 as a
+        child of key 3 (claim on 2, pin on 3);
+     t2 draws one ticket as well, then deletes key 3 (exclusive against
+        3's reverse references);
+     t3 scans the whole table (a table resource).
+   The two draws fit the allowance and coexist; with both live, t3's scan
+   waits on both, and whichever of t1 and t2 reaches key 3 second waits on
+   the other while still holding its draw. The order decides the outcome:
+   insert first rejects the delete with "referenced", delete first rejects
+   the insert with "noparent", and a rejected transaction's draw leaves
+   no effect on the quota. *)
 
 EXTENDS Kernel
 
 ComposedProg ==
   [t \in {"t1", "t2", "t3"} |->
-    CASE t = "t1" -> <<Update(1, 0, 0), Scan(2, 3)>>
-      [] t = "t2" -> <<Buy(1, 1), Insert(2, 1)>>
-      [] t = "t3" -> <<Delete(3), Scan(1, 3)>>]
+    CASE t = "t1" -> <<Buy(1, 1), Insert(2, 3)>>
+      [] t = "t2" -> <<Buy(1, 1), Delete(3)>>
+      [] t = "t3" -> <<Scan(1, 3)>>]
 
 ComposedInitDb ==
   [k \in 1..3 |->
-    CASE k = 1 -> [present |-> TRUE, val |-> 10, bal |-> 1, parent |-> 0]
+    CASE k = 1 -> [present |-> TRUE, val |-> 0, bal |-> 2, parent |-> 0]
       [] k = 2 -> AbsentRow
-      [] k = 3 -> [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 1]]
+      [] k = 3 -> [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0]]
+
+(* Witnesses (negated; TLC's counterexample is the reachability proof). *)
+
+(* Both draws are live at once and the table scan waits on both. *)
+ComposedDrawsUnreached ==
+  ~(Res("DRAW", {1}) \in held["t1"] /\ Res("DRAW", {1}) \in held["t2"]
+    /\ WaitsOn("t3") = {"t1", "t2"})
+
+(* t1 holds its pin on 3 and t2, still holding its draw, waits on it. *)
+ComposedPinDeleteUnreached ==
+  ~(Res("PIN", {3}) \in held["t1"] /\ Res("DRAW", {1}) \in held["t2"]
+    /\ WaitsOn("t2") = {"t1"})
+
+(* The insert won: t2 was told "referenced" and its draw left no effect. *)
+ComposedReferencedUnreached ==
+  ~(resp["t2"] = <<"ok", "referenced">> /\ status["t1"] = "committed"
+    /\ db[1].bal = 1 /\ db[2].parent = 3)
 
 ============================================================================
