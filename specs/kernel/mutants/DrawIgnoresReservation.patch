@@ -1,0 +1,17 @@
+--- Kernel.tla
++++ Kernel.tla
+@@ -293,8 +293,13 @@
+ 
+ ReservationHolders(t, k) == {u \in Txns \ {t} : Active(u) /\ reserved[u][k] > 0}
+ 
++RECURSIVE SumDrawn(_, _)
++SumDrawn(U, k) ==
++  IF U = {} THEN 0
++  ELSE LET u == CHOOSE x \in U : TRUE IN draws[u][k].bal + SumDrawn(U \ {u}, k)
++
+ EscrowBlocked(t, k) ==
+-  SumOver(ReservationHolders(t, k), k) + Reservation(t, k) > db[k].bal
++  SumDrawn(ReservationHolders(t, k), k) + Reservation(t, k) > db[k].bal
+ 
+ EscrowBlockers(t) ==
+   UNION {ReservationHolders(t, k) : k \in {k \in EscrowKeys(t) : EscrowBlocked(t, k)}}

@@ -1,0 +1,14 @@
+--- Kernel.tla
++++ Kernel.tla
+@@ -195,8 +195,9 @@
+ RECURSIVE SumAmounts(_, _)
+ SumAmounts(ops, k) ==
+   IF ops = <<>> THEN 0
+-  ELSE (IF Head(ops).op \in {"Buy", "BuyUnder"} /\ Head(ops).k = k THEN Head(ops).a ELSE 0)
+-       + SumAmounts(Tail(ops), k)
++  ELSE LET a == IF Head(ops).op \in {"Buy", "BuyUnder"} /\ Head(ops).k = k THEN Head(ops).a ELSE 0
++           rest == SumAmounts(Tail(ops), k) IN
++       IF a > rest THEN a ELSE rest
+ 
+ Budget(t, k) == SumAmounts(Prog[t], k)
+ 

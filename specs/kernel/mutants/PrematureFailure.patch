@@ -1,0 +1,20 @@
+--- Kernel.tla
++++ Kernel.tla
+@@ -289,12 +289,13 @@
+ 
+ Capped(t, k) == ~BudgetKnown(t, k) \/ Budget(t, k) > db[k].bal
+ 
+-Reservation(t, k) == IF Capped(t, k) THEN db[k].bal ELSE Budget(t, k)
+-
+ ReservationHolders(t, k) == {u \in Txns \ {t} : Active(u) /\ reserved[u][k] > 0}
+ 
+-EscrowBlocked(t, k) ==
+-  SumOver(ReservationHolders(t, k), k) + Reservation(t, k) > db[k].bal
++Reservation(t, k) ==
++  LET left == db[k].bal - SumOver(ReservationHolders(t, k), k) IN
++  IF Capped(t, k) \/ Budget(t, k) > left THEN left ELSE Budget(t, k)
++
++EscrowBlocked(t, k) == FALSE
+ 
+ EscrowBlockers(t) ==
+   UNION {ReservationHolders(t, k) : k \in {k \in EscrowKeys(t) : EscrowBlocked(t, k)}}

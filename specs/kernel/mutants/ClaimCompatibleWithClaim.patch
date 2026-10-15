@@ -1,6 +1,6 @@
 --- Kernel.tla
 +++ Kernel.tla
-@@ -72,7 +72,8 @@
+@@ -84,7 +84,8 @@
  Kinds == {"S", "RS", "X", "CLAIM", "PIN", "DEL", "DRAW"}
  CompatibleKinds ==
    {<<"S", "S">>, <<"S", "RS">>, <<"RS", "S">>, <<"RS", "RS">>,
