@@ -1,7 +1,0 @@
-claim_id = "d854a83234dd454394ce597820eea0b5"
-agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
-role = "builder"
-base = "4c0edb03bf81d8d4d581373862735e61bc134d27"
-branch = "claude/issue-7-e4-sqlite-cost-anatomy"
-scope = ["experiments/e4-sqlite-cost-anatomy/protocol.md"]
-opened_commit = "2ec5baf791b3ae283b6916f6e0a5beb0ef131063"
