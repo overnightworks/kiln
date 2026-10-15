@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 
 use kiln_e1::{
-    evaluate, parse_units, render_units, tpcc_units as lowered_tpcc_units, ClassifiedUnit,
-    ProvenCategory, TpccTransaction,
+    evaluate, parse_units, render_units, tpcc_units as lowered_tpcc_units, Classification,
+    ClassifiedUnit, Evidence, ProvenCategory, Reason, TpccTransaction,
 };
 
 #[path = "support/units.rs"]
@@ -14,6 +14,15 @@ use units::*;
 mod kiln_e1_35 {
     use super::*;
 
+    fn unknown_with_evidence(subject: &str) -> ClassifiedUnit {
+        let unit = unknown(subject).unit().clone();
+        let classification = Classification::Unknown {
+            reason: Reason::new("range over an undeclared index").unwrap(),
+            evidence: Some(Evidence::new(vec!["f/body/effects[1]".to_owned()]).unwrap()),
+        };
+        ClassifiedUnit::new(unit, classification)
+    }
+
     fn one_of_each_classification() -> Vec<ClassifiedUnit> {
         let mut written = vec![
             proven("a/b", ProvenCategory::Static),
@@ -21,6 +30,7 @@ mod kiln_e1_35 {
             proven(TpccTransaction::Payment, ProvenCategory::DomainBounded),
             gating("c/d"),
             unknown("c/d"),
+            unknown_with_evidence("c/d"),
             excluded("e/f"),
         ];
         written.extend(units_with_share("g/h", 2, 3));
