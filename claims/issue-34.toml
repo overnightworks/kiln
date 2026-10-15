@@ -1,0 +1,8 @@
+claim_id = "070606a6849741b585ae21cb7e1fc0d4"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "3402a79b591d733e1ede0d1bee3d28e41c28ad7f"
+branch = "claude/issue-34-kiln-ir-unique-origin"
+scope = ["crates/kiln-ir", "docs/concept.md", "specs/kiln-ir.spec.md"]
+opened_commit = "871771f8ddd5fada813cb8b094b33eeadab58b4b"
+whole_reason = "one crate slice, its criteria file and, only if needed, its reference-meaning paragraph"
