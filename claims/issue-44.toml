@@ -1,7 +1,0 @@
-claim_id = "9a53726101234b55b0f5bf62b46866c6"
-agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
-role = "builder"
-base = "d1135a31a00d89172778d0c8bf98fea4a595ea01"
-branch = "claude/issue-44-e1-freeze-amendment"
-scope = ["docs/experiments.md", "experiments/e1-classification-coverage/inputs.md"]
-opened_commit = "e273d9c9d8a4bdbb452d1026e4ff37b1a1f93d94"
