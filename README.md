@@ -22,3 +22,7 @@ workloads.
 - [docs/research/](docs/research/) — the prior-art report, the detailed
   research notes it was built from, and the ideation that produced kiln's
   design options.
+- [docs/verification.md](docs/verification.md) — the five-layer verification
+  strategy (design proofs, code proofs, differential testing, deterministic
+  simulation, a thin real-world layer), the named anomaly and regression
+  scenarios, and the verified precedents it rests on.
