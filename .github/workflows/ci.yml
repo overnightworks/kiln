@@ -50,3 +50,63 @@ jobs:
           fail: true
           # A checkout without Markdown links (e.g. just the aco config) must not fail.
           failIfEmpty: false
+
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CARGO_BUILD_JOBS: 4
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Discovers every tracked Rust workspace root (a Cargo.toml whose
+      # cargo-reported workspace_root is its own directory, so a workspace
+      # member is skipped and checked once via its root) and runs the
+      # standard checks in each. The runner's preinstalled rustup reads
+      # rust-toolchain.toml, so no toolchain action is needed. A checkout
+      # with no Rust package yet (e.g. before #4 or #13 land) passes with a
+      # clear message instead of failing.
+      - name: Format, lint and test every Rust root
+        run: |
+          mapfile -t manifests < <(git ls-files '*Cargo.toml' | sort -u)
+
+          if [ "${#manifests[@]}" -eq 0 ]; then
+            echo "No Rust package tracked in this repository; nothing to check."
+            exit 0
+          fi
+
+          declare -A seen_roots
+          found_root=0
+
+          for manifest in "${manifests[@]}"; do
+            dir=$(dirname "$manifest")
+            abs_dir=$(cd "$dir" && pwd)
+            workspace_root=$(cargo metadata --no-deps --offline --format-version=1 --manifest-path "$manifest" | jq -r '.workspace_root')
+
+            if [ "$workspace_root" != "$abs_dir" ]; then
+              continue # member of another tracked workspace; its root covers it
+            fi
+            if [ -n "${seen_roots[$abs_dir]:-}" ]; then
+              continue
+            fi
+            seen_roots[$abs_dir]=1
+            found_root=1
+
+            echo "::group::Rust checks: $dir"
+            (
+              cd "$dir"
+              cargo fmt --check
+              cargo clippy --all-targets -- -D warnings
+              cargo test
+            )
+            echo "::endgroup::"
+          done
+
+          if [ "$found_root" -eq 0 ]; then
+            echo "No Rust workspace root found; nothing to check."
+          fi
