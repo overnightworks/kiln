@@ -1,0 +1,21 @@
+--- Kernel.tla
++++ Kernel.tla
+@@ -213,12 +213,16 @@
+   [row EXCEPT !.bal = @ + draws[t][k].bal, !.val = @ - draws[t][k].val]
+ 
+ View(t) ==
+-  [k \in Keys |-> Drawn(t, k, IF k \in DOMAIN wr[t] THEN wr[t][k] ELSE db[k])]
++  [k \in Keys |-> Drawn(t, k,
++     IF k \in DOMAIN wr[t] THEN wr[t][k]
++     ELSE IF \E u \in Txns : Active(u) /\ k \in DOMAIN wr[u]
++     THEN wr[CHOOSE u \in Txns : Active(u) /\ k \in DOMAIN wr[u]][k]
++     ELSE db[k])]
+ 
+ (* Admission guard: every registered resource must be compatible with
+    every resource a live transaction holds. *)
+ Conflicting(t, R) ==
+-  {u \in Txns \ {t} : Active(u) /\ \E r \in R, h \in held[u] : ~Compatible(r, h)}
++  {u \in Txns \ {t} : Active(u) /\ \E r \in R, h \in {h \in held[u] : h.kind # "CLAIM"} : ~Compatible(r, h)}
+ 
+ (* Escrow allowance (§5): a tentative draw already reduces what a
+    concurrent draw may reserve, so the allowance is the committed balance
