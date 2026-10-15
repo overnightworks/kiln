@@ -47,7 +47,9 @@ footprint category the compiler can analyze rather than unknown, measured
 on TPC-C — weighted by its frozen transaction mix (`inputs.md` §1) — and on
 a corpus of real open-source applications — unweighted, one instance per
 enumerated transaction function, because no trace source exists for any of
-them (`inputs.md` §4). Below 50% falsifies the thesis.
+them (`inputs.md` §4). Below 50% falsifies the thesis: for TPC-C directly, and for the
+application corpus only under the refusal-qualified rule (below, "Gating
+numerator and verdict").
 
 **Scope.** A footprint extractor plus classifier only — no runtime, no
 storage engine, no kernel from `docs/concept.md` §4.
@@ -61,12 +63,15 @@ classes of `docs/concept.md` §3, which describe a relationship between a
 questions and are reported as two separate numbers, never conflated:
 
 - **Static.** The complete set of rows, ranges, or keys the function can
-  touch is a pure function of its arguments and the schema, with no read of
-  current data. Example: `read(accounts, key = from_id)`.
+  touch, over every feasible branch, is a pure function of its arguments and
+  the schema, with no read of current data. Example:
+  `read(accounts, key = from_id)`. Branch composition:
+  `inputs.md` §5, Q1.
 - **One-hop.** The footprint requires exactly one data-dependent read whose
   result determines a further access, and that one hop resolves through an
-  index or foreign key the compiler can identify ahead of time — not an
-  arbitrary secondary-attribute scan. Example: look up an order by
+  index (unique or not) or foreign key the compiler can identify ahead of
+  time — not an arbitrary secondary-attribute scan. What counts as the one
+  read and as an identifiable index: `inputs.md` §5, Q2 and Q3. Example: look up an order by
   `order_id`, then touch the customer through `order.customer_id`, a foreign
   key into `customers`.
 - **Domain-bounded.** Not static or one-hop, but provably confined to one
@@ -92,6 +97,13 @@ trace source exists for it (below, and `inputs.md` §4). Domain-bounded
 instances are not in the numerator; their share is reported separately and
 never gates the verdict.
 
+**Refusal-qualified falsification.** Each application also reports
+L = C/N and U = (C+R)/N over its N enumerated units, C qualifying and R
+refused in full. An application-side Fail is established falsification only
+when the median of U is also below 50%; a median of L below 50% with U not
+below reads "measured Fail; lower bound, not established falsification"
+(`inputs.md` §5).
+
 **Application-side gating metric.** #2's freeze
 (`experiments/e1-classification-coverage/inputs.md` §4) establishes, before
 any classification result exists, that no trace source exists for any
@@ -112,6 +124,9 @@ TPC-C's own transaction mix is unaffected by this and stays weighted
 - **Pass** when TPC-C's weighted coverage is at least 70% *and* the median
   unweighted coverage over the frozen application corpus is at least 70%.
 - **Fail** when TPC-C's coverage is below 50% *or* that median is below 50%.
+  The application-side Fail falsifies only per the refusal-qualified rule
+  above (median of U below 50%); TPC-C's own below-50% Fail falsifies as
+  stated.
 - **Inconclusive** otherwise. A unit landing strictly between 50% and 70% is
   reported as inconclusive for that unit specifically, never rounded into a
   pass or a fail.

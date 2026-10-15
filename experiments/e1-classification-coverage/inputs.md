@@ -890,3 +890,133 @@ gating on its frozen mix. `docs/experiments.md`, "Gating numerator and
 verdict," is amended in the same change to state this directly, replacing
 the "at least five traced applications" condition it previously carried;
 the two documents agree from this point on.
+
+## 5. Amendment 16.10.2026: branch, index, hop, lowering and refusal rules
+
+Decided before the classifier, the TPC-C lowering or the application
+lowering exists and before any classification result exists, from an
+independent plan review of open questions Q1-Q4 (#44). They make the
+category definitions in `docs/experiments.md` ("Footprint categories")
+operational and add one qualification to the application-side verdict
+("Gating numerator and verdict"); a classifier builder applies them without
+further judgement. Each rule states its bias direction on the coverage
+number. No rule below is a result: none states or implies a category or
+coverage number for TPC-C or any application.
+
+**Q1. Branch composition.** *Changes:* what is classified. *Grounding:* the
+frozen text classifies a *function's* footprint ("the complete set of rows,
+ranges, or keys the function can touch"), so the unit is the whole function.
+
+1. A function is classified over its complete body, every feasible branch.
+2. A branch selected by an argument keeps the function static when each
+   branch's footprint is static.
+3. A branch selected by data counts the selector's dependency (the read that
+   decides the branch) as well as each continuation's footprint.
+4. Replacing a branch's footprint by a whole-table superset does not erase
+   navigation: a read whose result determines a further access still counts
+   under Q3 on that branch.
+5. TPC-C keeps its five units and weights (§1). Payment's and Order-Status's
+   by-name customer paths are part of the one gating classification of
+   their unit. A by-id-only row may be reported for sensitivity and never
+   gates. This corrects an earlier reading that made by-name sensitivity-only.
+
+*Bias:* conservative against classifying by the easiest variant. *TPC-C:*
+this moves Payment and Order-Status from the by-id variant to the complete
+function, which can move a unit out of the numerator; the conservative
+choice is taken.
+
+**Q2. Secondary indexes.** *Changes:* which lookups are identifiable.
+*Grounding:* "index or foreign key the compiler can identify ahead of time"
+names an index, not a unique one.
+
+1. A secondary index qualifies whether or not it is unique, if the schema of
+   the application or of TPC-C declares it. An index is never inferred or
+   added after a result is seen, and a unique constraint alone is not an
+   index. The lowering uses only declared indexes and does not substitute a
+   primary-key range for one.
+2. A range over such an index bounded by arguments and the schema is static.
+3. Resolving that range's contents into base-row keys not previously known
+   is one hop (Q3), provided it is the function's only qualifying
+   resolution.
+4. An index-only read and a lookup followed by base-row accesses are
+   distinct evidence; the classifier's evidence names which one applies.
+   Ordering and median-selection semantics of the range are preserved by
+   the lowering, else the function is refused (Q4).
+5. A predicate on a secondary attribute with no declared index stays
+   Unknown.
+6. `kiln-ir` gains declared secondary indexes and indexed range reads in
+   #45. Refusing index lookups for want of IR support would depress coverage
+   through an implementation limit rather than the thesis, so the extension
+   precedes the lowering.
+
+*Bias:* admitting non-unique indexes follows the frozen text and raises
+coverage; the declared-only restriction and the semantics requirement bound
+it. *TPC-C:* this can move Payment's by-name path from Unknown to One-hop;
+the conservative choice is to promote only when rule 3 holds on the whole
+function (Q1), and Order-Status's further navigation is not assumed promoted.
+
+**Q3. Hop counting.** *Changes:* what the single hop of "One-hop" counts.
+*Grounding:* "exactly one data-dependent read whose result determines a
+further access".
+
+1. A function is one-hop when, on its most demanding feasible path (Q1),
+   exactly one logical read has a result that determines further access
+   targets through an identifiable index or foreign key (Q2).
+2. A read whose result only affects returned values or control flow without
+   changing any access target is not a resolution.
+3. Several independent resolving reads exceed one even if they could run in
+   parallel.
+4. One resolving result may determine any number of later accesses without
+   adding a hop.
+5. A key for an insert derived from a read contributes that function's one
+   resolution; the inserted row need not exist beforehand. This holds
+   assuming all remaining behaviour qualifies.
+6. A minimum, maximum or selection computed over one argument-bounded range
+   of an identifiable index is computation, not a further read; using its
+   result as an access key is one resolution. An arbitrary secondary scan is
+   not covered by this rule.
+7. Two or more chained resolutions are not One-hop. Such a function is
+   Domain-bounded if provably confined to one argument-selected partition
+   (`docs/experiments.md`'s definition), otherwise Unknown.
+8. Splitting or combining independent reads syntactically (one query versus
+   several, helper calls) does not change the count.
+
+*Bias:* strict cardinality lowers coverage relative to counting parallel
+rounds; rule 5 keeps writes from biasing upward. *TPC-C:* no unit's category
+is stated here; the classifier assigns it by these rules. Recognising one
+minimum or one lookup inside a unit that chains two or more resolutions
+(rule 7) does not make it One-hop.
+
+**Q4. Lowering fidelity and the audit oracle.** *Changes:* what a lowering
+may omit and where audit expectations come from. *Grounding:* the
+source-to-IR boundary of `docs/concept.md` §2.1 and the lowering audit.
+
+1. A lowering may cover only recognised idioms, but never drops a helper's
+   effects, failures, responses or constraints. A function with anything
+   not translated is refused in full and stays in the denominator as
+   Unknown (the frozen rule), and counts toward R as `docs/experiments.md`,
+   "Gating numerator and verdict", defines it.
+2. The lowering audit's expected outcomes are derived independently from the
+   function's source and the framework's semantics, never from the IR under
+   test; an expectation generated from that IR checks only consistency and
+   does not satisfy the audit.
+3. Both frozen seed-17 audit populations (§3), the affirmative S4 evidence
+   and the separate access-log containment audit are unchanged. Controlled
+   source execution is permitted as audit evidence, not required.
+
+*Bias:* refusals depress coverage; a weak oracle could inflate it, hence
+rule 2.
+
+**Refusal-qualified falsification.** *Changes:* when an application-side
+Fail counts as falsification. *Grounding:* "A unit landing strictly between
+..." and "an unsupported function is never dropped from the denominator"
+keep every denominator; this adds a reading, not a new threshold.
+
+The definitions of L and U, the median(U) threshold and the required
+report wording are owned by `docs/experiments.md` ("Gating numerator and
+verdict"); this section keeps only the rationale. Refusals never leave a
+denominator, so both L and U are always reported.
+
+*Bias:* a Fail that refusals may have caused cannot falsify the thesis;
+a Pass is untouched. Realised in the `kiln-e1 verdict` command's
+application half in #2 slice 6.
