@@ -34,3 +34,14 @@ pub fn parse_units(source_name: &str, text: &str) -> Result<Vec<ClassifiedUnit>,
         })
         .collect()
 }
+
+/// Writes one classified unit per line, the form [`parse_units`] reads.
+pub fn render_units(units: &[ClassifiedUnit]) -> String {
+    units
+        .iter()
+        .map(|unit| {
+            let line = serde_json::to_string(unit).expect("a classified unit is plain data");
+            line + "\n"
+        })
+        .collect()
+}

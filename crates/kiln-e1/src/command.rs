@@ -1,19 +1,25 @@
 use std::fmt::{self, Write as _};
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use crate::classified::ClassifiedUnit;
 use crate::evaluation::{evaluate, Evaluation, Refusal};
-use crate::jsonl::{parse_units, JsonlError};
+use crate::jsonl::{parse_units, render_units, JsonlError};
 use crate::manifest::{Manifest, ManifestError};
+use crate::tpcc::tpcc_units;
 
-const USAGE: &str = "usage: kiln-e1 verdict --manifest <csv> --tpcc <jsonl> --applications <jsonl>";
+const USAGE: &str = "usage: kiln-e1 verdict --manifest <csv> --tpcc <jsonl> --applications <jsonl>\n       kiln-e1 tpcc --out <jsonl> --sensitivity-out <jsonl>";
 const MEDIAN_LABEL: &str = "unweighted — no trace source exists";
 
 #[derive(Debug)]
 pub enum CommandError {
     Usage(String),
     Read {
+        path: PathBuf,
+        error: std::io::Error,
+    },
+    Write {
         path: PathBuf,
         error: std::io::Error,
     },
@@ -29,6 +35,9 @@ impl fmt::Display for CommandError {
             Self::Read { path, error } => {
                 write!(formatter, "cannot read {}: {error}", path.display())
             }
+            Self::Write { path, error } => {
+                write!(formatter, "cannot write {}: {error}", path.display())
+            }
             Self::Manifest(error) => error.fmt(formatter),
             Self::Units(error) => error.fmt(formatter),
             Self::Refused(refusal) => write!(formatter, "refused: {refusal}"),
@@ -38,55 +47,130 @@ impl fmt::Display for CommandError {
 
 impl std::error::Error for CommandError {}
 
-struct VerdictInputs {
-    manifest: PathBuf,
-    tpcc: PathBuf,
-    applications: PathBuf,
+/// Runs `kiln-e1` for the arguments after the program name and returns the
+/// report to print.
+pub fn run_command(arguments: &[String]) -> Result<String, CommandError> {
+    let [command, flags @ ..] = arguments else {
+        return Err(CommandError::Usage("missing command".to_owned()));
+    };
+    match command.as_str() {
+        "verdict" => run_verdict(flags),
+        "tpcc" => run_tpcc(flags),
+        other => Err(CommandError::Usage(format!("unknown command `{other}`"))),
+    }
 }
 
-/// Runs `kiln-e1 verdict` for the arguments after the program name and returns
-/// the report to print.
-pub fn run_verdict_command(arguments: &[String]) -> Result<String, CommandError> {
-    let inputs = parse_arguments(arguments)?;
-    let manifest = Manifest::parse(&read(&inputs.manifest)?).map_err(CommandError::Manifest)?;
-    let tpcc = read_units(&inputs.tpcc)?;
-    let applications = read_units(&inputs.applications)?;
+/// The values of a command's `--flag value` pairs, each flag given once.
+struct Flags(Vec<(String, PathBuf)>);
+
+impl Flags {
+    fn parse(arguments: &[String], accepted: &[&str]) -> Result<Self, CommandError> {
+        let mut given: Vec<(String, PathBuf)> = Vec::new();
+        for pair in arguments.chunks(2) {
+            let [flag, value] = pair else {
+                return Err(CommandError::Usage(format!("`{}` needs a value", pair[0])));
+            };
+            if !accepted.contains(&flag.as_str()) {
+                return Err(CommandError::Usage(format!("unknown flag `{flag}`")));
+            }
+            given.push((flag.clone(), PathBuf::from(value)));
+        }
+        Ok(Self(given))
+    }
+
+    fn require(&self, flag: &str) -> Result<&Path, CommandError> {
+        self.0
+            .iter()
+            .rev()
+            .find(|(given, _)| given == flag)
+            .map(|(_, path)| path.as_path())
+            .ok_or_else(|| CommandError::Usage(format!("missing `{flag}`")))
+    }
+}
+
+fn run_verdict(arguments: &[String]) -> Result<String, CommandError> {
+    let flags = Flags::parse(arguments, &["--manifest", "--tpcc", "--applications"])?;
+    let manifest_path = flags.require("--manifest")?;
+    let tpcc_path = flags.require("--tpcc")?;
+    let applications_path = flags.require("--applications")?;
+    let manifest = Manifest::parse(&read(manifest_path)?).map_err(CommandError::Manifest)?;
+    let tpcc = read_units(tpcc_path)?;
+    let applications = read_units(applications_path)?;
     let evaluation = evaluate(&manifest, &tpcc, &applications).map_err(CommandError::Refused)?;
     Ok(render(&evaluation))
 }
 
-fn parse_arguments(arguments: &[String]) -> Result<VerdictInputs, CommandError> {
-    let [command, flags @ ..] = arguments else {
-        return Err(CommandError::Usage("missing command".to_owned()));
-    };
-    if command != "verdict" {
-        return Err(CommandError::Usage(format!("unknown command `{command}`")));
+/// Writes the lowered and classified TPC-C units; the report counts units and
+/// states no share and no verdict.
+fn run_tpcc(arguments: &[String]) -> Result<String, CommandError> {
+    let flags = Flags::parse(arguments, &["--out", "--sensitivity-out"])?;
+    let out = flags.require("--out")?;
+    let sensitivity_out = flags.require("--sensitivity-out")?;
+    if Destination::of(out)? == Destination::of(sensitivity_out)? {
+        return Err(CommandError::Usage(
+            "`--out` and `--sensitivity-out` name the same file".to_owned(),
+        ));
     }
-    let (mut manifest, mut tpcc, mut applications) = (None, None, None);
-    for pair in flags.chunks(2) {
-        let [flag, value] = pair else {
-            return Err(CommandError::Usage(format!("`{}` needs a value", pair[0])));
+    let units = tpcc_units();
+    write(out, &render_units(&units.gating))?;
+    write(sensitivity_out, &render_units(&units.sensitivity))?;
+    Ok(format!(
+        "wrote {} units to {}\nwrote {} sensitivity units to {}\n",
+        units.gating.len(),
+        out.display(),
+        units.sensitivity.len(),
+        sensitivity_out.display()
+    ))
+}
+
+/// The file a write to a destination lands on: an existing file by its device
+/// and inode, so that a symlink, a `..` or a hard link cannot hide two names for
+/// one file; a file still to be created by its resolved directory and name.
+#[derive(PartialEq)]
+enum Destination {
+    Existing { device: u64, inode: u64 },
+    ToCreate(PathBuf),
+}
+
+impl Destination {
+    fn of(path: &Path) -> Result<Self, CommandError> {
+        let unresolvable = |error| CommandError::Write {
+            path: path.to_owned(),
+            error,
         };
-        let slot = match flag.as_str() {
-            "--manifest" => &mut manifest,
-            "--tpcc" => &mut tpcc,
-            "--applications" => &mut applications,
-            other => return Err(CommandError::Usage(format!("unknown flag `{other}`"))),
-        };
-        *slot = Some(PathBuf::from(value));
+        match fs::metadata(path) {
+            Ok(file) => Ok(Self::Existing {
+                device: file.dev(),
+                inode: file.ino(),
+            }),
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(unresolvable(error)),
+            Err(error) => {
+                if fs::symlink_metadata(path).is_ok() {
+                    return Err(unresolvable(error));
+                }
+                let directory = path
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                    .unwrap_or(Path::new("."));
+                let file_name = path.file_name().ok_or_else(|| {
+                    unresolvable(std::io::Error::from(std::io::ErrorKind::InvalidInput))
+                })?;
+                let directory = fs::canonicalize(directory).map_err(unresolvable)?;
+                Ok(Self::ToCreate(directory.join(file_name)))
+            }
+        }
     }
-    let require = |slot: Option<PathBuf>, flag: &str| {
-        slot.ok_or_else(|| CommandError::Usage(format!("missing `{flag}`")))
-    };
-    Ok(VerdictInputs {
-        manifest: require(manifest, "--manifest")?,
-        tpcc: require(tpcc, "--tpcc")?,
-        applications: require(applications, "--applications")?,
-    })
 }
 
 fn read(path: &Path) -> Result<String, CommandError> {
     fs::read_to_string(path).map_err(|error| CommandError::Read {
+        path: path.to_owned(),
+        error,
+    })
+}
+
+fn write(path: &Path, text: &str) -> Result<(), CommandError> {
+    fs::write(path, text).map_err(|error| CommandError::Write {
         path: path.to_owned(),
         error,
     })
