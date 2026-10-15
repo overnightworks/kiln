@@ -30,8 +30,10 @@ pub fn tpcc_units() -> TpccUnits {
 }
 
 /// The position is the profile's clause in the specification and the printed
-/// page it starts on; every transaction is one explicit database transaction
-/// (Clauses 2.4.2.1, 2.5.2.1, 2.6.2.1, 2.7.4.1, 2.8.2.1), so rule S2.
+/// page it starts on. Each transaction is encoded as one explicit database
+/// transaction, so rule S2; the specification also permits several (Clauses
+/// 2.7.4.1, 2.8.2.1), and Delivery's queue and post-commit result file are host
+/// behaviour outside it.
 fn unit_of(profile: &Profile) -> ClassifiedUnit {
     let refusal = LoweringRefusal::of(profile).unwrap_or_else(|| {
         panic!(

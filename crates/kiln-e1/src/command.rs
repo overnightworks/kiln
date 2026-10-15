@@ -105,6 +105,11 @@ fn run_tpcc(arguments: &[String]) -> Result<String, CommandError> {
     let flags = Flags::parse(arguments, &["--out", "--sensitivity-out"])?;
     let out = flags.require("--out")?;
     let sensitivity_out = flags.require("--sensitivity-out")?;
+    if resolved(out) == resolved(sensitivity_out) {
+        return Err(CommandError::Usage(
+            "`--out` and `--sensitivity-out` name the same file".to_owned(),
+        ));
+    }
     let units = tpcc_units();
     write(out, &render_units(&units.gating))?;
     write(sensitivity_out, &render_units(&units.sensitivity))?;
@@ -115,6 +120,23 @@ fn run_tpcc(arguments: &[String]) -> Result<String, CommandError> {
         units.sensitivity.len(),
         sensitivity_out.display()
     ))
+}
+
+/// The path a write to `path` lands on, so that a symlink or a `..` cannot
+/// hide two names for one file; a path that cannot be resolved stays as given
+/// and fails loudly when written.
+fn resolved(path: &Path) -> PathBuf {
+    fs::canonicalize(path)
+        .or_else(|_| {
+            let parent = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty());
+            let file_name = path.file_name().ok_or(std::io::ErrorKind::NotFound)?;
+            Ok::<_, std::io::Error>(
+                fs::canonicalize(parent.unwrap_or(Path::new(".")))?.join(file_name),
+            )
+        })
+        .unwrap_or_else(|_| path.to_owned())
 }
 
 fn read(path: &Path) -> Result<String, CommandError> {

@@ -14,6 +14,8 @@ pub enum Requirement {
     /// Select the rows whose primary key starts with given columns.
     KeyedRange(TpccTable),
     KeyedInsert(TpccTable),
+    /// Enforce the foreign keys of Clause 1.3.1 that name several columns.
+    CompositeForeignKeys(TpccTable),
     /// Select rows by columns that are not a primary key.
     LookupByAttributes {
         table: TpccTable,
@@ -23,14 +25,25 @@ pub enum Requirement {
     LargestKey,
     /// The row at position n/2 rounded up among n rows sorted by a column.
     MiddleOfSortedRows,
-    CurrentTime,
-    Multiplication,
     TextConstruction,
     TextSearch,
-    /// A sum or a count of distinct items that the function returns.
-    ReturnedAggregate,
+    /// The number of distinct items among the rows of a range, without durable
+    /// scratch state.
+    DistinctCount,
+    /// Money totals scaled to several decimals: the product of three factors
+    /// brought back to the scale of Clause 1.3.1.
+    ExactDecimalScaling,
+    /// A column that Clause 1.3.1 allows to be null, written before it has a
+    /// value.
+    NullEncoding,
     /// A response of several fields; the IR returns one value.
     MultiFieldResponse,
+    /// New-Order's rollback response carries the allocated O_ID (Clause
+    /// 2.4.3.4), which an abort cannot.
+    RollbackResponseWithAllocatedId,
+    /// Delivery is queued and its result recorded after commit (Clauses 2.7.2,
+    /// 2.7.4.1), which is the host's work, not the transaction's.
+    HostQueueAndResultFile,
 }
 
 impl Requirement {
@@ -40,11 +53,23 @@ impl Requirement {
             Self::KeyedAccess(table) | Self::KeyedRange(table) => keyed_by_several(table),
             Self::KeyedInsert(table) => match table.primary_key() {
                 [] => Some(format!(
-                    "{} has no primary key (Clause 1.3.1) and the IR inserts a row only at a key",
+                    "{} has no primary key (Clause 1.3.1): it needs an append that keeps \
+                     duplicates under a fresh row identity, and the IR inserts a row only at a key",
                     table.name()
                 )),
                 _ => keyed_by_several(table),
             },
+            Self::CompositeForeignKeys(table) => {
+                let keys = table.composite_foreign_keys();
+                (!keys.is_empty()).then(|| {
+                    format!(
+                        "{} must enforce the foreign keys {} (Clause 1.3.1) and the IR has no \
+                         enforcement of a reference by several columns",
+                        table.name(),
+                        keys.join(", ")
+                    )
+                })
+            }
             Self::LookupByAttributes { table, columns } => Some(format!(
                 "{} is looked up by ({}), which is no primary key and no index Clause 1.3.1 declares",
                 table.name(),
@@ -55,22 +80,39 @@ impl Requirement {
                  middle one"
                     .to_owned(),
             ),
-            Self::CurrentTime => Some("the IR has no clock".to_owned()),
-            Self::Multiplication => {
-                Some("the IR's arithmetic is addition and subtraction only".to_owned())
-            }
             Self::TextConstruction => {
                 Some("the IR has no text concatenation, shifting or truncation".to_owned())
             }
             Self::TextSearch => {
                 Some("the IR cannot test whether text contains a string".to_owned())
             }
-            Self::ReturnedAggregate => {
-                Some("the IR has no accumulator whose value a response can return".to_owned())
-            }
+            Self::DistinctCount => Some(
+                "the IR has no local distinctness and counting of items without a durable scratch \
+                 table"
+                    .to_owned(),
+            ),
+            Self::ExactDecimalScaling => Some(
+                "the IR has no division or rounding to bring a product of decimals back to its \
+                 scale, and no scale encoding is fixed or audited"
+                    .to_owned(),
+            ),
+            Self::NullEncoding => Some(
+                "the IR has no null; a sentinel encoding of a null column is not fixed or audited"
+                    .to_owned(),
+            ),
             Self::MultiFieldResponse => {
                 Some("the IR's response is one value, not several fields".to_owned())
             }
+            Self::RollbackResponseWithAllocatedId => Some(
+                "the IR's abort names a fixed error and carries no dynamic field such as the \
+                 allocated O_ID"
+                    .to_owned(),
+            ),
+            Self::HostQueueAndResultFile => Some(
+                "the IR defines no host interface for queuing a transaction or for recording its \
+                 result after commit"
+                    .to_owned(),
+            ),
         }
     }
 }
@@ -78,7 +120,8 @@ impl Requirement {
 fn keyed_by_several(table: TpccTable) -> Option<String> {
     (table.primary_key().len() > 1).then(|| {
         format!(
-            "{} is keyed by ({}) and the IR keys a row by one value",
+            "{} is keyed by ({}): the IR has no faithful compound-key construction and \
+             enforcement, and keys a row by one value",
             table.name(),
             table.primary_key().join(", ")
         )
@@ -153,8 +196,9 @@ impl Profile {
 }
 
 use Requirement::{
-    CurrentTime, KeyedAccess, KeyedInsert, KeyedRange, LargestKey, LowestKey, MiddleOfSortedRows,
-    MultiFieldResponse, Multiplication, ReturnedAggregate, TextConstruction, TextSearch,
+    CompositeForeignKeys, DistinctCount, ExactDecimalScaling, HostQueueAndResultFile, KeyedAccess,
+    KeyedInsert, KeyedRange, LargestKey, LowestKey, MiddleOfSortedRows, MultiFieldResponse,
+    NullEncoding, RollbackResponseWithAllocatedId, TextConstruction, TextSearch,
 };
 use TpccTable::{Customer, District, History, Item, NewOrder, Order, OrderLine, Stock, Warehouse};
 
@@ -168,9 +212,11 @@ const ORDER_OF_CUSTOMER: Requirement = Requirement::LookupByAttributes {
     columns: &["O_W_ID", "O_D_ID", "O_C_ID"],
 };
 
-/// Clause 2.4.2.2, with the order-entry date of Clause 2.4.1.6. The 5 to 15
-/// items of Clause 2.4.1.3 are fifteen blocks, each guarded by a comparison of
-/// arguments, which the IR expresses, so they block nothing.
+/// Clause 2.4.2.2. What the IR can express by other means blocks nothing: the
+/// order-entry date is a time the engine supplies as an argument, the 5 to 15
+/// items of Clause 2.4.1.3 are fifteen blocks each guarded by a comparison of
+/// arguments, OL_QUANTITY * I_PRICE is repeated addition selected by the
+/// quantity of 1 to 10, and the sum over the items is an unrolled expression.
 const NEW_ORDER_STEPS: [Step; 12] = [
     step("2.4.2.2", "select WAREHOUSE by W_ID, retrieve W_TAX", &[KeyedAccess(Warehouse)]),
     step(
@@ -183,11 +229,11 @@ const NEW_ORDER_STEPS: [Step; 12] = [
         "select CUSTOMER by (C_W_ID, C_D_ID, C_ID), retrieve C_DISCOUNT, C_LAST, C_CREDIT",
         &[KeyedAccess(Customer)],
     ),
-    step("2.4.2.2", "insert the NEW-ORDER row", &[KeyedInsert(NewOrder)]),
+    step("2.4.2.2", "insert the NEW-ORDER row", &[KeyedInsert(NewOrder), CompositeForeignKeys(NewOrder)]),
     step(
         "2.4.2.2, 2.4.1.6",
-        "insert the ORDER row, O_ENTRY_D the current time, O_ALL_LOCAL from the order-lines",
-        &[KeyedInsert(Order), CurrentTime],
+        "insert the ORDER row, O_ENTRY_D the supplied time, O_CARRIER_ID null, O_ALL_LOCAL from the order-lines",
+        &[KeyedInsert(Order), CompositeForeignKeys(Order), NullEncoding],
     ),
     step(
         "2.4.2.2, 2.4.2.3",
@@ -195,21 +241,26 @@ const NEW_ORDER_STEPS: [Step; 12] = [
         &[KeyedAccess(Item)],
     ),
     step(
+        "2.4.2.2, 2.4.2.3, 2.4.3.4",
+        "when an item is unused roll back and still respond with the allocated O_ID",
+        &[RollbackResponseWithAllocatedId],
+    ),
+    step(
         "2.4.2.2",
         "select STOCK by (S_W_ID, S_I_ID) per item, retrieve S_DIST_xx of the district, update S_QUANTITY, S_YTD, S_ORDER_CNT, S_REMOTE_CNT",
         &[KeyedAccess(Stock)],
     ),
-    step("2.4.2.2", "OL_AMOUNT is OL_QUANTITY * I_PRICE", &[Multiplication]),
     step(
         "2.4.2.2",
         "brand-generic is B when I_DATA and S_DATA both include \"ORIGINAL\"",
         &[TextSearch],
     ),
-    step("2.4.2.2", "insert the ORDER-LINE row per item", &[KeyedInsert(OrderLine)]),
+    step("2.4.2.2", "insert the ORDER-LINE row per item, OL_DELIVERY_D null",
+        &[KeyedInsert(OrderLine), CompositeForeignKeys(OrderLine), NullEncoding],),
     step(
         "2.4.2.2",
         "total-amount is sum(OL_AMOUNT) * (1 - C_DISCOUNT) * (1 + W_TAX + D_TAX)",
-        &[ReturnedAggregate, Multiplication],
+        &[ExactDecimalScaling],
     ),
     step(
         "2.4.2.2, 2.4.3.3",
@@ -274,8 +325,8 @@ const PAYMENT_AFTER_CUSTOMER: [Step; 4] = [
     ),
     step(
         "2.5.2.2, 2.5.1.4",
-        "insert the HISTORY row, H_DATE the current time",
-        &[KeyedInsert(History), CurrentTime],
+        "insert the HISTORY row, H_DATE the supplied time",
+        &[KeyedInsert(History), CompositeForeignKeys(History)],
     ),
     step(
         "2.5.2.2, 2.5.3.3",
@@ -368,8 +419,8 @@ const DELIVERY_STEPS: [Step; 6] = [
     ),
     step(
         "2.7.4.2, 2.7.1.3",
-        "select the ORDER-LINE rows of the order, update OL_DELIVERY_D to the current time",
-        &[KeyedRange(OrderLine), CurrentTime],
+        "select the ORDER-LINE rows of the order, update OL_DELIVERY_D to the supplied time",
+        &[KeyedRange(OrderLine)],
     ),
     step(
         "2.7.4.2",
@@ -378,8 +429,8 @@ const DELIVERY_STEPS: [Step; 6] = [
     ),
     step(
         "2.7.4.2, 2.7.2.2",
-        "record the delivered orders and times in the result file",
-        &[MultiFieldResponse, CurrentTime],
+        "queue the delivery and record the delivered orders and times in the result file after commit",
+        &[HostQueueAndResultFile],
     ),
 ];
 
@@ -409,7 +460,7 @@ const STOCK_LEVEL_STEPS: [Step; 3] = [
     step(
         "2.8.2.2",
         "select STOCK by (S_W_ID, S_I_ID) per distinct OL_I_ID, count those with S_QUANTITY below threshold",
-        &[KeyedAccess(Stock), ReturnedAggregate],
+        &[KeyedAccess(Stock), DistinctCount],
     ),
 ];
 

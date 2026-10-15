@@ -324,6 +324,16 @@ impl TpccTable {
         self.spec().name
     }
 
+    /// The foreign keys of several columns, which the schema cannot declare.
+    pub fn composite_foreign_keys(self) -> Vec<String> {
+        self.spec()
+            .foreign_keys
+            .iter()
+            .filter(|key| key.columns.len() > 1)
+            .map(|key| format!("({})", key.columns.join(", ")))
+            .collect()
+    }
+
     /// The columns of the primary key (Clause 1.3.1); none for HISTORY.
     pub fn primary_key(self) -> &'static [&'static str] {
         self.spec().primary_key

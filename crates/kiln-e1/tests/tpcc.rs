@@ -209,9 +209,12 @@ mod kiln_e1_31 {
     }
 
     /// What each profile needs that the IR cannot express, read off the clause
-    /// text: several key columns, an insert without a key, rows picked by
-    /// order, the clock, multiplication, text work, a returned aggregate and a
-    /// response of several fields.
+    /// text: several key columns and foreign-key columns, an insert without a
+    /// key, rows picked by order, text work, decimal scaling and null
+    /// encodings, a distinct count, responses of several fields or a rollback
+    /// response, and Delivery's host queue. Time is a supplied argument and
+    /// multiplication and the bounded sum are unrolled additions, so none of
+    /// them blocks.
     #[test]
     fn every_transaction_is_refused_for_exactly_the_steps_the_ir_cannot_express() {
         use Requirement::*;
@@ -225,10 +228,13 @@ mod kiln_e1_31 {
                     KeyedInsert(NewOrder),
                     KeyedInsert(Order),
                     KeyedInsert(OrderLine),
-                    CurrentTime,
-                    Multiplication,
+                    CompositeForeignKeys(NewOrder),
+                    CompositeForeignKeys(Order),
+                    CompositeForeignKeys(OrderLine),
+                    NullEncoding,
                     TextSearch,
-                    ReturnedAggregate,
+                    ExactDecimalScaling,
+                    RollbackResponseWithAllocatedId,
                     MultiFieldResponse,
                 ],
             ),
@@ -241,7 +247,7 @@ mod kiln_e1_31 {
                     MiddleOfSortedRows,
                     TextConstruction,
                     KeyedInsert(History),
-                    CurrentTime,
+                    CompositeForeignKeys(History),
                     MultiFieldResponse,
                 ],
             ),
@@ -265,9 +271,8 @@ mod kiln_e1_31 {
                     KeyedAccess(NewOrder),
                     KeyedAccess(Order),
                     KeyedRange(OrderLine),
-                    CurrentTime,
                     KeyedAccess(Customer),
-                    MultiFieldResponse,
+                    HostQueueAndResultFile,
                 ],
             ),
             (
@@ -276,7 +281,7 @@ mod kiln_e1_31 {
                     KeyedAccess(District),
                     KeyedRange(OrderLine),
                     KeyedAccess(Stock),
-                    ReturnedAggregate,
+                    DistinctCount,
                 ],
             ),
         ];
@@ -411,9 +416,45 @@ mod kiln_e1_33 {
     }
 
     #[test]
-    fn an_insert_into_history_blocks_the_lowering_because_it_has_no_primary_key() {
+    fn an_insert_into_history_blocks_the_lowering_because_it_needs_a_duplicate_preserving_append() {
         let payment = Profile::complete(Payment);
-        assert!(why(&payment, Requirement::KeyedInsert(History)).contains("no primary key"));
+        let reason = why(&payment, Requirement::KeyedInsert(History));
+        assert!(reason.contains("no primary key"), "{reason}");
+        assert!(reason.contains("keeps duplicates"), "{reason}");
+    }
+
+    #[test]
+    fn a_composite_foreign_key_is_a_refusal_requirement_not_a_silent_omission() {
+        let payment = Profile::complete(Payment);
+        let reason = why(&payment, Requirement::CompositeForeignKeys(History));
+        assert!(reason.contains("(H_C_W_ID, H_C_D_ID, H_C_ID)"), "{reason}");
+        assert_eq!(
+            Requirement::CompositeForeignKeys(Warehouse).why_inexpressible(),
+            None
+        );
+    }
+
+    #[test]
+    fn the_new_order_rollback_response_and_the_decimal_total_are_recorded_apart() {
+        let new_order = Profile::complete(TpccTransaction::NewOrder);
+        assert!(why(&new_order, Requirement::RollbackResponseWithAllocatedId).contains("O_ID"));
+        assert!(why(&new_order, Requirement::ExactDecimalScaling).contains("scale"));
+        assert!(why(&new_order, Requirement::NullEncoding).contains("null"));
+    }
+
+    #[test]
+    fn time_multiplication_and_the_bounded_sum_are_not_blockers() {
+        for transaction in TpccTransaction::ALL {
+            for blocker in refusal_of(&Profile::complete(transaction)).blockers() {
+                for expressible in ["clock", "multiplication", "accumulator"] {
+                    assert!(
+                        !blocker.why.contains(expressible),
+                        "{transaction}: {}",
+                        blocker.why
+                    );
+                }
+            }
+        }
     }
 }
 

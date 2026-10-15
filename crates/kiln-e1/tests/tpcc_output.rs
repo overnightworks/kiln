@@ -154,4 +154,25 @@ mod kiln_e1_36 {
             assert!(output.stdout.is_empty());
         }
     }
+
+    #[test]
+    fn identical_or_aliased_destinations_are_rejected_before_anything_is_written() {
+        let out = scratch_file("collision");
+        let aliased = out.parent().unwrap().join("../tpcc-collision/units.jsonl");
+        fs::remove_file(&out).ok();
+
+        for sensitivity in [&out, &aliased] {
+            let output = tpcc(&[
+                "--out".as_ref(),
+                out.as_os_str(),
+                "--sensitivity-out".as_ref(),
+                sensitivity.as_os_str(),
+            ]);
+
+            let stderr = String::from_utf8(output.stderr).unwrap();
+            assert!(!output.status.success());
+            assert!(stderr.contains("name the same file"), "{stderr}");
+            assert!(!out.exists());
+        }
+    }
 }
