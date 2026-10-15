@@ -155,53 +155,68 @@ with each repository's URL and verified full commit SHA, is
 decided now so a builder cannot widen or narrow it after seeing which
 choice raises coverage:
 
-**Rule.** A transaction function is the smallest of the following two
-shapes that applies, in order:
+**The rule is kept purely syntactic and reproducible over the source text.**
+What a unit's footprint actually turns out to be — static, one-hop, or
+unknown — is the classifier's own later job, checked against the source by
+the lowering audit (`docs/experiments.md`, "Audits"); this rule only has to
+say, unambiguously, what counts as a unit, never what that unit's footprint
+is. It is stated as three rules, S1-S3, applied in that order.
 
-**(a) An explicit transaction block.** In Django: the body of a function or
-method decorated with `@transaction.atomic(...)`, or the body of a
-`with transaction.atomic(...):` block. In TypeORM: the body between
+**S1 — unit sites.** A unit site is a call expression in the application's
+own source whose final method name is in the frozen list below (Django or
+TypeORM), matched by name alone — regardless of the receiver's static or
+runtime type, and regardless of a repository-local override of that name: a
+local `save()` override does not change that `instance.save()` is a site,
+exactly as if the frozen library method had been called directly, because
+the rule never inspects what the named method's body does. An attribute
+reference that is never called is not a site — for example, a bound method
+passed as a callback, such as `Child.objects.count` passed unparenthesized
+as an argument to `cache.get_or_set`: only the call expression itself,
+parentheses included, is enumerated. A lazily evaluated constructor named in
+the frozen Django list (`iterator()`, `raw()`) counts at its own call
+expression, as a stated convention, consistent with how Django's own docs
+describe each: `iterator()` "Evaluates the `QuerySet` (by performing the
+query)" at the call
+(<https://docs.djangoproject.com/en/stable/ref/models/querysets/#iterator>,
+fetched 2026-10-15), and `raw()` "Takes a raw SQL query, executes it..."
+also at the call (same page, quoted in full below). This freeze does not
+need to adjudicate, for every Django version or database backend, exactly
+when the underlying cursor opens or the first row is fetched; the call
+expression is the one counted site regardless, and the later consumption of
+whatever either call returns (iterating the generator or the `RawQuerySet`)
+is never a second site.
+
+**S2 — explicit transactions.** An explicit transaction is one unit,
+regardless of how many S1 sites it absorbs. In Django: the body of a
+function or method decorated with `@transaction.atomic(...)`, or the body of
+a `with transaction.atomic(...):` block. In TypeORM: the body between
 `queryRunner.startTransaction()` and its matching `commitTransaction()` /
 `rollbackTransaction()`, or the callback passed to
 `dataSource.transaction(...)` / `manager.transaction(...)` /
-`connection.transaction(...)`. One block is one transaction function,
-regardless of how many ORM calls happen inside it. Its parameters are the
-enclosing function's own declared parameters — the IR's "function of its
-arguments" (`docs/concept.md` §2.1) refers to these.
+`connection.transaction(...)`. "Absorbs" means lexically: every S1 site
+written in the block's own source text is part of that one unit. Helpers are
+not expanded — depth 0, removed from this freeze's earlier depth-2 rule: a
+transaction block never reaches into a helper function it calls to pull in
+that helper's own sites. An S1 site that is textually inside a helper
+function's own body, rather than inside the transaction's own lexical body,
+is its own separate unit, attributed to the helper's definition — unless the
+helper's own definition is itself lexically nested inside an explicit
+transaction block (for example, a closure defined inside the `atomic`
+block), in which case the block it is textually written inside absorbs it,
+by the same lexical rule. A unit's parameters are the enclosing function's
+own declared parameters — the IR's "function of its arguments"
+(`docs/concept.md` §2.1) refers to these.
 
-**An (a)-block's count includes the evaluation sites of the repository-local
-helpers it calls, to a frozen depth of 2.** A "repository-local helper" is a
-function or method defined in the same pinned repository — never a
-framework or third-party library call, whose own internals are never
-traversed. Depth 1 is a helper called directly from a statement inside the
-block; depth 2 is a helper called from inside a depth-1 helper. Every
-database evaluation site (the frozen lists below) reached within that depth
-is part of the block's one unit. A helper beyond depth 2 is not traversed,
-and an evaluation site inside it is not enumerated as part of that block
-under this freeze — a named limitation of the rule, not an oversight: a
-helper chain longer than two calls underneath an explicit transaction block
-undercounts that block's true footprint, uniformly across every application
-in the corpus rather than tuned away per application. Depth 2 is frozen
-because it matches the ordinary Django and TypeORM service-layer shape this
-corpus uses in practice — an atomic block calling one service/model helper,
-which itself calls the ORM's manager/repository/query-builder method, in
-exactly two calls — while keeping the enumeration a bounded, terminating
-rule rather than an unbounded interprocedural analysis the extractor this
-freeze is written for does not perform. In TypeORM, an explicit transaction
-(`queryRunner.startTransaction()`...`commitTransaction()` /
-`rollbackTransaction()`, or the callback passed to `dataSource.transaction(...)`
-/ `manager.transaction(...)` / `connection.transaction(...)`) groups its
-sites exactly the same way, to the same depth of 2.
-
-**(b) Failing (a), each database evaluation site is its own one-shot unit.**
-This is Django's and TypeORM's shared default behavior outside an explicit
-transaction — autocommit, one statement per implicit transaction — and
-matches the "one-shot transaction" the Abadi et al. study itself defines
-(paper §2: "When operations are not combined using such APIs, a transaction
-is sent to the database system consisting of a single statement"). A unit's
+**S3 — autocommit sites.** Each S1 site that is not lexically inside an
+explicit transaction (S2) is its own one-shot unit. This is Django's and
+TypeORM's shared default behavior outside an explicit transaction —
+autocommit, one statement per implicit transaction — and matches the
+"one-shot transaction" the Abadi et al. study itself defines (paper §2:
+"When operations are not combined using such APIs, a transaction is sent
+to the database system consisting of a single statement"). A unit's
 parameters are the variables feeding that one call: its enclosing function's
 own arguments, plus any local value already read earlier in the same
-enclosing function. A statement or expression containing several evaluation
+enclosing function. A statement or expression containing several S1
 sites — for example, two independent query-builder calls combined in one
 `return` — yields that many units, one per site, never one unit per
 statement. Conditional and nested sites (inside an `if`/`elif`, a ternary, a
@@ -287,8 +302,8 @@ the front end cannot map to the IR's node kinds at all (arbitrary external
 I/O, unbounded recursion, a construct it has no translation for) is refused
 for *translation*, per `docs/concept.md` §2.1's unsupported-source rule —
 it is never compiled into the running program. Refusal is independent of
-*enumeration*: rule (a) or (b) above identifies the unit from the source's
-own transaction/call structure alone, before translation is attempted, so a
+*enumeration*: S1-S3 above identify the unit from the source's own
+transaction/call structure alone, before translation is attempted, so a
 refused unit is enumerated like any other and stays in the denominator. It
 classifies **Unknown** (`docs/experiments.md`, "Footprint categories": "an
 unsupported function is never dropped from the denominator; it is folded
@@ -303,22 +318,26 @@ have trouble with.
 and seed/fixture generators are not enumerated — they are not part of the
 compiled application's own transaction surface (`docs/concept.md` §1's
 "complete set of queries, transaction functions" means what the running
-application exposes, not its build or test tooling). A repository-local
-helper is not separately enumerated at every call site that invokes it —
-that would count one evaluation site once per caller rather than once per
-site in the source. Two cases instead: inside an (a)-block, its evaluation
-sites are included in that block's count to depth 2, as defined above — a
-helper also called a second time from inside a second, independent
-(a)-block is counted again there, because each block is its own unit;
-outside any (a)-block, a helper's own evaluation site(s) count once, at the
-helper's own definition, no matter how many independent non-transactional
-call sites invoke it.
+application exposes, not its build or test tooling). Enumeration counts
+each S1 site once, where it is written, never once per caller of whatever
+function it sits in: a call expression appearing literally once in the
+source is one site, whether the function around it is called from one
+place or from ten. Under S2, a site inside an explicit transaction's own
+lexical body is absorbed into that one transaction unit — reached a second
+time from a second, independent transaction block only if the same call
+expression is itself written a second time in that second block's own
+body, never by re-walking into a helper the block merely calls (depth 0).
+Under S3, a site that sits inside a helper function's own body, and that
+helper is not itself lexically inside a transaction, is its own unit at the
+helper's definition, counted once there regardless of how many independent,
+non-transactional call sites invoke that helper — multiple callers never
+multiply a site that is written once.
 
 **Two concrete examples per language**, each read directly from a pinned
 repository at its frozen commit (§2), confirming the rule against real code
 rather than a hypothetical:
 
-- **Django, rule (a).** `zulip/zulip` @ `88e91fa` (full SHA in the
+- **Django, S2.** `zulip/zulip` @ `88e91fa` (full SHA in the
   manifest), `zerver/actions/create_user.py`:
   ```python
   @transaction.atomic(savepoint=False)
@@ -330,11 +349,11 @@ rather than a hypothetical:
   ```
   The whole decorated function body is one transaction function,
   parameterized by `user_profile` and `acting_user`.
-- **Django, rule (b).** `babybuddy/babybuddy` @ `ba46c49`, `core/views.py`,
+- **Django, S3.** `babybuddy/babybuddy` @ `ba46c49`, `core/views.py`,
   `TimerAddQuick.post` — no `transaction.atomic` anywhere in this method,
-  so rule (b) applies; worked in full, with its resulting unit count, in
-  §3.1 below.
-- **TypeORM, rule (a).** `l3tnun/EPGStation` @ `c0e201b`,
+  so S3 applies to every site in it; worked in full, with its resulting
+  unit count, in §3.1 below.
+- **TypeORM, S2.** `l3tnun/EPGStation` @ `c0e201b`,
   `src/model/db/RecordedDB.ts`, `restore(items)`:
   ```typescript
   const queryRunner = connection.createQueryRunner();
@@ -354,7 +373,7 @@ rather than a hypothetical:
   `items`, regardless of its variable-length insert loop (bounded by
   `items.length`, satisfying `docs/concept.md` §2.1's bounded-iteration
   node kind).
-- **TypeORM, rule (b).** Same file, `insertOnce(recorded)`:
+- **TypeORM, S3.** Same file, `insertOnce(recorded)`:
   ```typescript
   public async insertOnce(recorded: Recorded): Promise<apid.RecordedId> {
       const queryBuilder = connection.createQueryBuilder().insert().into(Recorded).values(recorded);
@@ -389,25 +408,30 @@ def post(self, request, *args, **kwargs):
     instance.save()
 ```
 
-No `transaction.atomic` anywhere in this method, so rule (b) applies: each
-evaluation site is its own unit, counted once per site regardless of its
-conditional. **Four units** enumerate directly inside `post()`:
+No `transaction.atomic` anywhere in this method, so S3 applies to every S1
+site in it: each is its own unit, counted once per site regardless of its
+conditional. **Five units** enumerate directly inside `post()`, by line:
 
-1. `models.Timer.objects.create(user=request.user)` (line 457) — a manager
-   method from the frozen list's "do not return `QuerySet`s" group.
+1. `models.Timer.objects.create(user=request.user)` (line 457) — `create()`
+   is in the frozen list's "do not return `QuerySet`s" group. One unit.
 2. `models.Child.objects.get(pk=child_id)` (line 460) — the ternary's
-   `.get()` call; conditional, counted once.
-3. `models.Child.objects.first()` (line 465) — inside the `elif` branch;
-   conditional, counted once.
-4. `instance.save()` (line 466) — `Model.save()`, which here issues an
+   `.get()` call; conditional, counted once. One unit.
+3. `models.Child.count()` (line 464, the `elif` condition) — `count` is
+   itself in the frozen Django list. Under S1 this call is a site by name
+   match alone, regardless of the fact that `Child.count` is a
+   repository-local classmethod and not the manager's own `count()`: a
+   local override of a frozen name does not change that the call is a
+   site, exactly as S1 states for `save()`. One unit, conditional, counted
+   once — not a traversal into the classmethod's body.
+4. `models.Child.objects.first()` (line 465) — inside the `elif` branch;
+   conditional, counted once. One unit.
+5. `instance.save()` (line 466) — `Model.save()`, which here issues an
    `UPDATE` (the instance's primary key was already set by the preceding
-   `create()`).
+   `create()`). One unit.
 
-`models.Child.count()` (line 464, the `elif` condition) is **not** a fifth
-unit at this call site. It calls a repository-local helper, `Child.count`
-(`core/models.py:218–221`, confirmed with
-`git show ba46c49bea0694fd6b9bda728bcd281ef15f284c:core/models.py`,
-2026-10-15):
+The classmethod `Child.count` itself (`core/models.py:218–221`, confirmed
+with `git show ba46c49bea0694fd6b9bda728bcd281ef15f284c:core/models.py`,
+2026-10-15) contributes **zero** further units:
 
 ```python
 @classmethod
@@ -416,17 +440,31 @@ def count(cls):
     return cache.get_or_set(cls.cache_key_count, Child.objects.count, None)
 ```
 
-`Child.objects.count` is the helper's own evaluation site (invoked by
-`cache.get_or_set` only on a cache miss). `Child.count()` is called from
-two independent, non-transactional locations in this pinned commit — here,
-and from `Timer.title_with_child` (`core/models.py:632`) — so under the
-frozen helper rule this site counts once, at the helper, not once per
-caller: **one more unit**, attributed to `Child.count`, not to
-`TimerAddQuick.post`.
+`Child.objects.count` here is passed unparenthesized as the second argument
+to `cache.get_or_set` — an attribute reference used as a callback, never
+itself called in this source — so under S1's callback exception it is not a
+site, and `cache.get_or_set` is not a name in either frozen list. Nothing
+inside `Child.count`'s own body is a unit.
 
-**Total: 5 units** — 4 enumerated inside `TimerAddQuick.post`, plus 1 at the
-helper `Child.count` — none dropped, none double-counted across its two
-call sites.
+**`Child.count()` has three callers in this pinned commit, not two** — all
+three are one-shot S1 sites outside any explicit transaction, so S3
+attributes a unit to each of them independently, at its own line, never
+collapsed onto the helper's definition (there is no helper-side unit to
+collapse onto, since `Child.count`'s body has none):
+
+- `TimerAddQuick.post`, line 464 (counted above, unit 3).
+- `Timer.title_with_child` (`core/models.py:632`): `Child.count() > 1`.
+- `set_initial_values` (`core/forms.py:41`, confirmed with
+  `git show ba46c49bea0694fd6b9bda728bcd281ef15f284c:core/forms.py`,
+  2026-10-15): `elif models.Child.count() == 1:` — the third caller, absent
+  from the previous draft's "two independent...locations" count.
+
+**Total for `TimerAddQuick.post`: 5 units**, all five enumerated directly
+inside `post()` at lines 457, 460, 464, 465, and 466 — none attributed to
+the helper, because S1's callback exception leaves the helper's own body
+with no site to attribute. The three independent callers of `Child.count()`
+across the pinned commit are three separate S3 units at three separate
+lines, not one shared unit multiplied or collapsed by caller count.
 
 **TypeORM — `cool-team-official/cool-admin-midway` @
 `edc13838439a0d6469abfe6263f51f2c987284bf`,
@@ -467,10 +505,11 @@ async data(id, method, params: any = {}) {
 }
 ```
 
-No explicit transaction anywhere in `data()`, so rule (b) applies through
-the TypeORM frozen list; `createQueryBuilder()` itself only builds the
-query and executes nothing. Six units enumerate directly inside `data()`,
-each counted once per conditional site:
+No explicit transaction anywhere in `data()`, so S3 applies to every S1
+site found through the TypeORM frozen list; `createQueryBuilder()` itself
+is not in that list — it only builds the query and executes nothing, so it
+is not a site. Six units enumerate directly inside `data()`, each counted
+once per conditional site:
 
 1. `this.cloudDBEntity.findOneBy({ id })` (line 33).
 2. `repository.save(params)` (line 36, the `add`/`update` branch) — one
@@ -486,17 +525,24 @@ each counted once per conditional site:
    several executing calls (here, one `return` holding both `getMany()` and
    `getCount()`) yields several units, not one.
 
-Plus one unit attributed to the repository-local helper `getRepository`
-(lines 69–77 of the same file), called from line 34 of `data()`: its own
-evaluation site, `this.cloudDBEntity.findOneBy({ className })` (line 70),
-is outside any transaction and is called from this one location in the
-pinned commit, so it counts once, at the helper.
+`this.getRepository(db?.className)` (line 34) is not itself a seventh S1
+site: `getRepository` is not a name in the frozen TypeORM list, so the call
+expression at line 34 does not match S1 regardless of what the method it
+names does. Under S2/S3, `getRepository` is a helper, not lexically inside
+any transaction, so S1 sites written inside its own body are each their own
+unit at the helper's definition (lines 69–77 of the same file), by depth 0
+— never by walking from `data()` into it through the line-34 call. That
+helper's own body has exactly one such site: `this.cloudDBEntity.findOneBy({
+className })` (line 70), which matches `findOneBy` in the frozen list. It
+is written once in the source and is called from this one location in the
+pinned commit, so it is one unit, attributed to the helper's definition —
+plus one unit.
 
 **Total: 7 units** — 6 enumerated directly inside `data()`, plus 1 at the
-helper `getRepository`. The review's specifically cited lines 54–61 alone
-contribute 2 of those 7 (`getMany()` + `getCount()`) — resolving the
-ambiguity the review raised: the frozen rule counts both calls, never one
-call per statement.
+helper `getRepository`'s own definition (line 70). The review's specifically
+cited lines 54–61 alone contribute 2 of those 7 (`getMany()` + `getCount()`)
+— resolving the ambiguity the review raised: the frozen rule counts both
+calls, never one call per statement.
 
 ## 4. Trace source and weights for the applications
 

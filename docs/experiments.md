@@ -42,10 +42,12 @@ private interpreter.
 
 ## E1 — classification coverage (issue #2)
 
-**Hypothesis.** At least 70% of frequency-weighted transaction instances,
-measured on TPC-C and on a corpus of real open-source applications, classify
-into a footprint category the compiler can analyze rather than unknown.
-Below 50% falsifies the thesis.
+**Hypothesis.** At least 70% of transaction instances classify into a
+footprint category the compiler can analyze rather than unknown, measured
+on TPC-C — weighted by its frozen transaction mix (`inputs.md` §1) — and on
+a corpus of real open-source applications — unweighted, one instance per
+enumerated transaction function, because no trace source exists for any of
+them (`inputs.md` §4). Below 50% falsifies the thesis.
 
 **Scope.** A footprint extractor plus classifier only — no runtime, no
 storage engine, no kernel from `docs/concept.md` §4.
@@ -82,8 +84,11 @@ questions and are reported as two separate numbers, never conflated:
 
 ### Gating numerator and verdict
 
-The gating numerator is the percentage of frequency-weighted transaction
-instances whose category above is static or one-hop. Domain-bounded
+The gating numerator is the percentage of transaction instances whose
+category above is static or one-hop — weighted by TPC-C's frozen
+transaction mix for TPC-C (`inputs.md` §1), and unweighted, one instance
+per enumerated transaction function, for the application corpus, because no
+trace source exists for it (below, and `inputs.md` §4). Domain-bounded
 instances are not in the numerator; their share is reported separately and
 never gates the verdict.
 
@@ -115,7 +120,12 @@ Separately from the gating numerator, the builder reports the percentage of
 instances whose pairwise execution class (`docs/concept.md` §3) could be
 resolved to class 1, 2, or 3 against their observed neighbors in the traced
 workload — a different measurement from footprint coverage, never presented
-as the same result.
+as the same result. This report is produced for TPC-C, which is actually
+run to generate that traced workload. It is not produced for the
+application corpus, decided now rather than discovered mid-run: no
+application in the frozen corpus has a trace source at all (`inputs.md`
+§4), so there is no traced workload for this report to resolve neighbors
+against for any of the 110 applications.
 
 ### Audits
 
@@ -150,12 +160,18 @@ inferable read/write sets, and that about 27% query by a secondary attribute
 (`docs/research/notes/open_problems_and_challenged_assumptions.md:72-73`).
 E1 is not a restatement of that count: it adds the one-hop category (the
 study's binary inferable/not-inferable split does not distinguish static
-from one-hop), frequency weighting (the study's figure is a count over
-transactions, not over frequency-weighted instances), and kiln's IR
-unsupported-source boundary (`docs/concept.md` §2.1) as the exact rule for
-what falls into "unknown." If the study's own per-application data can be
-obtained, it is a cheaper first pass at an order-of-magnitude estimate — not
-a substitute for E1's own measurement against kiln's categories and IR.
+from one-hop), TPC-C's own frequency weighting by its frozen transaction
+mix (`inputs.md` §1) — the study's figure is a plain count over
+transactions, with no weighting on either TPC-C or the application corpus
+— and kiln's IR unsupported-source boundary (`docs/concept.md` §2.1) as the
+exact rule for what falls into "unknown." The application corpus itself
+stays unweighted under E1 too, for the same reason the study's own count
+is: no trace source exists for any application (`inputs.md` §4), so
+frequency weighting by TPC-C's mix is the one addition E1 makes beyond the
+study's method, not a practice applied uniformly across every corpus. If
+the study's own per-application data can be obtained, it is a cheaper first
+pass at an order-of-magnitude estimate — not a substitute for E1's own
+measurement against kiln's categories and IR.
 
 ### Deferred to #2
 
