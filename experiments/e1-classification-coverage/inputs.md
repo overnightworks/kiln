@@ -155,36 +155,41 @@ with each repository's URL and verified full commit SHA, is
 decided now so a builder cannot widen or narrow it after seeing which
 choice raises coverage:
 
-**The rule is kept purely syntactic and reproducible over the source text.**
-What a unit's footprint actually turns out to be — static, one-hop, or
-unknown — is the classifier's own later job, checked against the source by
-the lowering audit (`docs/experiments.md`, "Audits"); this rule only has to
-say, unambiguously, what counts as a unit, never what that unit's footprint
-is. It is stated as three rules, S1-S3, applied in that order.
+**The rule is reproducible over the source text.** What a unit's footprint
+actually turns out to be — static, one-hop, or unknown — is the classifier's
+own later job, checked against the source by the lowering audit
+(`docs/experiments.md`, "Audits"); this rule only has to say, unambiguously,
+what counts as a unit, never what that unit's footprint is. It is stated as
+three rules, S1-S3, applied in that order. S1 (below) is mediated through a
+pinned external analyzer rather than hand-matched against a list this
+document maintains — S2 and S3 stay directly syntactic over the source text,
+unchanged by that.
 
-**S1 — unit sites.** A unit site is a call expression in the application's
-own source whose final method name is in the frozen list below (Django or
-TypeORM), matched by name alone — regardless of the receiver's static or
-runtime type, and regardless of a repository-local override of that name: a
-local `save()` override does not change that `instance.save()` is a site,
-exactly as if the frozen library method had been called directly, because
-the rule never inspects what the named method's body does. An attribute
-reference that is never called is not a site — for example, a bound method
-passed as a callback, such as `Child.objects.count` passed unparenthesized
-as an argument to `cache.get_or_set`: only the call expression itself,
-parentheses included, is enumerated. A lazily evaluated constructor named in
-the frozen Django list (`iterator()`, `raw()`) counts at its own call
-expression, as a stated convention, consistent with how Django's own docs
-describe each: `iterator()` "Evaluates the `QuerySet` (by performing the
-query)" at the call
-(<https://docs.djangoproject.com/en/stable/ref/models/querysets/#iterator>,
-fetched 2026-10-15), and `raw()` "Takes a raw SQL query, executes it..."
-also at the call (same page, quoted in full below). This freeze does not
-need to adjudicate, for every Django version or database backend, exactly
-when the underlying cursor opens or the first row is fetched; the call
-expression is the one counted site regardless, and the later consumption of
-whatever either call returns (iterating the generator or the `RawQuerySet`)
-is never a second site.
+**S1 — unit sites.** A unit site is an ORM operation reported by the
+111-application study's own published analyzers (`splinter-mypy` for Django,
+`@ctring/splinter-eslint` for TypeORM — both named below with their pinned
+versions and exact commands), run unmodified against the application's
+source at its frozen commit (§2). A site is exactly one of that analyzer's
+own `method`-typed output messages, located at the call expression it
+reports; no site is added, removed, or reattributed by hand. This replaces
+this freeze's earlier independently-authored name list, retired after the
+first review found it conflated dictionary and builtin calls with ORM calls
+(`request.POST.get(...)` was being counted as if it were `QuerySet.get()`):
+using the study's own tool in place of a list re-derived from documentation
+removes that class of disagreement by construction, because there is no
+longer a second, hand-maintained list to disagree with the first. Neither
+analyzer emits a distinct "operation seen but unrecognized" message for a
+call that matches no name in its lists — an unmatched call is simply absent
+from its output, not present with an "unknown" tag — so a call outside both
+frozen lists below is not a site at all, exactly as under the previous rule;
+what the classifier cannot resolve about a site that *is* reported still
+falls to the existing "Unknown" footprint category
+(`docs/experiments.md`, "Footprint categories"), unaffected by this change.
+An attribute reference that is never called is still not a site, for the
+same reason as before — neither analyzer inspects a non-call expression —
+for example, `Child.objects.count` passed unparenthesized as an argument to
+`cache.get_or_set` produces no message under either analyzer, verified
+directly for this exact Django case in §3.1 below.
 
 **S2 — explicit transactions.** An explicit transaction is one unit,
 regardless of how many S1 sites it absorbs. In Django: the body of a
@@ -203,9 +208,17 @@ is its own separate unit, attributed to the helper's definition — unless the
 helper's own definition is itself lexically nested inside an explicit
 transaction block (for example, a closure defined inside the `atomic`
 block), in which case the block it is textually written inside absorbs it,
-by the same lexical rule. A unit's parameters are the enclosing function's
-own declared parameters — the IR's "function of its arguments"
-(`docs/concept.md` §2.1) refers to these.
+by the same lexical rule. When one explicit transaction block is itself
+lexically nested inside another — Django's `@transaction.atomic` opening a
+savepoint inside an outer `atomic` block, or a nested
+`dataSource.transaction(...)` callback — the **outermost** explicit
+transaction owns every S1 site in its lexical body, including every site
+textually inside the nested transaction; the nested transaction contributes
+no unit of its own. This is the same lexical-absorption rule applied one
+level up, stated explicitly because otherwise two transaction blocks could
+each claim the same site, breaking "each site counted once." A unit's
+parameters are the enclosing function's own declared parameters — the IR's
+"function of its arguments" (`docs/concept.md` §2.1) refers to these.
 
 **S3 — autocommit sites.** Each S1 site that is not lexically inside an
 explicit transaction (S2) is its own one-shot unit. This is Django's and
@@ -225,64 +238,108 @@ source, independent of whether, or how many times, that branch runs at
 runtime: enumeration is structural, over the source text, never a runtime
 trace.
 
-**Frozen Django evaluation-site list** (Django's current ("stable") docs,
-fetched 2026-10-15; the version selector on each page below resolves
-"stable" to **Django 6.1**):
+**Django analyzer: `splinter-mypy`.**
+`github.com/umd-dslam/splinter-mypy` @
+`f8057cae6c2faae19e7cf97f3026a4fbebd4f9cc` (HEAD as of 2026-10-15; the
+repository carries no tagged release, so HEAD is the pinned version). It
+runs mypy's own build — a real type-check, not a lint pass — over the
+target source with `django-stubs` installed as plain type stubs (the
+Django mypy plugin that rewrites field types from `models.py` is *not*
+registered) and walks the resulting typed AST: for every call expression
+`expr.method(...)`, it looks up mypy's statically inferred type of `expr`,
+skips the call if that type's string representation starts with
+`builtins`, `collections`, `os`, or `hashlib`, and otherwise reports it if
+`method` is in one of three fixed Python lists in its own source
+(`splinter/analyzer.py:41-77`, pinned commit):
 
-- Every `QuerySet`-evaluation trigger named by "When QuerySets are
-  evaluated"
-  (<https://docs.djangoproject.com/en/stable/ref/models/querysets/#when-querysets-are-evaluated>):
-  iteration (`for`, including `async for`), slicing with a "step"
-  parameter, pickling, `repr()`, `len()`, `list()`, and a boolean-context
-  test (`bool()`, or an implicit truth test in `if`/`and`/`or`).
-- Every method the same page's "Methods that do not return `QuerySet`s"
-  section documents as evaluating immediately
-  (<https://docs.djangoproject.com/en/stable/ref/models/querysets/>,
-  section-level statement: "These methods do not use a cache... Rather,
-  they query the database each time they're called"): `get()`, `create()`,
-  `get_or_create()`, `update_or_create()`, `bulk_create()`, `bulk_update()`,
-  `count()`, `in_bulk()`, `iterator()`, `latest()`, `earliest()`, `first()`,
-  `last()`, `aggregate()`, `exists()`, `contains()`, `update()`, `delete()`
-  (the `QuerySet` method), and `explain()` — excluding `as_manager()`, which
-  that same section lists but which constructs a `Manager` class and
-  touches no database.
-- `raw()` / `Model.objects.raw()` and `cursor.execute()`: `raw()` is
-  documented as always executing — "Takes a raw SQL query, executes it, and
-  returns a `django.db.models.query.RawQuerySet` instance," and "`raw()`
-  always triggers a new query"
-  (<https://docs.djangoproject.com/en/stable/ref/models/querysets/>).
-- `Model.save()` and `Model.delete()`
-  (<https://docs.djangoproject.com/en/stable/ref/models/instances/>):
-  "Django executes an `UPDATE`" when the instance's primary key is already
-  set (an `INSERT` otherwise) for `save()`; "Issues an SQL `DELETE` for the
-  object" for `delete()`.
+- read: `filter, all, get, exclude, remove, add, aggregate, first, last, count, distinct, values, values_list, latest, earliest, dates, datetimes, exists, extra`
+- write: `save, delete, create, update, update_or_create, get_or_create, bulk_create, bulk_update`
+- other: `raw, execute`
 
-**Frozen TypeORM evaluation-site list** (typeorm.io docs, fetched
-2026-10-15):
+A decorator resolved by its fully-qualified import to
+`django.db.transaction.atomic`, or a call resolved the same way, is reported
+as a transaction marker (`splinter/analyzer.py:287-394`); the receiver's
+resolved type(s) are recorded alongside each report but never gate inclusion
+beyond the four-prefix exclusion above. In particular: `iterator()` and
+`list()`/`len()`/`bool()`/`repr()` are not in any list and are never
+reported (`iterator()` is absent from all three lists above, contrary to
+this freeze's previous, independently-authored list); a Django request or
+view parameter is normally unannotated, so mypy infers it as `Any`, which
+the four-prefix exclusion does not catch — `request.POST.get(...)` and
+`request.GET.get(...)` are therefore, in practice, reported as sites,
+verified directly in §3.1 below.
 
-- Repository/EntityManager find methods
-  (<https://typeorm.io/docs/working-with-entity-manager/repository-api>):
-  `find`, `findBy`, `findAndCount`, `findAndCountBy`, `findOne`, `findOneBy`,
-  `findOneOrFail`, `findOneByOrFail`, `preload`.
-- Count, aggregate, and existence: `count`, `countBy`, `sum`, `average`,
-  `minimum`, `maximum`, `exists`, `existsBy`.
-- Write and delete: `save`, `remove`, `insert`, `update`, `updateAll`,
-  `upsert`, `increment`, `decrement`, `delete`, `deleteAll`, `softDelete`,
-  `restore`, `softRemove`, `recover`, `clear`.
-- Raw SQL: `query`.
-- `QueryBuilder` execution methods
-  (<https://typeorm.io/docs/query-builder/select-query-builder>): `getOne`
-  ("To get a single result from the database... you must use `getOne`"),
-  `getOneOrFail`, `getMany` ("To get multiple results from the database...
-  use `getMany`"), `getManyAndCount` (not documented on that page; confirmed
-  directly in source — `git clone` of `typeorm/typeorm`, HEAD
-  `fe92394287516feeada6e9c308ebe22deca2458e`, fetched 2026-10-15,
-  `packages/typeorm/src/query-builder/SelectQueryBuilder.ts:1862`:
-  `async getManyAndCount(): Promise<[Entity[], number]>`), `getRawOne` and
-  `getRawMany` ("To get raw data, you use `getRawOne` and `getRawMany`"),
-  `getCount` ("You can get the count on the number of rows a query will
-  return by using `getCount()`"), `stream`, and `execute()` on the
-  insert/update/delete query builders.
+Pinned environment and command (installed only under this task's
+`scratchpad/e1-tools/`, nothing system-wide): a Python 3.11 virtual
+environment (`uv venv`), `pip install -r requirements.txt` from the pinned
+commit unedited (exact versions: `mypy==1.9.0`, `django==5.0.3`,
+`django-stubs==4.2.7`, `django-stubs-ext==4.2.7`,
+`django-filter-stubs==0.1.3`, `djangorestframework-stubs==3.14.5`, plus
+their own pinned transitive stub packages), then
+`pip install --no-deps -e <checkout of f8057cae6c2faae19e7cf97f3026a4fbebd4f9cc>`.
+Command: `python -m splinter <application-root> --output messages.json`,
+adding one `--exclude <glob>` per path this document's "Exclusions" below
+names (migrations, management commands, test directories, vendored or
+virtualenv directories) — the default already excludes `**/venv/**`.
+
+**TypeORM analyzer: `@ctring/splinter-eslint` + `@ctring/eslint-plugin-typeorm`.**
+Published to npm only (no public source repository exists for either
+package); pinned at the exact resolved versions
+`@ctring/splinter-eslint@1.0.9` and its dependency
+`@ctring/eslint-plugin-typeorm@1.0.1` (both the `latest` dist-tag as of
+2026-10-15, verified against the npm registry metadata and against each
+package's own extracted tarball source). It runs ESLint with
+`@typescript-eslint/parser`'s full TypeScript type-checker service,
+resolved from the target repository's own `tsconfig.json`, and for every
+call expression `expr.method(...)` reports it if `method` is in one of
+four fixed TypeScript lists in the plugin's own source
+(`src/rules/find-api.ts`, pinned version):
+
+- read: `countBy, sum, average, minimum, maximum, findBy, findAndCountBy, findOneBy, findOneByOrFail, count, exist, find, findAndCount, findOne, findOneOrFail, findByIds, findOneByIds`
+- write: `clear, create, insert, merge, preload, save, softRemove, recover, remove, upsert, update, delete, increment, decrement, softDelete, restore`
+- other: `createQueryBuilder, query`
+- transaction: `transaction, startTransaction` (plus a method decorated
+  `@Transaction`/`@LazyTransaction`, reported directly as a transaction
+  marker)
+
+Unlike the Django analyzer, this plugin performs **no receiver-type
+exclusion at all**: it matches by method name alone on a member-access call
+of any receiver type, and only *records* the type checker's resolved
+receiver type(s) as report metadata, never as a filter. Two consequences
+contradict this freeze's previous, independently-authored "Frozen TypeORM
+evaluation-site list," which is why that hand list is retired in favor of
+the one actually reproduced above: none of the four lists names any
+`QueryBuilder` terminal execution method (`getOne`, `getMany`,
+`getManyAndCount`, `getRawOne`, `getRawMany`, `getCount`, `stream`) or
+`execute()` — the pinned analyzer has no concept of them at all, so none is
+ever reported — while `createQueryBuilder` itself *is* named, under
+"other," and is reported every time it is called. Both are verified
+directly in §3.1 below.
+
+Pinned environment and command (installed only under this task's
+`scratchpad/e1-tools/`, nothing system-wide):
+`npm install @ctring/splinter-eslint@1.0.9 typescript@5.4.3` in a dedicated
+directory. The explicit `typescript@5.4.3` pin is necessary, not cosmetic:
+installing `@ctring/splinter-eslint@1.0.9` alone, with no fixed `typescript`
+version anywhere in its own dependency tree, let npm resolve the bare
+`typescript` dependency to `7.0.2` (TypeScript's native-compiler v7 line),
+which `@typescript-eslint/parser@7.3.1` cannot parse — observed firsthand:
+`TypeError: Cannot read properties of undefined (reading 'BarBarToken')`;
+`5.4.3` matches the range the package's own (unpublished alongside the npm
+package, but present in its `devDependencies`) build was written against.
+The target application must have its own dependencies installed in place
+(an ordinary `npm install` inside its own clone) so the TypeScript checker
+resolves real types, rather than `any`, for most calls. Command:
+`node <splinter-eslint>/dist/index.js <directory containing the
+application's own tsconfig.json> --include '<glob under that root, e.g.
+src/**/*.ts>' --output messages.json`. The root passed must contain, or be
+an ancestor of, the project's own `tsconfig.json`, because
+`parserOptions.project` is resolved as `**/tsconfig.json` under that root:
+pointing the root directly at a subdirectory without the project's
+`tsconfig.json` breaks parser services for files outside that scope
+— observed firsthand against `cool-team-official/cool-admin-midway`'s
+`src/` directory: `Error: ... requires parserServices ... You must
+therefore provide a value for the "parserOptions.project" property`.
 
 **An ORM persistence method that wraps several SQL statements in its own
 transaction is one unit — an ORM operation, not the SQL statements inside
@@ -318,7 +375,14 @@ have trouble with.
 and seed/fixture generators are not enumerated — they are not part of the
 compiled application's own transaction surface (`docs/concept.md` §1's
 "complete set of queries, transaction functions" means what the running
-application exposes, not its build or test tooling). Enumeration counts
+application exposes, not its build or test tooling). Under S1, this is
+implemented at invocation time, per application, by the `--exclude` glob
+(Django) or the `--include` glob (TypeORM) frozen into that application's
+command, or — where a path cannot be excluded by a glob cleanly — by
+discarding any analyzer output message whose `filePath` falls under an
+excluded path before enumeration; either way the exclusion is applied to
+the analyzer's raw output, never by hand-picking which of its reported
+sites to keep. Enumeration counts
 each S1 site once, where it is written, never once per caller of whatever
 function it sits in: a call expression appearing literally once in the
 source is one site, whether the function around it is called from one
@@ -381,18 +445,33 @@ rather than a hypothetical:
       return insertedResult.identifiers[0].id;
   }
   ```
-  One `.execute()` call, no explicit transaction wrapper — one one-shot
-  transaction function, parameterized by `recorded`.
+  Two S1 sites by the frozen TypeORM lists above — `createQueryBuilder()`
+  ("other") and `.insert()` ("write") — `.into()`, `.values()`, and
+  `.execute()` match no name in any of the four lists, so neither is a
+  site (this corrects the previous draft's claim of one `.execute()` site
+  and no `createQueryBuilder()` site, the opposite of what the pinned
+  analyzer's own name lists say; this one is read directly off those lists
+  rather than re-run, since the task this freeze was revised under named
+  only the other two repositories for an actual tool run). No explicit
+  transaction wrapper, so S3 makes each of the two its own one-shot unit,
+  both parameterized by `recorded`.
 
 ### 3.1 Worked examples: full unit counts against the frozen rule
 
-Both examples below are read directly from the pinned commit; neither
-invents a line, a call, or a count not present in that source.
+Both examples below were recounted by actually running the two pinned
+analyzers above against the pinned commit — not by hand-matching the source
+against a list — using the exact pinned versions and commands given above.
+Every call below is the analyzer's own report, read back from its output
+JSON; the two cases where the analyzer did *not* report a call this
+document's earlier draft expected are called out explicitly, with the
+reason verified in the analyzer's own source, not asserted.
 
 **Django — `babybuddy/babybuddy` @ `ba46c49bea0694fd6b9bda728bcd281ef15f284c`,
-`core/views.py`, `TimerAddQuick.post` (lines 456–466; confirmed with
+`core/views.py`, `TimerAddQuick.post` (the complete method, lines 456–470;
+confirmed with
 `git show ba46c49bea0694fd6b9bda728bcd281ef15f284c:core/views.py`,
-2026-10-15):**
+2026-10-15 — the earlier draft's excerpt stopped at line 466, which is why
+it missed two of the method's own sites):**
 
 ```python
 def post(self, request, *args, **kwargs):
@@ -406,32 +485,57 @@ def post(self, request, *args, **kwargs):
     elif models.Child.count() == 1:
         instance.child = models.Child.objects.first()
     instance.save()
+    self.url = request.GET.get(
+        "next", reverse("core:timer-detail", args={instance.id})
+    )
+    return super(TimerAddQuick, self).get(request, *args, **kwargs)
 ```
 
 No `transaction.atomic` anywhere in this method, so S3 applies to every S1
-site in it: each is its own unit, counted once per site regardless of its
-conditional. **Five units** enumerate directly inside `post()`, by line:
+site in it. Running `python -m splinter` (pinned command above) against
+this commit reports exactly **seven** sites inside `post()`, each its own
+S3 unit:
 
-1. `models.Timer.objects.create(user=request.user)` (line 457) — `create()`
-   is in the frozen list's "do not return `QuerySet`s" group. One unit.
-2. `models.Child.objects.get(pk=child_id)` (line 460) — the ternary's
-   `.get()` call; conditional, counted once. One unit.
-3. `models.Child.count()` (line 464, the `elif` condition) — `count` is
-   itself in the frozen Django list. Under S1 this call is a site by name
-   match alone, regardless of the fact that `Child.count` is a
-   repository-local classmethod and not the manager's own `count()`: a
-   local override of a frozen name does not change that the call is a
-   site, exactly as S1 states for `save()`. One unit, conditional, counted
-   once — not a traversal into the classmethod's body.
-4. `models.Child.objects.first()` (line 465) — inside the `elif` branch;
-   conditional, counted once. One unit.
-5. `instance.save()` (line 466) — `Model.save()`, which here issues an
-   `UPDATE` (the instance's primary key was already set by the preceding
-   `create()`). One unit.
+1. `models.Timer.objects.create(user=request.user)` (line 457) — `create`,
+   write; receiver type `django.db.models.manager.Manager[core.models.Timer]`.
+2. `request.POST.get("child", False)` (line 459) — `get`, read; receiver
+   type resolved by mypy as `Any` (the `request` parameter carries no type
+   annotation), which the analyzer's four-prefix exclusion does not catch
+   — so this *is* reported, contrary to the previous draft's claim that a
+   hand-written name-only rule alone was the source of this
+   miscount: the published, type-aware tool reports it too, for a
+   specific, verified reason (an unannotated receiver resolves to `Any`),
+   not because it is coarse in the way the first review's finding assumed.
+3. `models.Child.objects.get(pk=child_id)` (line 460) — the ternary's
+   `.get()` call; `get`, read; receiver type
+   `django.db.models.manager.Manager[core.models.Child]`.
+4. `models.Child.count()` (line 464, the `elif` condition) — `count`,
+   read; receiver type resolves to the constructor signature of `Child`
+   itself (`def (*args: Any, **kwargs: Any) -> core.models.Child`), because
+   `models.Child` here is the class, not an instance — matched by name
+   alone, exactly as S1 predicts for a repository-local override: `Child`
+   defines its own `count()` classmethod (below), and the analyzer does not
+   know or care that it is not `Manager.count()`.
+5. `models.Child.objects.first()` (line 465) — `first`, read.
+6. `instance.save()` (line 466) — `save`, write; receiver type
+   `core.models.Timer`.
+7. `request.GET.get("next", reverse(...))` (lines 467–469) — `get`, read;
+   receiver type `Any`, for the same reason as site 2. This is the second
+   site the earlier draft's truncated excerpt omitted.
 
-The classmethod `Child.count` itself (`core/models.py:218–221`, confirmed
-with `git show ba46c49bea0694fd6b9bda728bcd281ef15f284c:core/models.py`,
-2026-10-15) contributes **zero** further units:
+**Not reported: `super(TimerAddQuick, self).get(request, *args, **kwargs)`
+(line 470).** This is not a coarse miss of the kind the review's finding
+described — it is structural. mypy's own semantic analysis represents a
+call through Python's `super()` proxy by attaching the called method's name
+directly onto a `SuperExpr` node, rather than wrapping it in the
+`MemberExpr` node an ordinary `obj.method()` call produces. `splinter-mypy`'s
+dispatch only inspects calls whose callee is a `MemberExpr`
+(`splinter/analyzer.py:321`), so a `super()` call's callee never reaches
+that branch, regardless of what name follows `.get`. Verified directly:
+no message exists anywhere in the analyzer's output at line 470.
+
+The classmethod `Child.count` itself (`core/models.py:218–221`) contributes
+**zero** further units, also verified directly in the output:
 
 ```python
 @classmethod
@@ -440,31 +544,31 @@ def count(cls):
     return cache.get_or_set(cls.cache_key_count, Child.objects.count, None)
 ```
 
-`Child.objects.count` here is passed unparenthesized as the second argument
-to `cache.get_or_set` — an attribute reference used as a callback, never
-itself called in this source — so under S1's callback exception it is not a
-site, and `cache.get_or_set` is not a name in either frozen list. Nothing
-inside `Child.count`'s own body is a unit.
+`cache.get_or_set` is not a name in any of the three Django lists, so this
+call is not a site; `Child.objects.count` is passed unparenthesized as an
+argument — never itself a call expression — so it produces no message
+either, confirmed by the absence of any entry for these lines in the
+analyzer's output.
 
-**`Child.count()` has three callers in this pinned commit, not two** — all
-three are one-shot S1 sites outside any explicit transaction, so S3
-attributes a unit to each of them independently, at its own line, never
-collapsed onto the helper's definition (there is no helper-side unit to
-collapse onto, since `Child.count`'s body has none):
+**`Child.count()` has three production callers in this pinned commit,
+all three present in the analyzer's output as three independent S3
+units**, never collapsed onto the helper's definition (which has no site of
+its own to collapse onto):
 
-- `TimerAddQuick.post`, line 464 (counted above, unit 3).
+- `TimerAddQuick.post`, line 464 (counted above, site 4).
 - `Timer.title_with_child` (`core/models.py:632`): `Child.count() > 1`.
-- `set_initial_values` (`core/forms.py:41`, confirmed with
-  `git show ba46c49bea0694fd6b9bda728bcd281ef15f284c:core/forms.py`,
-  2026-10-15): `elif models.Child.count() == 1:` — the third caller, absent
-  from the previous draft's "two independent...locations" count.
+- `set_initial_values` (`core/forms.py:41`): `elif models.Child.count() == 1:`.
 
-**Total for `TimerAddQuick.post`: 5 units**, all five enumerated directly
-inside `post()` at lines 457, 460, 464, 465, and 466 — none attributed to
-the helper, because S1's callback exception leaves the helper's own body
-with no site to attribute. The three independent callers of `Child.count()`
-across the pinned commit are three separate S3 units at three separate
-lines, not one shared unit multiplied or collapsed by caller count.
+(`Child.count()` also appears four times in `core/tests/tests_models.py`,
+also present in the raw output — excluded from the unit count under this
+document's "Exclusions," since test code is not enumerated.)
+
+**Total for `TimerAddQuick.post`: 7 units**, all seven enumerated directly
+inside `post()`, by the analyzer's own report — two more than this
+document's previous draft claimed (which missed the two `request.GET`/
+`request.POST` sites) and one fewer than the first review's manual count of
+eight (which credited the `super().get()` call as a site; the pinned
+analyzer does not and cannot see it, for the structural reason given above).
 
 **TypeORM — `cool-team-official/cool-admin-midway` @
 `edc13838439a0d6469abfe6263f51f2c987284bf`,
@@ -506,43 +610,61 @@ async data(id, method, params: any = {}) {
 ```
 
 No explicit transaction anywhere in `data()`, so S3 applies to every S1
-site found through the TypeORM frozen list; `createQueryBuilder()` itself
-is not in that list — it only builds the query and executes nothing, so it
-is not a site. Six units enumerate directly inside `data()`, each counted
-once per conditional site:
+site. Running `splinter-eslint` (pinned command above, after `npm install`
+in the target repository so the TypeScript checker resolves real types)
+against this commit reports exactly **five** sites inside `data()`, each
+its own S3 unit:
 
-1. `this.cloudDBEntity.findOneBy({ id })` (line 33).
-2. `repository.save(params)` (line 36, the `add`/`update` branch) — one
-   ORM-operation unit under the persistence-method rule above, regardless
-   of how many `INSERT`/`UPDATE` statements it issues underneath.
-3. `repository.delete(params.ids)` (line 42, the `delete` branch).
-4. `repository.clear()` (line 45, the `clear` branch).
-5. `find.getMany()` (line 55, the `page` branch — part of the review's
-   cited span, lines 54–61).
-6. `find.getCount()` (line 59, the `page` branch — the other half of the
-   cited span): a second, independent execution against the same
-   conditions, confirming the frozen rule directly — a statement with
-   several executing calls (here, one `return` holding both `getMany()` and
-   `getCount()`) yields several units, not one.
+1. `this.cloudDBEntity.findOneBy({ id })` (line 33) — `findOneBy`, read;
+   receiver type `Repository<CloudDBEntity>`.
+2. `repository.save(params)` (line 36, the `add`/`update` branch) — `save`,
+   write — one ORM-operation unit under the persistence-method rule above,
+   regardless of how many `INSERT`/`UPDATE` statements it issues
+   underneath.
+3. `repository.delete(params.ids)` (line 42, the `delete` branch) —
+   `delete`, write.
+4. `repository.clear()` (line 45, the `clear` branch) — `clear`, write.
+5. `repository.createQueryBuilder()` (lines 49–50, the `page` branch) —
+   `createQueryBuilder`, "other." **This is reported**, which contradicts
+   this document's previous draft, which excluded `createQueryBuilder()` on
+   the stated ground that "it only builds the query and executes nothing."
+   The pinned analyzer makes no such distinction: `createQueryBuilder` is
+   one of its two "other" names, matched the same way `query` is, and is
+   reported every time it is called — verified directly in the output.
 
-`this.getRepository(db?.className)` (line 34) is not itself a seventh S1
-site: `getRepository` is not a name in the frozen TypeORM list, so the call
-expression at line 34 does not match S1 regardless of what the method it
-names does. Under S2/S3, `getRepository` is a helper, not lexically inside
-any transaction, so S1 sites written inside its own body are each their own
-unit at the helper's definition (lines 69–77 of the same file), by depth 0
-— never by walking from `data()` into it through the line-34 call. That
-helper's own body has exactly one such site: `this.cloudDBEntity.findOneBy({
-className })` (line 70), which matches `findOneBy` in the frozen list. It
-is written once in the source and is called from this one location in the
-pinned commit, so it is one unit, attributed to the helper's definition —
-plus one unit.
+**Not reported: `find.getMany()` and `find.getCount()`** (the review's
+specifically disputed pair, part of the same `return` in the `page`
+branch). Neither `getMany` nor `getCount` is a name in any of the plugin's
+four lists (read/write/other/transaction, reproduced in full above) — the
+pinned analyzer has no concept of a `QueryBuilder` terminal execution
+method at all, so these two calls are structurally invisible to it, the
+same way `super().get()` is invisible to the Django analyzer. This is the
+opposite correction from what either side of the review's dispute assumed:
+the fix is not "both calls count" or "one call per statement" — it is that
+the published tool recognizes neither call by that name, while it does
+recognize `createQueryBuilder()`, which the previous manual rule had
+specifically excluded.
 
-**Total: 7 units** — 6 enumerated directly inside `data()`, plus 1 at the
-helper `getRepository`'s own definition (line 70). The review's specifically
-cited lines 54–61 alone contribute 2 of those 7 (`getMany()` + `getCount()`)
-— resolving the ambiguity the review raised: the frozen rule counts both
-calls, never one call per statement.
+`this.getRepository(db?.className)` (line 34) is not itself a site:
+`getRepository` is not a name in any of the four lists, confirmed by its
+absence from the output. Under S2/S3, `getRepository` is a helper, not
+lexically inside any transaction, so an S1 site written inside its own body
+is its own unit at the helper's definition, by depth 0 — never by walking
+from `data()` into it through the line-34 call. That helper's own body
+(`async getRepository(className: string)`, lines 68–76 of the same file)
+has exactly one such site, present in the output: `this.cloudDBEntity.findOneBy({
+className })` (lines 70–72) — `findOneBy`, read. It is written once in the
+source and is one unit, attributed to the helper's definition — plus one
+unit.
+
+**Total: 6 units** — 5 enumerated directly inside `data()`, plus 1 at the
+helper `getRepository`'s own definition. This is one fewer than this
+document's previous draft's total of 7, but by the opposite mechanism from
+either the previous draft or the review's dispute: the pinned analyzer
+drops both `getMany()` and `getCount()` from the count (neither is a
+recognized name) while adding `createQueryBuilder()` back in (which the
+previous draft had excluded) — net, one site removed from the `page`
+branch, not two added or zero changed.
 
 ## 4. Trace source and weights for the applications
 

@@ -166,9 +166,9 @@ transactions, with no weighting on either TPC-C or the application corpus
 — and kiln's IR unsupported-source boundary (`docs/concept.md` §2.1) as the
 exact rule for what falls into "unknown." The application corpus itself
 stays unweighted under E1 too, for the same reason the study's own count
-is: no trace source exists for any application (`inputs.md` §4), so
-frequency weighting by TPC-C's mix is the one addition E1 makes beyond the
-study's method, not a practice applied uniformly across every corpus. If
+is: no trace source exists for any application (`inputs.md` §4). Of the
+three additions listed above, frequency weighting by TPC-C's mix is the one
+that applies only to TPC-C, not uniformly across every corpus. If
 the study's own per-application data can be obtained, it is a cheaper first
 pass at an order-of-magnitude estimate — not a substitute for E1's own
 measurement against kiln's categories and IR.
