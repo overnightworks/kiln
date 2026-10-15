@@ -91,6 +91,7 @@ pub struct PathFacts {
     bindings: Vec<Binding>,
     aliases: Vec<(Slot, Slot)>,
     presence: Vec<(NodePath, bool)>,
+    argument_decisions: Vec<(NodePath, bool)>,
     pub accesses: Vec<Access>,
     pub resolutions: Vec<Resolution>,
     pub obstacles: Vec<Obstacle>,
@@ -154,8 +155,26 @@ impl PathFacts {
     }
 
     pub fn assuming(&self, read: &ReadRef, present: bool) -> Self {
+        self.deciding(&read.node, present)
+    }
+
+    /// The path after the selector at `node` took `outcome`.
+    pub fn deciding(&self, node: &NodePath, outcome: bool) -> Self {
         let mut facts = self.clone();
-        facts.presence.push((read.node.clone(), present));
+        facts.presence.push((node.clone(), outcome));
+        facts
+    }
+
+    /// The argument-selected branches the path took, with the outcome. They
+    /// constrain which paths are comparable; they are never data selectors.
+    pub fn argument_decisions(&self) -> &[(NodePath, bool)] {
+        &self.argument_decisions
+    }
+
+    /// The path after the argument-selected branch at `node` took `outcome`.
+    pub fn deciding_by_argument(&self, node: &NodePath, outcome: bool) -> Self {
+        let mut facts = self.clone();
+        facts.argument_decisions.push((node.clone(), outcome));
         facts
     }
 

@@ -11,6 +11,9 @@ use programs::*;
 #[path = "footprint/branches.rs"]
 mod branches;
 
+#[path = "footprint/comparisons.rs"]
+mod comparisons;
+
 mod kiln_e1_18 {
     use super::*;
 

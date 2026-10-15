@@ -1,7 +1,7 @@
 //! The footprint classifier: a pure function from a `kiln-ir` function to the
 //! frozen category of `docs/experiments.md` ("Footprint categories") with
 //! IR node paths as evidence, applying `inputs.md` §5 (Q1-Q4). The observable
-//! behaviour is owned by `specs/kiln-e1.spec.md` (`KILN-E1-18` to `KILN-E1-27`).
+//! behaviour is owned by `specs/kiln-e1.spec.md` (`KILN-E1-18` to `KILN-E1-29`).
 
 mod cause;
 mod dependency;

@@ -9,7 +9,7 @@ use kiln_e1::{
 };
 use kiln_ir::{
     ArithmeticOp, Block, ColumnName, Condition, Effect, Expr, ForeignKey, Function, FunctionName,
-    Index, IndexName, ParameterName, Program, Schema, Slot, TableName, Terminal, Value,
+    Index, IndexName, ParameterName, Program, Relation, Schema, Slot, TableName, Terminal, Value,
 };
 
 pub const FUNCTION: &str = "f";
@@ -112,6 +112,27 @@ pub fn branch_on_presence(effects: Vec<Effect>, slot: u32, present: Block, absen
         effects,
         terminal: Terminal::Branch {
             condition: Condition::RowPresent(Slot(slot)),
+            when_present: Box::new(present),
+            when_absent: Box::new(absent),
+        },
+    }
+}
+
+/// Takes `present` when `left` equals `right`, `absent` otherwise.
+pub fn branch_on_equality(
+    effects: Vec<Effect>,
+    (left, right): (Expr, Expr),
+    present: Block,
+    absent: Block,
+) -> Block {
+    Block {
+        effects,
+        terminal: Terminal::Branch {
+            condition: Condition::Compare {
+                left,
+                relation: Relation::Equal,
+                right,
+            },
             when_present: Box::new(present),
             when_absent: Box::new(absent),
         },
