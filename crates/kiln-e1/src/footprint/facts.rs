@@ -1,53 +1,84 @@
-use kiln_ir::{Expr, ParameterName, Slot, TableName};
+use std::collections::BTreeSet;
+
+use kiln_ir::{IndexName, Slot, TableName};
 
 use super::cause::UnknownCause;
 use super::node_path::NodePath;
+use super::operand::{Operand, ReadRef};
 use super::ClassifyError;
 
 #[derive(Clone, Debug)]
 pub enum BindingKind {
-    PointRead {
-        table: TableName,
-        key: Expr,
-    },
-    PrimaryRange {
-        table: TableName,
-    },
-    IndexRange {
-        table: TableName,
-        partition: Option<ParameterName>,
-    },
-    UndeclaredIndexRange(kiln_ir::IndexName),
+    PointRead { table: TableName, key: Operand },
+    PrimaryRange { table: TableName },
+    IndexRange { table: TableName },
+    UndeclaredIndexRange(IndexName),
 }
 
 /// A slot bound by a read: what it holds, where, and which earlier reads its
 /// own target depends on.
 #[derive(Clone, Debug)]
 pub struct Binding {
+    pub slot: Slot,
     pub kind: BindingKind,
     pub node: NodePath,
-    pub depends_on: Vec<Slot>,
+    pub depends_on: Vec<ReadRef>,
 }
 
-/// Which partition an access is confined to, if any.
+/// The bounds of a range read, in the order the IR gives them.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Confinement {
-    Partition(ParameterName),
-    Outside,
+pub struct RangeBounds {
+    pub start: Vec<Operand>,
+    pub end: Vec<Operand>,
+    pub bound: Operand,
+}
+
+impl RangeBounds {
+    pub fn all(&self) -> impl Iterator<Item = &Operand> {
+        self.start.iter().chain(&self.end).chain([&self.bound])
+    }
+}
+
+/// What an access touches, independent of whether it reads or writes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Target {
+    Row {
+        table: TableName,
+        key: Operand,
+    },
+    PrimaryRange {
+        table: TableName,
+        bounds: RangeBounds,
+    },
+    IndexRange {
+        index: IndexName,
+        bounds: RangeBounds,
+    },
 }
 
 #[derive(Clone, Debug)]
 pub struct Access {
     pub node: NodePath,
-    pub confinement: Confinement,
+    pub target: Target,
 }
 
-/// A read whose result determines the target of the accesses at `access_nodes`.
+/// Why a read counts as a resolution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ResolutionRole {
+    /// Its result names rows to access or insert.
+    BaseRows,
+    /// Its result bounds another index range.
+    IndexBounds,
+    /// Its result decides between arms that reach different targets.
+    Branch,
+}
+
+/// A read whose result determines the targets of the accesses at `access_nodes`.
 #[derive(Clone, Debug)]
 pub struct Resolution {
-    pub read: Slot,
-    pub read_node: NodePath,
+    pub read: ReadRef,
     pub access_nodes: Vec<NodePath>,
+    pub roles: BTreeSet<ResolutionRole>,
 }
 
 #[derive(Clone, Debug)]
@@ -59,58 +90,82 @@ pub struct Obstacle {
 /// Everything learned about one feasible path through a function's body.
 #[derive(Clone, Debug, Default)]
 pub struct PathFacts {
-    bindings: Vec<(Slot, Binding)>,
+    bindings: Vec<Binding>,
     aliases: Vec<(Slot, Slot)>,
+    presence: Vec<(NodePath, bool)>,
     pub accesses: Vec<Access>,
     pub resolutions: Vec<Resolution>,
     pub obstacles: Vec<Obstacle>,
 }
 
 impl PathFacts {
-    pub fn bind(&mut self, slot: Slot, binding: Binding) {
-        self.bindings.push((slot, binding));
+    pub fn bind(&mut self, binding: Binding) {
+        self.bindings.push(binding);
     }
 
     /// `row` is the current row of the sequence `source` bound.
     pub fn alias(&mut self, row: Slot, source: Slot, at: &NodePath) -> Result<(), ClassifyError> {
-        let origin = self.origin(source, at)?;
+        let origin = self.read_of(source, at)?.slot;
         self.aliases.push((row, origin));
         Ok(())
     }
 
-    /// The slot whose read produced `slot`'s rows.
-    pub fn origin(&self, slot: Slot, at: &NodePath) -> Result<Slot, ClassifyError> {
+    /// The read that produced `slot`'s rows.
+    pub fn read_of(&self, slot: Slot, at: &NodePath) -> Result<ReadRef, ClassifyError> {
         let origin = self
             .aliases
             .iter()
             .rev()
             .find(|(row, _)| *row == slot)
             .map_or(slot, |(_, source)| *source);
-        self.binding(origin)
-            .map(|_| origin)
+        self.bindings
+            .iter()
+            .rev()
+            .find(|binding| binding.slot == origin)
+            .map(|binding| ReadRef {
+                slot: origin,
+                node: binding.node.clone(),
+            })
             .ok_or_else(|| ClassifyError::UnboundSlot {
                 slot,
                 at: at.to_string(),
             })
     }
 
-    pub fn binding(&self, origin: Slot) -> Option<&Binding> {
+    pub fn binding_of(&self, read: &ReadRef) -> Option<&Binding> {
         self.bindings
             .iter()
-            .rev()
-            .find(|(slot, _)| *slot == origin)
-            .map(|(_, binding)| binding)
+            .find(|binding| binding.node == read.node)
     }
 
     pub fn bindings(&self) -> impl Iterator<Item = &Binding> {
-        self.bindings.iter().map(|(_, binding)| binding)
+        self.bindings.iter()
     }
 
-    pub fn record_access(&mut self, node: &NodePath, confinement: Confinement) {
+    /// Whether an enclosing test already settled if `read` found a row.
+    pub fn presence_of(&self, read: &ReadRef) -> Option<bool> {
+        self.presence
+            .iter()
+            .find(|(node, _)| *node == read.node)
+            .map(|(_, present)| *present)
+    }
+
+    pub fn assuming(&self, read: &ReadRef, present: bool) -> Self {
+        let mut facts = self.clone();
+        facts.presence.push((read.node.clone(), present));
+        facts
+    }
+
+    pub fn record_access(&mut self, node: &NodePath, target: Target) {
         self.accesses.push(Access {
             node: node.clone(),
-            confinement,
+            target,
         });
+    }
+
+    /// The targets accessed after the first `count` accesses.
+    pub fn targets_since(&self, count: usize) -> impl Iterator<Item = &Target> {
+        self.accesses[count..].iter().map(|access| &access.target)
     }
 
     pub fn block(&mut self, node: &NodePath, cause: UnknownCause) {
@@ -120,23 +175,35 @@ impl PathFacts {
         });
     }
 
-    /// Records that the read bound to `origin` at `read_node` determines the
-    /// target at `node`.
-    pub fn resolve(&mut self, origin: Slot, read_node: &NodePath, node: &NodePath) {
-        let position = self.resolutions.iter().position(|r| r.read == origin);
+    /// Records that `read` determines the targets at `nodes`.
+    pub fn resolve(&mut self, read: &ReadRef, role: ResolutionRole, nodes: &[NodePath]) {
+        let position = self.resolutions.iter().position(|r| r.read == *read);
         let resolution = match position {
             Some(position) => &mut self.resolutions[position],
             None => {
                 self.resolutions.push(Resolution {
-                    read: origin,
-                    read_node: read_node.clone(),
+                    read: read.clone(),
                     access_nodes: Vec::new(),
+                    roles: BTreeSet::new(),
                 });
                 self.resolutions.last_mut().expect("just pushed")
             }
         };
-        if !resolution.access_nodes.contains(node) {
-            resolution.access_nodes.push(node.clone());
+        resolution.roles.insert(role);
+        for node in nodes {
+            if !resolution.access_nodes.contains(node) {
+                resolution.access_nodes.push(node.clone());
+            }
         }
+    }
+
+    /// Records that `selector` decides which of the accesses after the first
+    /// `since` is made.
+    pub fn resolve_selection(&mut self, selector: &ReadRef, since: usize) {
+        let nodes: Vec<NodePath> = self.accesses[since..]
+            .iter()
+            .map(|access| access.node.clone())
+            .collect();
+        self.resolve(selector, ResolutionRole::Branch, &nodes);
     }
 }

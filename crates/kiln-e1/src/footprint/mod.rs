@@ -5,9 +5,11 @@
 
 mod cause;
 mod dependency;
+mod evidence;
 mod facts;
 mod judge;
 mod node_path;
+mod operand;
 mod walk;
 
 use std::fmt;
@@ -15,27 +17,13 @@ use std::fmt;
 use kiln_ir::{FunctionName, Program, Slot};
 
 pub use cause::UnknownCause;
+pub use evidence::{IndexRead, IndexReadKind};
 
-use crate::classified::{Classification, ContractViolation, Evidence, Reason};
-use facts::BindingKind;
-use judge::{most_demanding, Judgement, PathVerdict};
+use crate::classified::{Classification, ContractViolation, Evidence, ProvenCategory, Reason};
+use evidence::{index_reads, proven_evidence};
+use judge::{judge_function, Judgement};
 use node_path::NodePath;
-use walk::{feasible_paths, FeasiblePath};
-
-/// Whether an index read stops at the index or goes on to access rows
-/// (`inputs.md` §5, Q2.4).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IndexReadKind {
-    IndexOnly,
-    FollowedByRowAccesses,
-}
-
-/// A range read over a declared index on the most demanding path.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IndexRead {
-    pub node: String,
-    pub kind: IndexReadKind,
-}
+use walk::feasible_paths;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FootprintClassification {
@@ -91,43 +79,26 @@ pub fn classify_function(
         .find(|function| &function.name == name)
         .ok_or_else(|| ClassifyError::UnknownFunction(name.clone()))?;
     let paths = feasible_paths(&program.schema, function)?;
-    let (path, verdict) =
-        most_demanding(&paths).expect("a function body has at least one feasible path");
-    Ok(FootprintClassification {
-        index_reads: index_reads(path),
-        classification: classification_of(verdict)?,
-    })
-}
-
-fn classification_of(verdict: PathVerdict) -> Result<Classification, ClassifyError> {
-    let evidence = Evidence::new(verdict.evidence.iter().map(NodePath::to_string).collect())?;
-    Ok(match verdict.judgement {
-        Judgement::Proven(category) => Classification::Proven { category, evidence },
-        Judgement::Unknown(cause) => Classification::Unknown {
-            reason: Reason::new(cause.to_string())?,
-            evidence: Some(evidence),
-        },
-    })
-}
-
-fn index_reads(path: &FeasiblePath) -> Vec<IndexRead> {
-    path.facts
-        .bindings()
-        .filter(|binding| matches!(binding.kind, BindingKind::IndexRange { .. }))
-        .map(|binding| {
-            let resolves_rows = path
-                .facts
-                .resolutions
-                .iter()
-                .any(|resolution| resolution.read_node == binding.node);
-            IndexRead {
-                node: binding.node.to_string(),
-                kind: if resolves_rows {
-                    IndexReadKind::FollowedByRowAccesses
-                } else {
-                    IndexReadKind::IndexOnly
-                },
-            }
+    let proven = |category| -> Result<Classification, ContractViolation> {
+        Ok(Classification::Proven {
+            category,
+            evidence: evidence_of(proven_evidence(&paths, category))?,
         })
-        .collect()
+    };
+    let classification = match judge_function(&paths) {
+        Judgement::Static => proven(ProvenCategory::Static)?,
+        Judgement::OneHop => proven(ProvenCategory::OneHop)?,
+        Judgement::Unknown { cause, witness } => Classification::Unknown {
+            reason: Reason::new(cause.to_string())?,
+            evidence: Some(evidence_of(witness)?),
+        },
+    };
+    Ok(FootprintClassification {
+        classification,
+        index_reads: index_reads(&paths),
+    })
+}
+
+fn evidence_of(nodes: Vec<NodePath>) -> Result<Evidence, ContractViolation> {
+    Evidence::new(nodes.iter().map(NodePath::to_string).collect())
 }

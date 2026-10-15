@@ -36,7 +36,6 @@ fn assert_unknown(body: Block, cause: UnknownCause) {
 
 const STATIC: Option<ProvenCategory> = Some(ProvenCategory::Static);
 const ONE_HOP: Option<ProvenCategory> = Some(ProvenCategory::OneHop);
-const DOMAIN_BOUNDED: Option<ProvenCategory> = Some(ProvenCategory::DomainBounded);
 
 /// Reads an order by `order_id` into slot 0.
 fn read_order() -> Effect {
@@ -80,6 +79,28 @@ mod kiln_e1_18 {
     }
 
     #[test]
+    fn evidence_names_every_access_and_terminal_of_every_branch() {
+        let arm =
+            |column: &str| returns(vec![update("audit", param("id"), &[(column, literal(1))])]);
+        let body = branch_on_presence(
+            vec![read("accounts", param("id"), 0)],
+            0,
+            arm("first"),
+            arm("second"),
+        );
+        assert_eq!(
+            evidence_of(body),
+            [
+                "f/body/effects[0]",
+                "f/body/terminal/when_present/effects[0]",
+                "f/body/terminal/when_absent/effects[0]",
+                "f/body/terminal/when_present/terminal",
+                "f/body/terminal/when_absent/terminal",
+            ]
+        );
+    }
+
+    #[test]
     fn a_function_touching_nothing_is_static_with_its_terminal_as_evidence() {
         assert_eq!(evidence_of(returns(vec![])), ["f/body/terminal"]);
     }
@@ -94,8 +115,16 @@ mod kiln_e1_18 {
 
     #[test]
     fn the_primary_key_of_a_point_read_row_is_the_key_it_was_read_by() {
-        let body = returns(vec![read_order(), update("customers", key_of(0), &[])]);
-        assert_eq!(category_of(body), STATIC);
+        let bodies = [
+            returns(vec![read_order(), update("customers", key_of(0), &[])]),
+            returns(vec![
+                read_order(),
+                update("customers", plus(key_of(0), literal(1)), &[]),
+            ]),
+        ];
+        for body in bodies {
+            assert_eq!(category_of(body.clone()), STATIC, "{body:?}");
+        }
     }
 }
 
@@ -110,15 +139,51 @@ mod kiln_e1_19 {
         returns(vec![read_customer_of_order(1)])
     }
 
+    fn unknown_arm() -> Block {
+        returns(vec![read("customers", column_of(0, "note"), 1)])
+    }
+
     #[test]
-    fn a_data_selected_branch_with_static_arms_is_static() {
-        let body = branch_on_presence(
-            vec![read("accounts", param("id"), 0)],
-            0,
-            static_arm(),
-            returns(vec![insert("accounts", param("id"))]),
+    fn a_data_selected_branch_counts_its_selector_only_when_the_arms_reach_different_targets() {
+        let touching = |table: &str, key: &str, column: &str| {
+            returns(vec![update(table, param(key), &[(column, literal(1))])])
+        };
+        let cases = [
+            (
+                touching("audit", "id", "a"),
+                touching("audit", "id", "b"),
+                STATIC,
+            ),
+            (touching("a", "x", "c"), touching("b", "y", "c"), ONE_HOP),
+            (
+                touching("audit", "x", "c"),
+                touching("audit", "y", "c"),
+                ONE_HOP,
+            ),
+            (static_arm(), returns(vec![]), ONE_HOP),
+        ];
+        for (present, absent, expected) in cases {
+            let body =
+                branch_on_presence(vec![read("accounts", param("id"), 0)], 0, present, absent);
+            assert_eq!(category_of(body.clone()), expected, "{body:?}");
+        }
+    }
+
+    #[test]
+    fn the_selector_read_and_a_resolving_read_in_an_arm_are_two_resolutions() {
+        let inner = branch_on_presence(
+            vec![read("orders", param("other_order_id"), 1)],
+            1,
+            returns(vec![update("a", param("id"), &[])]),
+            returns(vec![update("b", param("id"), &[])]),
         );
-        assert_eq!(category_of(body), STATIC);
+        let body = branch_on_presence(
+            vec![read_order()],
+            0,
+            inner,
+            returns(vec![update("c", param("id"), &[])]),
+        );
+        assert_unknown(body, UnknownCause::IndependentResolutions { count: 2 });
     }
 
     #[test]
@@ -153,12 +218,7 @@ mod kiln_e1_19 {
 
     #[test]
     fn an_unknown_arm_makes_the_function_unknown() {
-        let body = branch_on_presence(
-            vec![read_order()],
-            0,
-            static_arm(),
-            returns(vec![read("customers", column_of(0, "note"), 1)]),
-        );
+        let body = branch_on_presence(vec![read_order()], 0, static_arm(), unknown_arm());
         assert_eq!(category_of(body), None);
     }
 
@@ -177,9 +237,39 @@ mod kiln_e1_19 {
     }
 
     #[test]
-    fn a_read_that_only_decides_the_branch_is_no_resolution() {
-        let body = branch_on_presence(vec![read_order()], 0, static_arm(), static_arm());
-        assert_eq!(category_of(body), STATIC);
+    fn a_continuation_contradicting_an_established_presence_is_not_feasible() {
+        let present_then_absent = branch_on_presence(
+            vec![read_order()],
+            0,
+            branch_on_presence(vec![], 0, static_arm(), unknown_arm()),
+            static_arm(),
+        );
+        let absent_then_present = branch_on_presence(
+            vec![read_order()],
+            0,
+            static_arm(),
+            branch_on_presence(vec![], 0, unknown_arm(), static_arm()),
+        );
+        assert_eq!(category_of(present_then_absent), STATIC);
+        assert_eq!(category_of(absent_then_present), STATIC);
+    }
+
+    #[test]
+    fn a_slot_read_again_inside_an_arm_is_tested_afresh() {
+        let retested = Block {
+            effects: vec![read_order()],
+            terminal: kiln_ir::Terminal::Branch {
+                condition: kiln_ir::Condition::RowPresent(Slot(0)),
+                when_present: Box::new(branch_on_presence(
+                    vec![read("orders", param("other_order_id"), 0)],
+                    0,
+                    static_arm(),
+                    unknown_arm(),
+                )),
+                when_absent: Box::new(static_arm()),
+            },
+        };
+        assert_eq!(category_of(retested), None);
     }
 }
 
@@ -211,6 +301,24 @@ mod kiln_e1_21 {
         assert_eq!(
             evidence_of(body),
             ["f/body/effects[0]", "f/body/effects[1]"]
+        );
+    }
+
+    #[test]
+    fn evidence_also_names_the_accesses_of_the_other_branches() {
+        let body = branch_on_presence(
+            vec![read_order()],
+            0,
+            returns(vec![read_customer_of_order(1)]),
+            returns(vec![update("audit", param("id"), &[])]),
+        );
+        assert_eq!(
+            evidence_of(body),
+            [
+                "f/body/effects[0]",
+                "f/body/terminal/when_present/effects[0]",
+                "f/body/terminal/when_absent/effects[0]",
+            ]
         );
     }
 
@@ -293,6 +401,34 @@ mod kiln_e1_22 {
             read_range("orders", column_of(0, "customer_id"), param("high"), 1),
         ]);
         assert_unknown(body, UnknownCause::PrimaryRangeBoundedByRead);
+    }
+
+    #[test]
+    fn a_key_computed_from_a_read_keeps_neither_foreign_key_identity_nor_range_containment() {
+        let computed_foreign_key = returns(vec![
+            read_order(),
+            read(
+                "customers",
+                plus(column_of(0, "customer_id"), literal(1)),
+                1,
+            ),
+        ]);
+        let computed_range_key = returns(vec![
+            read_range("orders", param("low"), param("high"), 0),
+            iterate(0, 1, vec![read("orders", plus(key_of(1), literal(1)), 2)]),
+        ]);
+        let cases = [
+            (computed_foreign_key, "customers"),
+            (computed_range_key, "orders"),
+        ];
+        for (body, accessed) in cases {
+            assert_unknown(
+                body,
+                UnknownCause::KeyComputedFromRead {
+                    table: table(accessed),
+                },
+            );
+        }
     }
 
     #[test]
@@ -427,6 +563,85 @@ mod kiln_e1_24 {
     }
 
     #[test]
+    fn a_range_feeding_another_ranges_bounds_is_not_followed_by_row_accesses() {
+        let result = classify(returns(vec![
+            read_index(
+                "customers_by_tenant",
+                vec![param("tenant"), literal(0)],
+                vec![param("tenant"), literal(9)],
+                0,
+            ),
+            iterate(
+                0,
+                1,
+                vec![read_index(
+                    "orders_by_customer",
+                    vec![key_of(1)],
+                    vec![plus(key_of(1), literal(1))],
+                    2,
+                )],
+            ),
+        ]));
+        assert_eq!(
+            result.index_reads,
+            [
+                IndexRead {
+                    node: "f/body/effects[0]".to_owned(),
+                    kind: IndexReadKind::FeedsIndexBounds
+                },
+                IndexRead {
+                    node: "f/body/effects[1]/body/effects[0]".to_owned(),
+                    kind: IndexReadKind::IndexOnly
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn index_reads_cover_every_branch_and_a_selecting_range_stays_index_only() {
+        let rows_of_range = returns(vec![iterate(0, 1, vec![update("orders", key_of(1), &[])])]);
+        let other_range = read_index(
+            "orders_by_customer",
+            vec![param("other")],
+            vec![param("other")],
+            2,
+        );
+        let followed = branch_on_presence(
+            vec![customer_orders()],
+            0,
+            rows_of_range,
+            returns(vec![other_range.clone()]),
+        );
+        let selecting = branch_on_presence(
+            vec![customer_orders()],
+            0,
+            returns(vec![update("audit", param("id"), &[])]),
+            returns(vec![]),
+        );
+        let reads = |body| classify(body).index_reads;
+        assert_eq!(
+            reads(followed),
+            [
+                IndexRead {
+                    node: "f/body/effects[0]".to_owned(),
+                    kind: IndexReadKind::FollowedByRowAccesses
+                },
+                IndexRead {
+                    node: "f/body/terminal/when_absent/effects[0]".to_owned(),
+                    kind: IndexReadKind::IndexOnly
+                }
+            ]
+        );
+        assert_eq!(
+            reads(selecting),
+            [IndexRead {
+                node: "f/body/effects[0]".to_owned(),
+                kind: IndexReadKind::IndexOnly
+            }]
+        );
+    }
+
+    #[test]
     fn a_range_bound_by_a_read_result_is_a_resolution() {
         let body = returns(vec![
             read_order(),
@@ -502,86 +717,10 @@ mod kiln_e1_25 {
 mod kiln_e1_26 {
     use super::*;
 
-    fn tenant_customers() -> Effect {
-        read_index(
-            "customers_by_tenant",
-            vec![param("tenant"), literal(0)],
-            vec![param("tenant"), literal(9)],
-            0,
-        )
-    }
-
-    fn orders_of_customer_in(partition: &str) -> Effect {
-        read_index(
-            "orders_by_tenant",
-            vec![param(partition), key_of(1)],
-            vec![param(partition), key_of(1)],
-            2,
-        )
-    }
-
-    fn chain_within(partition: &str) -> Block {
+    fn within_one_tenant() -> Block {
         returns(vec![
-            tenant_customers(),
-            iterate(
-                0,
-                1,
-                vec![
-                    orders_of_customer_in(partition),
-                    iterate(2, 3, vec![update("orders", key_of(3), &[])]),
-                ],
-            ),
-        ])
-    }
-
-    #[test]
-    fn a_chain_confined_to_one_argument_selected_partition_is_domain_bounded() {
-        let body = chain_within("tenant");
-        assert_eq!(category_of(body.clone()), DOMAIN_BOUNDED);
-        assert_eq!(
-            evidence_of(body),
-            [
-                "f/body/effects[0]",
-                "f/body/effects[1]/body/effects[0]",
-                "f/body/effects[1]/body/effects[1]/body/effects[0]"
-            ]
-        );
-    }
-
-    #[test]
-    fn a_chain_whose_second_range_leaves_the_partition_is_unknown() {
-        assert_unknown(
-            chain_within("other_tenant"),
-            UnknownCause::ChainedResolutions { count: 2 },
-        );
-    }
-
-    #[test]
-    fn a_range_with_different_leading_arguments_pins_no_partition() {
-        let body = returns(vec![
             read_index(
                 "customers_by_tenant",
-                vec![param("tenant_low"), literal(0)],
-                vec![param("tenant_high"), literal(9)],
-                0,
-            ),
-            iterate(
-                0,
-                1,
-                vec![
-                    orders_of_customer_in("tenant_low"),
-                    iterate(2, 3, vec![update("orders", key_of(3), &[])]),
-                ],
-            ),
-        ]);
-        assert_unknown(body, UnknownCause::ChainedResolutions { count: 2 });
-    }
-
-    #[test]
-    fn a_chain_leaving_the_partition_through_foreign_keys_is_unknown() {
-        let body = returns(vec![
-            read_index(
-                "orders_by_tenant",
                 vec![param("tenant"), literal(0)],
                 vec![param("tenant"), literal(9)],
                 0,
@@ -590,52 +729,37 @@ mod kiln_e1_26 {
                 0,
                 1,
                 vec![
-                    read("customers", column_of(1, "customer_id"), 2),
-                    read("regions", column_of(2, "region_id"), 3),
-                ],
-            ),
-        ]);
-        assert_unknown(body, UnknownCause::ChainedResolutions { count: 2 });
-    }
-
-    #[test]
-    fn an_access_outside_the_partition_makes_the_chain_unknown() {
-        let mut effects = vec![read("items", param("item_id"), 9)];
-        effects.extend(chain_within("tenant").effects);
-        assert!(category_of(returns(effects)).is_none());
-    }
-
-    #[test]
-    fn a_partition_pinned_by_a_literal_is_not_argument_selected() {
-        let body = returns(vec![
-            read_index(
-                "customers_by_tenant",
-                vec![literal(7), literal(0)],
-                vec![literal(7), literal(9)],
-                0,
-            ),
-            iterate(
-                0,
-                1,
-                vec![
                     read_index(
                         "orders_by_tenant",
-                        vec![literal(7), key_of(1)],
-                        vec![literal(7), key_of(1)],
+                        vec![param("tenant"), key_of(1)],
+                        vec![param("tenant"), key_of(1)],
                         2,
                     ),
                     iterate(2, 3, vec![update("orders", key_of(3), &[])]),
                 ],
             ),
-        ]);
-        assert!(category_of(body).is_none());
+        ])
+    }
+
+    fn through_foreign_keys() -> Block {
+        returns(vec![
+            read_order(),
+            read_customer_of_order(1),
+            read("regions", column_of(1, "region_id"), 2),
+        ])
     }
 
     #[test]
-    fn a_partition_root_keyed_by_the_partition_argument_stays_confined() {
-        let mut effects = vec![read("tenants", param("tenant"), 9)];
-        effects.extend(chain_within("tenant").effects);
-        assert_eq!(category_of(returns(effects)), DOMAIN_BOUNDED);
+    fn a_chain_is_unknown_for_want_of_a_declared_partition_however_its_arguments_look() {
+        for body in [within_one_tenant(), through_foreign_keys()] {
+            let Classification::Unknown { reason, .. } = classify(body.clone()).classification
+            else {
+                panic!("a chain is never labelled without a declared partition: {body:?}");
+            };
+            let cause = UnknownCause::ChainedResolutions { count: 2 };
+            assert_eq!(reason, Reason::new(cause.to_string()).unwrap());
+            assert!(cause.to_string().contains("no declared partition"));
+        }
     }
 }
 

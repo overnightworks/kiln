@@ -20,9 +20,12 @@ pub enum UnknownCause {
     PrimaryRangeBoundedByRead,
     /// `count` resolving reads, none of which depends on another.
     IndependentResolutions { count: usize },
-    /// `count` resolving reads, one of which depends on another, not confined
-    /// to one argument-selected partition.
+    /// `count` resolving reads, one of which depends on another. Only a schema
+    /// partition could confine them, and kiln-ir declares none.
     ChainedResolutions { count: usize },
+    /// A key of `table` is arithmetic over a read result, which no foreign key
+    /// or range identifies.
+    KeyComputedFromRead { table: TableName },
 }
 
 impl fmt::Display for UnknownCause {
@@ -56,7 +59,12 @@ impl fmt::Display for UnknownCause {
             }
             Self::ChainedResolutions { count } => write!(
                 formatter,
-                "{count} chained resolving reads, not confined to one argument-selected partition"
+                "{count} chained resolving reads and no declared partition to confine them"
+            ),
+            Self::KeyComputedFromRead { table } => write!(
+                formatter,
+                "a key of {} is arithmetic over a read result",
+                table.0
             ),
         }
     }
