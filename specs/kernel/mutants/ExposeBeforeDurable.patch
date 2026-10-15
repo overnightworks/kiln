@@ -31,7 +31,7 @@
    fsyncFailed,   \* ghost: every transaction whose commit call met an fsync failure
    unresolved,    \* ghost: the transactions whose outcome is unknown until recovery
    reservedAtUnknown, \* ghost: every transaction's escrow reservations when the last fsync failure struck
-+  readFrom,      \* ghost: the transactions whose tentative effects a transaction ran on
++  readFrom,      \* mutation-only scheduling state: a conservative superset of a transaction's dependencies; gates Flush
    failuresUsed
  
 -DVars == <<Vars, log, unflushed, history, engine, answer, fsyncFailed, unresolved, reservedAtUnknown, failuresUsed>>
@@ -49,7 +49,7 @@
  JournalUnchanged ==
    UNCHANGED <<log, unflushed, history, engine, answer, fsyncFailed, unresolved, reservedAtUnknown, failuresUsed>>
  
-+Exposing(t) == {u \in Txns \ {t} : Finishing(u)}
++Exposing(t) == {u \in Txns \ {t} : Finishing(u)}  \* every finishing transaction, conservatively treated as a dependency
 +
  Serving == engine = "up"
  
@@ -62,7 +62,7 @@
 +Acquired(t) == Serving /\ Acquire(t) /\ JournalUnchanged /\ UNCHANGED readFrom
 +Executed(t) ==
 +  /\ Serving /\ DoOp(t) /\ JournalUnchanged
-+  /\ readFrom' = [readFrom EXCEPT ![t] = @ \cup Exposing(t)]
++  /\ readFrom' = [readFrom EXCEPT ![t] = @ \cup Exposing(t)]  \* conservative: not only the rows actually read
 +Restarted(t) == Serving /\ WidenAndRestart(t) /\ JournalUnchanged /\ UNCHANGED readFrom
  
  Enqueue(t) ==

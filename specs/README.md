@@ -498,9 +498,10 @@ lengths below are the states of the committed logs.
 | `RecoverSkipsTail` | `Recovery` | `RecoveredPrefix` (the served history is shorter than the log) | 7 |
 | `RecoverSkipsTail` | `Recovery` | `Serializable` (a committed transaction's effects are missing from the recovered state) | 8 |
 
-`ExposeBeforeDurable` fails only through a failure: with `Failures = 0` the
-same mutant passes `Serializable`, because a dependent's flush waits for
-what it read. The crash is where a response justified by a tentative
+`ExposeBeforeDurable` fails here only through a failure: checked once on
+`RecoveryDependent` with `Failures = 0` (no log committed; not a general
+guarantee), the same mutant passed `Serializable`, because a dependent's
+flush waits for the transactions finishing when it ran. The crash is where a response justified by a tentative
 effect is lost with it. A *rejection* resting on a tentative effect needs no
 crash: it is final when told, and `ClaimLoserTrustsTentativeHolder` refutes
 it as soon as it is told. The repair is to expose nothing before the
