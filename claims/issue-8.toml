@@ -1,0 +1,7 @@
+claim_id = "5d66d8d2ef5f4260adb0016dd27fad20"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "4c0edb03bf81d8d4d581373862735e61bc134d27"
+branch = "claude/issue-8-systematic-prior-art-review"
+scope = ["docs/research/systematic-review.md"]
+opened_commit = "b3a3f21dec904750f98af75adce2c41fee65c789"
