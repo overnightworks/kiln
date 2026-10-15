@@ -1,8 +1,0 @@
-claim_id = "cfb469d59eb34f0b817d97ee278b019c"
-agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
-role = "builder"
-base = "36bdcaad48a175e66f536858c24c7e48f985cddb"
-branch = "claude/issue-15-rust-skeleton"
-scope = [".github/workflows/ci.yml", "AGENTS.md", "CLAUDE.md", "rust-toolchain.toml"]
-opened_commit = "271058ca67f4b1585190f029cf2dc2091b1a9d58"
-whole_reason = "the shared Rust tooling and agent guidance every Rust lane builds on"
