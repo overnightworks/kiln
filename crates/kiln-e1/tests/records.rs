@@ -65,8 +65,9 @@ mod kiln_e1_02 {
     fn proven_labels_without_evidence_are_rejected() {
         for label in ["static", "one-hop", "domain-bounded"] {
             for evidence in [json!([]), json!([" "]), json!(["x", ""])] {
-                let result = parse_one(json!({"category": label, "evidence": evidence}));
-                assert!(result.is_err(), "{label} {evidence}");
+                let error = parse_one(json!({"category": label, "evidence": evidence}))
+                    .expect_err(&format!("{label} {evidence}"));
+                assert!(error.contains("evidence"), "{error}");
             }
         }
     }
@@ -142,15 +143,19 @@ mod kiln_e1_04 {
     #[test]
     fn missing_blank_or_unresolved_evidence_is_rejected() {
         let cases = [
-            exclusion("", "get", "r"),
-            exclusion("QueryDict", " ", "r"),
-            exclusion("QueryDict", "get", ""),
-            exclusion("Any", "get", "r"),
-            exclusion("typing.Any", "get", "r"),
-            json!({"s4_exclusion": {"receiver_type": "QueryDict", "called_method": "get"}}),
+            (exclusion("", "get", "r"), "receiver_type"),
+            (exclusion("QueryDict", " ", "r"), "called_method"),
+            (exclusion("QueryDict", "get", ""), "no_orm_path_reason"),
+            (exclusion("Any", "get", "r"), "unresolved"),
+            (exclusion("typing.Any", "get", "r"), "unresolved"),
+            (
+                json!({"s4_exclusion": {"receiver_type": "QueryDict", "called_method": "get"}}),
+                "no_orm_path_reason",
+            ),
         ];
-        for case in cases {
-            assert!(parse_one(case.clone()).is_err(), "{case}");
+        for (case, expected) in cases {
+            let error = parse_one(case.clone()).expect_err(&case.to_string());
+            assert!(error.contains(expected), "{error}");
         }
     }
 

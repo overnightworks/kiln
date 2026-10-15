@@ -109,6 +109,7 @@ mod kiln_e1_15 {
                 .collect();
             let refusal = evaluate(&manifest(&["a/b"]), &tpcc, &[gating("a/b")]).unwrap_err();
             assert_eq!(refusal, Refusal::TpccTransactionWithoutUnits(transaction));
+            assert!(refusal.to_string().contains(transaction.name()));
         }
     }
 

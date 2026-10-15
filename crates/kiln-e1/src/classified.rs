@@ -78,10 +78,6 @@ impl Evidence {
         }
         Ok(Self(paths))
     }
-
-    pub fn paths(&self) -> &[String] {
-        &self.0
-    }
 }
 
 /// Why a unit is unknown, for example the front end's declared refusal reason.
@@ -96,10 +92,6 @@ impl Reason {
             return Err(ContractViolation::MissingReason);
         }
         Ok(Self(text))
-    }
-
-    pub fn text(&self) -> &str {
-        &self.0
     }
 }
 
