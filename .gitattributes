@@ -1,0 +1,2 @@
+# Unified-diff mutant patches carry significant trailing whitespace in context lines; exempt them from whitespace checks.
+specs/kernel/mutants/*.patch -whitespace

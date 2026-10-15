@@ -391,6 +391,52 @@ protocol instead of racing past each other. This is cheap, not absent:
 two keyed resources with distinct keys never contend, but the registration
 itself is what makes composition with class 4 sound.
 
+**Escrow draws are admitted by budget, atomically with the rest of the
+footprint.** A transaction's *budget* on an escrow key is its statically
+known total draw on that key — every draw its program can make there,
+branches counted in full whether or not they are taken; a budget the
+compiler cannot bound counts as unbounded. At dispatch the transaction
+acquires its whole footprint at once, and for each escrow key that
+footprint includes a *reservation* of `min(budget, committed balance)`.
+Live reservations are funded from the committed balance: a transaction is
+admitted only when every other live reservation on each of its escrow
+keys leaves room for its own, and it reserves nothing at all until the
+whole footprint can be acquired. An admitted transaction never waits
+again: its draws consume its own reservation, never the balance other
+holders draw from, unless it holds a covering resource whose kind is
+incompatible with a draw (an `X` lock, a read): then no other draw can be
+outstanding on the key and it draws on its own view, which is how an
+update that raised the balance in the same transaction is drawn from.
+Whatever it has not drawn at completion — commit or abort — is released
+then. Reservations cover *blind* draws only: an operation whose result
+depends on the escrowed row beyond the sufficient-balance test — a branch
+on how many are sold — also reads that row, and the read is ordered
+against every other draw on it. *Example.* An event has a quota of 2 and two
+callers each buy two tickets one at a time. Admitted draw by draw, each
+caller's first draw fits and each second draw waits for the other's
+tentative draw to resolve: a wait cycle between two holders, which the
+kernel model found. Admitted by budget, the first caller reserves 2 and
+the second waits holding nothing; once the first commits, the second is
+admitted against the quota of 0 and its first draw fails — a failure the
+committed state justifies (§5).
+
+**Admission keeps dispatch order on shared resources.** Admission is one
+queue per resource, ordered by dispatch sequence: a later request never
+bypasses an older queued request on a resource they share, whether the
+two would be compatible or not, while requests with disjoint footprints
+proceed independently. *Example.* A large purchase waits for enough quota;
+later small purchases on the same event queue behind it instead of
+slipping past and keeping it waiting forever; a purchase on another event
+is admitted at once. This is what lets §9.5 promise that every waiter
+eventually proceeds rather than merely that it never deadlocks.
+
+**Runtime arbitration (wait-die and its relatives) is not adopted.**
+Aborting the younger of two waiting transactions presumes a single
+ordered holder to compare against; an escrow draw has several
+non-exclusive holders, so one representative holder is unsound, and the
+rules above make arbitration unnecessary: a waiter holds nothing, a
+holder never waits, and admission order is fixed at dispatch.
+
 **Unknown footprints acquire a genuinely conservative covering resource
 before access.** Class 4's conservative guess is acquired in the same
 namespace, before any read or write touches the underlying state — never
@@ -442,11 +488,11 @@ for any reason, including a constraint failure discovered later in the same
 transaction — every reservation it tentatively held is released atomically
 with its other effects. A tentative reservation's existence may already
 affect what a concurrent in-flight transaction can tentatively reserve (an
-escrow draw reduces the remaining allowance a concurrent draw sees before
-either commits), but no reservation outcome — committed or tentative — may
-justify a result returned to a caller before the transaction holding it
-commits. An `fsync` failure during commit (§9.2) is not, by itself, a known
-abort: it leaves the transaction's outcome **unknown**, because the record
+escrow reservation reduces what a concurrent transaction can reserve on
+the same key before either commits, §4), but no reservation outcome —
+committed or tentative — may justify a result returned to a caller before
+the transaction holding it commits. An `fsync` failure during commit
+(§9.2) is not, by itself, a known abort: it leaves the transaction's outcome **unknown**, because the record
 may already be durable despite the reported failure. No reservation is
 released on an unknown outcome; recovery resolves the outcome — to a known
 commit or a known abort — before the engine resumes serving requests on the
@@ -466,12 +512,32 @@ holder's commit genuinely happened first. If the holder aborts, its
 tentative claims are released and the waiter proceeds as if the value had
 never been claimed.
 
+**No premature failure on an escrow.** The same rule governs a draw whose
+budget the committed balance cannot cover. Its reservation is capped at
+the committed balance (§4), and a capped reservation waits until every
+other tentative reservation on that key has resolved — it never takes
+what the other holders happen to leave and fails on that, because those
+holders may still abort. Once admitted, its draws fail only on committed
+state, so the serial order "the earlier holders, then this transaction"
+reproduces every response exactly. Waiting rather than rejecting when
+only tentative reservations cause the shortage is this section's rule as
+written. *Example.* The quota is 2, one in-flight purchase holds a
+reservation of 1, and a second caller wants 3 tickets, drawn one at a
+time. Its reservation is capped at 2 and it waits. If the first purchase
+aborts, the caller is admitted against a quota of 2, draws 2 and fails on
+the third with `insufficient` — a failure the committed state justifies.
+If instead the first purchase commits, the caller is admitted against a
+quota of 1, capped at 1: its first draw succeeds and the second fails with
+`insufficient`, which is exactly what running after the committed purchase
+would do.
+
 **Consistency and serializable isolation (no write skew).** Class 1 is safe
 because the footprints are disjoint by proof or passing guard (§3). Class 2
 is safe because each reservation type is a mechanism proven, independently
 of any specific transaction, to never let two concurrent uses violate its
 invariant — a claim admits exactly one *committed* winner per value; an
-escrow never lets the sum of committed allowances exceed the ceiling — and
+escrow never lets the live reservations on a key exceed its committed
+balance, so committed draws never exceed the ceiling — and
 because tentative contention is resolved by waiting on a real commit order,
 never by trusting an uncommitted holder. Class 3 is safe because the
 two-phase-locking kernel proves the batch equivalent to a real serial order
@@ -685,23 +751,35 @@ checker language, or a meta-certificate, is engine-phase work
 
 A transaction ordered behind a tentative reservation's holder (§5) must
 eventually proceed: the wait must be deadlock-free, and every waiter must
-eventually proceed under stated fairness assumptions. §4's deadlock-freedom
-argument is built on canonical lock ordering over *exclusive* resources,
-where canonical ordering rules out a wait cycle. An escrow draw is not
-exclusive — several transactions can each hold a tentative draw against the
-same ceiling at once — so a waiter behind a contended escrow is not waiting
-on a single ordered holder the way a claim or pin waiter is, and §4's
-argument does not, as written, extend to it. This document does not yet
-choose a direction (a wait budget, a priority rule, or restructuring escrow
-contention behind a single ordering point) — only the obligation:
-deadlock-free, and every waiter eventually proceeds under fairness
-assumptions #6 states. It fails if a sequence of tentative, non-exclusive
-reservation draws can starve a waiter under those assumptions or form a
-cycle the canonical lock order does not prevent. **Status: not yet
-specified** — proving or disproving this, and stating the fairness
-assumptions themselves, is exactly what the TLA+ model of the kernel (§4)
-must settle; [issue #6](https://github.com/overnightworks/kiln/issues/6)
-owns it.
+eventually proceed under stated fairness assumptions. An escrow draw is
+not exclusive — several transactions can each hold a tentative draw
+against the same ceiling at once — so a waiter behind a contended escrow
+is not waiting on a single ordered holder the way a claim or pin waiter
+is, and canonical lock ordering alone does not cover it: the kernel model
+found the cycle (two holders, each waiting for the other's tentative
+draw, `specs/README.md`). §4's admission rules close it. Every wait is
+now a wait at admission: a waiter holds nothing, an admitted transaction
+never waits, and waits between queued requests point from the younger to
+the older, so the wait graph has no cycle by construction; the kernel
+model checks this, and deadlock freedom with it, on every scenario.
+
+The second half, that every waiter eventually proceeds, rests on a
+fairness assumption this document states and the model has not yet
+proven: **weak fairness of dispatch, admission, execution and completion
+for every transaction** — no step of a live transaction that stays
+enabled is withheld forever — together with finite programs. Under it
+every holder resolves (its program is finite and its steps are taken), a
+queued request has finitely many older requests on each resource it
+shares and none younger can bypass it, so by induction over dispatch
+order every queued request is admitted and then completes. Fairness
+cannot manufacture missing funds: completion may be a justified rejection
+(§5). It fails if an unbounded stream of younger requests could be
+admitted ahead of an older queued one — exactly what the dispatch-order
+rule forbids. **Status: safety checked, liveness stated** — the
+reachability of a terminal outcome for every request
+(`Requested ~> Terminal`) under this fairness condition, and a mutant
+that drops the dispatch-order rule and must fail it, are the liveness
+slice of [issue #6](https://github.com/overnightworks/kiln/issues/6).
 
 ## 10. Exit door (operator ruling 15.10.2026)
 

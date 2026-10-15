@@ -1,0 +1,24 @@
+--- Kernel.tla
++++ Kernel.tla
+@@ -254,7 +254,11 @@
+   [row EXCEPT !.bal = @ + draws[t][k].bal, !.val = @ - draws[t][k].val]
+ 
+ View(t) ==
+-  [k \in Keys |-> Drawn(t, k, IF k \in DOMAIN wr[t] THEN wr[t][k] ELSE db[k])]
++  [k \in Keys |-> Drawn(t, k,
++     IF k \in DOMAIN wr[t] THEN wr[t][k]
++     ELSE IF \E u \in Txns : Active(u) /\ k \in DOMAIN wr[u]
++     THEN wr[CHOOSE u \in Txns : Active(u) /\ k \in DOMAIN wr[u]][k]
++     ELSE db[k])]
+ 
+ (* A draw consumes the transaction's own reservation (§4, rule 1): the
+    balance a draw sees is what remains of that reservation, never the
+@@ -273,7 +277,7 @@
+ (* Admission guard: every registered resource must be compatible with
+    every resource a live transaction holds. *)
+ Conflicting(t, R) ==
+-  {u \in Txns \ {t} : Active(u) /\ \E r \in R, h \in held[u] : ~Compatible(r, h)}
++  {u \in Txns \ {t} : Active(u) /\ \E r \in R, h \in {h \in held[u] : h.kind # "CLAIM"} : ~Compatible(r, h)}
+ 
+ (* Escrow admission (§4, rule 1; §5): a transaction's reservation on an
+    escrow key is min(budget, committed balance). Live reservations are

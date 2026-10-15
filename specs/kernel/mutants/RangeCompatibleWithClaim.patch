@@ -1,0 +1,12 @@
+--- Kernel.tla
++++ Kernel.tla
+@@ -84,7 +84,8 @@
+ Kinds == {"S", "RS", "X", "CLAIM", "PIN", "DEL", "DRAW"}
+ CompatibleKinds ==
+   {<<"S", "S">>, <<"S", "RS">>, <<"RS", "S">>, <<"RS", "RS">>,
+-   <<"PIN", "PIN">>, <<"DRAW", "DRAW">>}
++   <<"PIN", "PIN">>, <<"DRAW", "DRAW">>,
++   <<"RS", "CLAIM">>, <<"CLAIM", "RS">>}
+ 
+ Compatible(a, b) ==
+   \/ a.cov \cap b.cov = {}

@@ -5,9 +5,17 @@
 //! state to represent.
 //!
 //! This slice covers key read, insert, update, delete, branch, abort,
-//! response, checked arithmetic and clamping domains (D3). Range read,
-//! dependent read, bounded iteration and constraint nodes (`docs/concept.md`
-//! §2.1) belong to later slices and have no types here yet.
+//! response, checked arithmetic, clamping domains (D3), range read, bounded
+//! iteration, dependent read and typed function parameters. A dependent read
+//! has no type of its own: it is an [`Effect::Read`] whose `key` is an
+//! [`Expr::Projection`] into a row an earlier read bound, so "which row to
+//! read next" is itself a value the call computed, not a literal or
+//! argument. Bounded iteration is two cooperating nodes: [`Effect::ReadRange`]
+//! binds the key-ordered rows a range matched, and [`Effect::Iterate`] runs a
+//! body once per row of a slot a range read bound, with the current row
+//! itself bound to a slot the body's own reads, writes, and projections can
+//! use (§2.1, "bounded iteration"). Constraint nodes (`docs/concept.md`
+//! §2.1) belong to a later slice and have no types here yet.
 
 use std::collections::BTreeMap;
 
@@ -65,20 +73,36 @@ pub struct ClampDomain {
     pub max: i64,
 }
 
-/// A table's column declaration: its name, declared integer width, and
-/// optional clamping domain (D1).
+/// What a column holds: a checked integer at a declared width with an
+/// optional clamping domain, or text (D1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnType {
+    Integer {
+        width: IntegerWidth,
+        domain: Option<ClampDomain>,
+    },
+    Text,
+}
+
+/// A table's column declaration: its name and declared type (D1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Column {
     pub name: ColumnName,
-    pub width: IntegerWidth,
-    pub domain: Option<ClampDomain>,
+    pub kind: ColumnType,
+}
+
+/// A unique constraint (D1): no two rows of `table` may hold the same value
+/// in `column` in a transaction's final state (D2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UniqueConstraint {
+    pub table: TableName,
+    pub column: ColumnName,
 }
 
 /// A table declaration: its name and the columns rows in it may carry.
 ///
-/// Uniqueness, foreign keys and check constraints (D1's full schema shape)
-/// are later slices' work; this slice only needs a table's name and its
-/// columns' integer widths and clamping domains.
+/// Foreign keys and check constraints (D1's full schema shape) are a later
+/// slice's work.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Table {
     pub name: TableName,
@@ -89,6 +113,7 @@ pub struct Table {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Schema {
     pub tables: Vec<Table>,
+    pub unique_constraints: Vec<UniqueConstraint>,
 }
 
 impl Schema {
@@ -118,31 +143,50 @@ impl Schema {
     /// value the width itself forbids, silently defeating D3's width check
     /// (`docs/concept.md` §2.2, D3). `run` calls this before executing any
     /// call, so a schema this rejects never reaches the evaluator at all.
+    /// A unique constraint must likewise name a declared table and column.
     pub fn validate(&self) -> Result<(), SchemaError> {
         for table in &self.tables {
             for column in &table.columns {
-                let Some(domain) = column.domain else {
-                    continue;
-                };
-                if domain.min > domain.max {
-                    return Err(SchemaError::ReversedDomain {
-                        table: table.name.clone(),
-                        column: column.name.clone(),
-                        min: domain.min,
-                        max: domain.max,
-                    });
+                if let ColumnType::Integer {
+                    width,
+                    domain: Some(domain),
+                } = column.kind
+                {
+                    validate_domain(&table.name, &column.name, width, domain)?;
                 }
-                let (width_min, width_max) = column.width.range();
-                if domain.min < width_min || domain.max > width_max {
-                    return Err(SchemaError::DomainExceedsWidth {
-                        table: table.name.clone(),
-                        column: column.name.clone(),
-                    });
-                }
+            }
+        }
+        for constraint in &self.unique_constraints {
+            if self.column(&constraint.table, &constraint.column).is_none() {
+                return Err(SchemaError::UnknownUniqueTarget(constraint.clone()));
             }
         }
         Ok(())
     }
+}
+
+fn validate_domain(
+    table: &TableName,
+    column: &ColumnName,
+    width: IntegerWidth,
+    domain: ClampDomain,
+) -> Result<(), SchemaError> {
+    if domain.min > domain.max {
+        return Err(SchemaError::ReversedDomain {
+            table: table.clone(),
+            column: column.clone(),
+            min: domain.min,
+            max: domain.max,
+        });
+    }
+    let (width_min, width_max) = width.range();
+    if domain.min < width_min || domain.max > width_max {
+        return Err(SchemaError::DomainExceedsWidth {
+            table: table.clone(),
+            column: column.clone(),
+        });
+    }
+    Ok(())
 }
 
 /// Why a [`Schema`] fails [`Schema::validate`]: one column's own
@@ -161,6 +205,8 @@ pub enum SchemaError {
         table: TableName,
         column: ColumnName,
     },
+    /// A unique constraint names a table or column the schema does not declare.
+    UnknownUniqueTarget(UniqueConstraint),
 }
 
 /// A position in a function's body that a later [`Condition`] or [`Expr`]
@@ -183,10 +229,20 @@ pub enum ArithmeticOp {
 /// arguments, a constant written into the program, a column projected from
 /// an earlier read's row, or an arithmetic operation over two such values.
 ///
-/// [`Expr::Projection`] is a limited dependent read: it projects a column
-/// out of a row an earlier [`Effect::Read`] already bound to a [`Slot`] in
-/// this same call, but it cannot itself choose *which* row to read next
-/// from a projected value — that full dependent read is a later slice.
+/// [`Expr::Projection`] projects a column out of a row an earlier
+/// [`Effect::Read`] or [`Effect::Iterate`] already bound to a [`Slot`] in
+/// this same call. Used as another [`Effect::Read`]'s `key`, it makes that
+/// read a dependent read: which row to read next is itself a value the
+/// call computed, not a literal or argument (`docs/concept.md` §2.1, §2.2
+/// D6). A projection out of a [`Slot`] an [`Effect::ReadRange`] bound has no
+/// single current row to read — whether because that range matched no row
+/// or because the slot holds the whole matched sequence rather than one row
+/// — and a projection out of an absent point-read row has none either;
+/// `run` reports both the same way, as the typed
+/// [`AbortReason::ProjectionSourceAbsent`](crate::evaluator::AbortReason::ProjectionSourceAbsent),
+/// since which row a compiled program ends up projecting from is a fact
+/// about the data it ran against, not something `run` can rule out ahead of
+/// time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Literal(Value),
@@ -197,8 +253,12 @@ pub enum Expr {
 
 /// A condition a [`Terminal::Branch`] decides on.
 ///
-/// This slice's only branchable fact is whether a prior read found a row —
-/// "an absent key is a branchable value" (`docs/concept.md` §2.2).
+/// `RowPresent` tests one fact for either read kind that can bind a
+/// [`Slot`]: a point read (`docs/concept.md` §2.2 D6, "an absent key is a
+/// branchable value") is present when it found a row, and a range read
+/// (§2.2 D6, "an empty range reads as an empty sequence") is present when
+/// its matched sequence is non-empty — the same branchable-absence fact
+/// under one name, since both ultimately ask "did this read find anything".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Condition {
     RowPresent(Slot),
@@ -230,6 +290,39 @@ pub enum Effect {
     },
     /// Remove a row. Aborts if no row exists at `key`.
     Delete { table: TableName, key: Expr },
+    /// Read every row whose key falls in `[start, end]`, in key order,
+    /// binding the matched sequence to `into` — empty if `start` sorts
+    /// after `end` or no row's key falls between them (`docs/concept.md`
+    /// §2.2 D6, "an empty range reads as an empty sequence").
+    ///
+    /// Always bounded (§2.1, "never an open-ended loop"): if more rows
+    /// match than `bound` resolves to, the call aborts with
+    /// [`AbortReason::BoundExceeded`](crate::evaluator::AbortReason::BoundExceeded)
+    /// instead of binding `into` at all.
+    ReadRange {
+        table: TableName,
+        start: Expr,
+        end: Expr,
+        bound: Expr,
+        into: Slot,
+    },
+    /// Run `body` once for each row `source` bound, in key order, binding
+    /// the current row to `row` so the body's own reads, writes, and
+    /// projections can use it (§2.1, "bounded iteration"; `docs/concept.md`
+    /// §2.2 D6, "bounded iteration proceeds in key order").
+    ///
+    /// `source` must be a [`Slot`] an earlier [`Effect::ReadRange`] in this
+    /// same body bound: that read already resolved the bound and checked it
+    /// against the matched row count (`docs/concept.md` §2.1, "never an
+    /// open-ended loop"), so `Iterate` re-reads nothing and checks no bound
+    /// of its own. An abort raised by any effect in `body` aborts the whole
+    /// call, discarding every effect applied so far, in this row's part of
+    /// the iteration or an earlier one (`docs/concept.md` §2.2).
+    Iterate {
+        source: Slot,
+        row: Slot,
+        body: Vec<Effect>,
+    },
 }
 
 /// How a block of [`Effect`]s ends: every path through a function's body
@@ -258,11 +351,38 @@ pub struct Block {
     pub terminal: Terminal,
 }
 
+/// A function parameter's declared type: an integer at a mandatory width,
+/// or text. Every parameter declares one of the two — there is no
+/// undeclared or optionally-typed parameter, so an argument's kind is
+/// always known ahead of checking its value (D3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParameterType {
+    Integer(IntegerWidth),
+    Text,
+}
+
+/// A function's declared parameter: its name and declared type.
+///
+/// An argument bound to `name` is checked against `kind` exactly as a
+/// write is checked against its target column's declared width (D3,
+/// `docs/concept.md` §2.2: "Arithmetic runs over checked integers at the
+/// column's or argument's declared width"): an argument whose own kind does
+/// not match `kind` aborts, and an [`IntegerWidth`]-declared argument
+/// outside that width's representable range aborts too. Unlike `Column`, a
+/// declared parameter carries no clamping domain: D3 clamps a column's own
+/// write, never a call's argument, so an out-of-width argument always
+/// aborts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Parameter {
+    pub name: ParameterName,
+    pub kind: ParameterType,
+}
+
 /// A named transaction function: its parameters and its body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
     pub name: FunctionName,
-    pub parameters: Vec<ParameterName>,
+    pub parameters: Vec<Parameter>,
     pub body: Block,
 }
 

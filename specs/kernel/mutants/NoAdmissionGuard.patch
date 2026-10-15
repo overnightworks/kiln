@@ -1,0 +1,12 @@
+--- Kernel.tla
++++ Kernel.tla
+@@ -272,8 +272,7 @@
+ 
+ (* Admission guard: every registered resource must be compatible with
+    every resource a live transaction holds. *)
+-Conflicting(t, R) ==
+-  {u \in Txns \ {t} : Active(u) /\ \E r \in R, h \in held[u] : ~Compatible(r, h)}
++Conflicting(t, R) == {}
+ 
+ (* Escrow admission (§4, rule 1; §5): a transaction's reservation on an
+    escrow key is min(budget, committed balance). Live reservations are

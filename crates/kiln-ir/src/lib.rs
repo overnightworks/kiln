@@ -4,12 +4,12 @@
 //! `docs/verification.md`'s layer 3 differential tests each need one
 //! executable interpreter of the IR to compare against
 //! (`docs/experiments.md`, "Shared dependency"). This crate is that
-//! interpreter. It covers this slice's node kinds only — key read, insert,
-//! update, delete, branch, abort, response, and checked arithmetic over a
-//! column's declared width and optional clamping domain — with
-//! read-your-writes inside a transaction; the reference meaning it
-//! implements is recorded in `docs/concept.md` §2.2, the single owner of
-//! that meaning.
+//! interpreter. It covers this slice's node kinds only — key read, range
+//! read, dependent read, insert, update, delete, branch, abort, response,
+//! checked arithmetic over a column's or argument's declared width, and
+//! optional clamping domains — with read-your-writes inside a transaction;
+//! the reference meaning it implements is recorded in `docs/concept.md`
+//! §2.2, the single owner of that meaning.
 //!
 //! The crate has no I/O: [`run`] is a pure function from a [`Program`], a
 //! [`Call`] and a [`Store`] to an [`Execution`], or a typed [`SchemaError`]
@@ -23,12 +23,13 @@ mod store;
 
 pub use call::Call;
 pub use evaluator::{
-    run, AbortReason, AccessKind, AccessLogEntry, AccessedColumns, Execution, Outcome,
-    OverflowReason,
+    run, AbortReason, AccessKind, AccessLogEntry, AccessOrigin, AccessTarget, AccessedColumns,
+    Execution, Outcome, OverflowReason,
 };
 pub use identifiers::{AbortName, ColumnName, FunctionName, ParameterName, TableName};
 pub use ir::{
-    ArithmeticOp, Block, ClampDomain, Column, Condition, Effect, Expr, Function, IntegerWidth,
-    Program, Row, Schema, SchemaError, Slot, Table, Terminal, Value,
+    ArithmeticOp, Block, ClampDomain, Column, ColumnType, Condition, Effect, Expr, Function,
+    IntegerWidth, Parameter, ParameterType, Program, Row, Schema, SchemaError, Slot, Table,
+    Terminal, UniqueConstraint, Value,
 };
 pub use store::Store;

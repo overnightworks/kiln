@@ -15,8 +15,9 @@
 use std::collections::BTreeMap;
 
 use kiln_ir::{
-    run, Call, Column, ColumnName, Effect, Execution, Expr, Function, FunctionName, ParameterName,
-    Program, Row, Schema, Store, Table, TableName, Terminal, Value,
+    run, Call, Column, ColumnName, Effect, Execution, Expr, Function, FunctionName, IntegerWidth,
+    Parameter, ParameterName, ParameterType, Program, Row, Schema, Store, Table, TableName,
+    Terminal, Value,
 };
 use proptest::prelude::*;
 
@@ -30,6 +31,24 @@ pub fn column(name: &str) -> ColumnName {
 
 pub fn parameter(name: &str) -> ParameterName {
     ParameterName(name.to_owned())
+}
+
+/// A declared parameter named `name` whose argument is checked against
+/// `width`, exactly as a write is checked against its target column's
+/// declared width (D3).
+pub fn typed_parameter(name: &str, width: IntegerWidth) -> Parameter {
+    Parameter {
+        name: parameter(name),
+        kind: ParameterType::Integer(width),
+    }
+}
+
+/// A declared parameter named `name` whose argument must be text.
+pub fn text_parameter(name: &str) -> Parameter {
+    Parameter {
+        name: parameter(name),
+        kind: ParameterType::Text,
+    }
 }
 
 pub fn columns_of(
@@ -51,7 +70,7 @@ pub fn columns_of_values(
 }
 
 pub fn single_function_program(
-    parameters: Vec<ParameterName>,
+    parameters: Vec<Parameter>,
     effects: Vec<Effect>,
     terminal: Terminal,
 ) -> Program {
@@ -72,28 +91,40 @@ pub fn call_under_test(args: Vec<Value>) -> Call {
     }
 }
 
-/// A program whose schema declares table "t" with exactly one column,
-/// `declared_column`, plus the given function body — the shape every D3
-/// test writes into.
-pub fn program_with_column(
-    declared_column: Column,
-    parameters: Vec<ParameterName>,
+/// A program over `schema` with one function, `under_test`.
+pub fn program_with_schema(
+    schema: Schema,
+    parameters: Vec<Parameter>,
     effects: Vec<Effect>,
     terminal: Terminal,
 ) -> Program {
     Program {
-        schema: Schema {
-            tables: vec![Table {
-                name: table("t"),
-                columns: vec![declared_column],
-            }],
-        },
+        schema,
         functions: vec![Function {
             name: FunctionName("under_test".to_owned()),
             parameters,
             body: kiln_ir::Block { effects, terminal },
         }],
     }
+}
+
+/// A program whose schema declares table "t" with exactly one column,
+/// `declared_column`, plus the given function body — the shape every D3
+/// test writes into.
+pub fn program_with_column(
+    declared_column: Column,
+    parameters: Vec<Parameter>,
+    effects: Vec<Effect>,
+    terminal: Terminal,
+) -> Program {
+    let schema = Schema {
+        tables: vec![Table {
+            name: table("t"),
+            columns: vec![declared_column],
+        }],
+        ..Default::default()
+    };
+    program_with_schema(schema, parameters, effects, terminal)
 }
 
 pub fn arbitrary_value() -> impl Strategy<Value = Value> {

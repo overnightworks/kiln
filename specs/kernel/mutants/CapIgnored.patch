@@ -1,0 +1,11 @@
+--- Kernel.tla
++++ Kernel.tla
+@@ -289,7 +289,7 @@
+ 
+ Capped(t, k) == ~BudgetKnown(t, k) \/ Budget(t, k) > db[k].bal
+ 
+-Reservation(t, k) == IF Capped(t, k) THEN db[k].bal ELSE Budget(t, k)
++Reservation(t, k) == IF BudgetKnown(t, k) THEN Budget(t, k) ELSE db[k].bal
+ 
+ ReservationHolders(t, k) == {u \in Txns \ {t} : Active(u) /\ reserved[u][k] > 0}
+ 
