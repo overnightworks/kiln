@@ -277,8 +277,11 @@ odd and passthrough then instrumented when `k` is even (I P | P I | I P
 | P I | I P ...), so neither build always goes first and a load trend or
 order effect does not push every pair the same way. The order is fixed
 per pair index in advance, not chosen at run time; five pairs start
-with the instrumented build and four with the passthrough one, an
-imbalance of one pair that the min–max range would expose. Each pair runs that cell's full warm-up and operation
+with the instrumented build and four with the passthrough one. This
+imbalance of one pair is accepted and disclosed; the min–max range
+cannot reveal an association with execution order, so order effects are
+checked by reporting each pair's ratio with its pair index and starting
+build (§11). Each pair runs that cell's full warm-up and operation
 count (§8.1–§8.3) once per build, from the same restored pristine
 state and input trace (§2.1). 9 is not a new number invented for this
 check: it is §8.4's own frozen repetition count, and its confidence
@@ -538,7 +541,8 @@ size), columns: the median and min–max range, across repetitions, of
 excluded by §5's overhead bound (fail, inconclusive, or exhausted pair)
 keeps its row, marked with its reason and no verdict; every §5
 instrumented/passthrough comparison outcome, with its 9 overhead
-ratios, is tabulated for the gated cells. When exclusions dominate, the
+ratios, each reported with its pair index and which build ran first, is
+tabulated for the gated cells. When exclusions dominate, the
 tables state that write-path conclusions are unavailable.
 If §7 ran, its module breakdown is a separate, clearly labeled secondary
 table.
