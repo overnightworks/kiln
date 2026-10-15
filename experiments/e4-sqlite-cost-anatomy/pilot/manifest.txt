@@ -1,3 +1,0 @@
-binary_sha256 = "14409e46c3c3ee71438f2680b796a0e8b199242c4fc85b08a0c0cc0a33bd7802"
-rustc_version = "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
-sqlite_version = "3.53.2"
