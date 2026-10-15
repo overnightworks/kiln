@@ -93,16 +93,42 @@ constructs it cannot map to this table — arbitrary external I/O inside a
 transaction, unbounded recursion, reflection, anything whose effect on state
 cannot be pinned down by the node kinds above — does not partially
 translate the function. It refuses the whole transaction function, with a
-declared reason, and that function is treated as unknown (class 4, §3) in
-its entirety. Partial translation would let an untranslatable side effect
-hide inside an apparently-analyzed function; a whole-function refusal cannot.
+declared reason, and the compiled program does not include it: refused
+source was never turned into IR, so it cannot execute under any class,
+including class 4. Class 4 (§3) is reserved for a function the front end
+*did* translate into IR, whose footprint the compiler simply cannot pin
+down statically (navigational code, most often) — a representable
+transaction with an unknown footprint, not an unrepresentable one. Partial
+translation would let an untranslatable side effect hide inside an
+apparently-analyzed function; a whole-function refusal cannot.
 
-**The source-to-IR boundary.** Each front end — the Rust-macro front end,
-a Django or TypeORM extractor for E1, any future front end (§11) — commits
-to emitting only nodes from this table, or refusing translation of the
-entire transaction function it was asked to translate. There is no partial
-or best-effort translation: a front end either produces IR the compiler can
-analyze under §3, or it does not produce IR for that function at all.
+**The source-to-IR boundary.** This applies uniformly to every front end —
+the Rust-macro front end, a Django or TypeORM extractor for E1, any future
+front end (§11): each either emits only nodes from the table above for a
+given transaction function, or refuses that whole function per the rule
+above. No front end does partial or best-effort translation.
+
+### 2.2 Reference meaning
+
+Every oracle this document and `docs/experiments.md` rely on — E1's
+lowering audit, E2's elementwise comparison, E3's checker, and
+`docs/verification.md`'s differential tests — interprets the IR against
+exactly this reference meaning; none of them may read a node kind above
+differently from this paragraph.
+
+- **Arithmetic** is over checked integers of the column's or argument's
+  declared width. Overflow aborts the transaction unless the value is
+  covered by a declared `bound` (the Constraint node kind above), which
+  clamps to the bound instead of aborting.
+- **An absent key** read by a Key read, Range read, or Dependent read is a
+  branchable absent value — a transaction may test for it and branch
+  (Control flow), the same as any other value.
+- **A Write (update or delete) targeting an absent row aborts** the
+  transaction; there is no implicit insert-on-update or no-op-on-delete.
+- **Bounded iteration proceeds in key order.**
+- **Write effects apply in program order** within one transaction.
+- **An Abort discards every effect** the transaction produced before the
+  abort, not only the operation that triggered it.
 
 ## 3. The thesis: compile-time compatibility between transaction pairs
 
@@ -127,18 +153,23 @@ is trusted for that specific pair of calls. If neither an unconditional
 proof nor a passing guard is available for a pair, that pair falls back to
 the conservative path (class 4) for that interaction.
 
-1. **Proven independent.** The two footprints cannot overlap. This can be
-   unconditional (different columns entirely) or guarded (the same column,
-   but a runtime check on the actual key arguments).
+1. **Proven independent.** The two footprints cannot overlap for any pair
+   of concurrent calls. This can be **unconditional** — a static proof
+   holding for every possible argument value, the only case eligible for
+   the whole-program lock elision of §4 — or **guarded**: the footprints
+   can collide for some argument values (the same column, different keys),
+   so instead of eliding, each call registers a keyed resource for its own
+   key, atomically at dispatch and held through commit, in the same
+   namespace §4 defines; two calls contend only when their keys are equal —
+   exactly the mechanism class 2's typed reservations use.
    *Example.* Two `update_profile(user_id, ...)` calls update the same
    table and the same columns; the compiler cannot prove their footprints
    disjoint for *every* argument, because two callers could both pass
-   `user_id = 42`. It instead emits a runtime guard: compare the two actual
-   `user_id` values at dispatch. When they differ, the pair is independent
-   and proceeds with no coordination. When they are equal — the same user's
-   two concurrent requests — the guard fails and the pair is not treated as
-   independent; it goes through the kernel (§4) like any other overlapping
-   pair.
+   `user_id = 42`. Each call instead registers a keyed resource on its own
+   `user_id` at dispatch. Two calls with different `user_id` values register
+   disjoint resources and never contend. Two calls with the same `user_id`
+   — the same user's two concurrent requests — contend on that one resource
+   and are ordered by the kernel (§4) like any other overlapping pair.
 2. **Proven compatible through typed reservations.** The footprints overlap,
    but only through an operation whose *kind* is already known to compose
    safely, independent of the specific argument values: a uniqueness check
@@ -189,20 +220,24 @@ the conservative path (class 4) for that interaction.
    conservative path (§4). It is a safety net, never a silent
    approximation.
 
-At runtime, kiln never tags one concrete call with a single fixed class.
-Each call is evaluated against every other call it currently overlaps with,
-using the pairwise proof the compiler produced for that pair; a call with no
-overlapping neighbor proceeds uncoordinated, a call whose every overlapping
-neighbor is reservation-compatible goes through the typed-reservation
-mechanisms, and a call with any ordered or unprovable neighbor enters the
-kernel of §4 together with that neighbor.
+At runtime, kiln never tags one concrete call with a single fixed class. An
+unconditionally proven call (class 1) touches no resource in the namespace
+at all — no neighbor, live or future, can ever contend with it, by the
+whole-program proof of §4. Every other call — guarded class 1, every
+class-2 reservation, and the kernel paths of classes 3 and 4 — registers in
+the namespace regardless of whether a neighbor happens to be live at that
+instant, exactly so a neighbor that arrives afterward still contends
+against it correctly; which neighbors it actually meets there, and under
+which pairwise proof, then decides whether it proceeds immediately (no live
+contending key), waits behind a tentative holder (§5), or enters the kernel
+of §4.
 
 ```mermaid
 flowchart LR
     A["Transaction functions\n+ invariants (IR, §2.1)"] --> B["Compiler: pairwise\nfootprint + compatibility\nanalysis"]
     B --> P["Per pair: unconditional\nproof, or runtime guard"]
-    P -->|independent| C1["No coordination"]
-    P -->|reservation-compatible| C2["Typed reservation\n(claim / pin / escrow)"]
+    P -->|unconditional proof| C1["No resource\n(whole-program elision)"]
+    P -->|guarded, or\nreservation-compatible| C2["Keyed resource\n(guard key / claim / pin / escrow)"]
     P -->|ordered| C3["Kernel batch:\nsummary + prefix scan"]
     P -->|no proof / guard fails| C4["Kernel fallback:\nconservative resource"]
     C1 --> R["Runtime: each concrete call\nevaluated against its\nactual live neighbors"]
@@ -251,10 +286,9 @@ acquires its resources from the same namespace, held through durable
 commit: rows, index ranges, absent-key ranges (for phantom protection),
 and the typed reservations of §3.2 (a claim, a pin, an escrow draw) are all
 resources in this one namespace, not separate mechanisms bolted on beside
-it. This is the direct fix for a gap in an earlier draft of this document:
-a class-4 call holding a range lock and a class-2 call inserting a new
-value into that same range must be able to see and order against each
-other. Concretely, an insertion that creates a new value acquires its typed
+it: a class-4 call holding a range lock and a class-2 call inserting a new
+value into that same range must see and order against each other.
+Concretely, an insertion that creates a new value acquires its typed
 claim *and* is checked against any range or absent-key resource covering
 the point it inserts into (next-key locking), so a reader's range lock and
 a writer's claim on a value inside that range conflict correctly instead of
@@ -266,19 +300,29 @@ merely detected), proves the batch equivalent to some serial execution
 inside that protected interval, and only then applies the
 associative-summary/parallel-prefix-scan evaluation from §3.3 inside it.
 
-**Lock elision is a whole-program decision, not a pairwise one.** A
-specialized path (class 1) is only permitted to skip the shared namespace
-entirely — to take no lock at all — when the compiler's proof of
-disjointness holds against every function in the compiled program that can
-touch the same declared footprint region, including whatever class 4 could
-touch there, not merely against the one neighbor a given proof happened to
-be checked against. In practice this means: if any transaction function in
-the program can reach a given row, range, or value through a navigational
-(class-4) path, that region is never eligible for class-1 elision for *any*
-function, and every access to it — specialized or not — goes through the
-namespace. Elision is sound exactly because it is decided once, per
-resource region, across the whole compiled program — never negotiated at
-runtime between two calls that happen to meet.
+**Lock elision is a whole-program decision, not a pairwise one — and it
+applies only to class 1's unconditional case.** Skipping the shared
+namespace entirely, taking no resource at all, is permitted only when the
+compiler's proof of disjointness holds against every function in the
+compiled program that can touch the same declared footprint region,
+including whatever class 4 could touch there, not merely against the one
+neighbor a given proof happened to be checked against. In practice this
+means: if any transaction function in the program can reach a given row,
+range, or value through a navigational (class-4) path, that region is never
+eligible for unconditional elision for *any* function, and every access to
+it — specialized or not — goes through the namespace. Elision is sound
+exactly because it is decided once, per resource region, across the whole
+compiled program — never negotiated at runtime between two calls that
+happen to meet.
+
+Class 1's *guarded* case, and every class-2 typed reservation (claim, pin,
+escrow draw), never elide: each registers a keyed resource in this same
+namespace — atomically at dispatch, held through commit, contended only
+against another resource with an equal key — so a guarded class-1 pair and
+a class-4 call touching the same region are ordered correctly by the same
+protocol instead of racing past each other. This is cheap, not absent:
+distinct keys never contend, but the registration itself is what makes
+composition with class 4 sound.
 
 **Unknown footprints acquire a genuinely conservative covering resource
 before access.** Class 4's conservative guess is acquired in the same
@@ -312,8 +356,10 @@ lock rather than a separate path carrying the staleness risk named above —
 which is what makes class 4 "always correct" rather than "usually
 correct." The cost accepted in return is two-phase locking's classic
 latency cost under heavy contention for classes 3 and 4, with
-deadlock-avoidance-by-ordering bookkeeping; classes 1 and 2 never take a
-lock under either proposal, so this cost is paid only where some
+deadlock-avoidance-by-ordering bookkeeping; unconditional class-1 elision
+takes no resource at all, and class-1's guarded case plus every class-2
+reservation contend only when two calls' keys collide, under either
+proposal — so this cost is paid only where some
 coordination is unavoidable regardless of kernel choice — how much of real
 traffic actually lands in classes 1–2 rather than 3–4 is a
 pairwise-eligibility question E1 does not answer (§14), not the
@@ -323,11 +369,21 @@ footprint-coverage question it does.
 
 **Atomicity.** A transaction's effects are either all applied or none are.
 Its claims, pins, escrow draws, and row writes are recorded as one durable
-commit group (§9.1): if the transaction aborts for any reason — including a
-constraint failure discovered later in the same transaction — every
-reservation it tentatively held is released atomically with its other
-effects. No reservation outcome is ever visible to another transaction
-before the transaction holding it commits.
+commit group (§9.1): if the transaction's outcome is a **known abort** —
+for any reason, including a constraint failure discovered later in the same
+transaction — every reservation it tentatively held is released atomically
+with its other effects. A tentative reservation's existence may already
+affect what a concurrent in-flight transaction can tentatively reserve (an
+escrow draw reduces the remaining allowance a concurrent draw sees before
+either commits), but no reservation outcome — committed or tentative — may
+justify a result returned to a caller before the transaction holding it
+commits. An `fsync` failure during commit (§9.2) is not, by itself, a known
+abort: it leaves the transaction's outcome **unknown**, because the record
+may already be durable despite the reported failure. No reservation is
+released on an unknown outcome; recovery resolves the outcome — to a known
+commit or a known abort — before the engine resumes serving requests on the
+affected log, and only a resolved, known abort releases the transaction's
+reservations.
 
 **Tentative versus committed reservations.** A reservation exists in one of
 two states: **tentative**, held by an in-flight, uncommitted transaction, or
@@ -340,10 +396,7 @@ outcome. If the holder commits, the waiter's claim fails with the
 uniqueness error — now justified by a real serial order, because the
 holder's commit genuinely happened first. If the holder aborts, its
 tentative claims are released and the waiter proceeds as if the value had
-never been claimed. This replaces an earlier, unsound shortcut: letting a
-transaction return "already exists" the moment it loses a merely tentative
-claim can report an error no serial execution would have produced, if the
-winning claim's holder later aborts on an unrelated constraint.
+never been claimed.
 
 **Consistency and serializable isolation (no write skew).** Class 1 is safe
 because the footprints are disjoint by proof or passing guard (§3). Class 2
@@ -368,11 +421,8 @@ the child's own insert transaction. Deleting a parent requires acquiring an
 incompatible reservation against the parent's reverse-reference set itself,
 checked under the same kernel protocol as any other resource access: the
 deletion only commits if that set is empty at the deleting transaction's
-own commit point. This closes a lifetime gap in an earlier draft, where a
-pin held only through the child's insert could disappear by the time an
-unrelated parent-deletion transaction ran, letting the parent be deleted
-despite a live, committed child — the same durable-reference requirement
-the ideation source specifies
+own commit point — the same durable-reference requirement the ideation
+source specifies
 (`docs/research/ideation/codex-astra-ideation.md:103`).
 
 **Durability.** A commit, once acknowledged, is durable. The exact storage
@@ -412,10 +462,7 @@ certificate declared it would need. A mismatch is caught **before**
 access: the instance's acquisition is refused, every tentative effect it
 has already produced is discarded, and the whole transaction restarts
 through the class-4 fallback, with the mismatching specialization flagged
-for review. Passing the simulator, the reference-model diff, or the tag
-check on a finite set of observed executions never by itself proves a
-specialization sound — only the certificate's proof does that; detection is
-a safety net for checker failure, not evidence of correctness on its own.
+for review.
 
 ## 7. Storage stance
 
@@ -434,11 +481,9 @@ support for queries outside that workload
 always go to the one log first, and an unanticipated read degrades rather
 than breaks.
 
-This section commits to indexes and views being derived and rebuildable
-from the log — it does not commit to every index being a compiled,
-parameterized incremental view in the sense §15 surveys as prior art; that
-stronger claim is a deferred hypothesis (§15), not part of the present
-architecture.
+This section's commitment stops at derived-and-rebuildable; §15 names the
+stronger incremental-view claim — every index as a compiled, parameterized
+incremental view — as a deferred hypothesis it does not adopt here.
 
 ## 8. Workload migrations
 
@@ -450,20 +495,18 @@ old compiled version keeps serving traffic. The switch to the new version is
 atomic. Rollback reuses the same switch mechanism, run backward.
 
 The architecture-level commitment here is that migrations are driven by a
-diff of two compiled programs against one shared log, not by hand-written
-ad hoc migration scripts. The precise watermark that bounds "backfilled
-from the existing log," the catch-up coordination during backfill, and the
-conditions under which rollback is actually available are named as an
-engine-phase obligation in §9.3 — they are not yet a specified protocol.
+diff of two compiled programs against one shared log, not hand-written ad
+hoc scripts; §9.3 is where the remaining obligations, and their current
+status, are named.
 
 ## 9. Engine-phase obligations
 
-Four correctness obligations belong to the engine build, not to this
-concept. Each paragraph below states the obligation, the direction this
-document commits to, and the condition under which that direction fails —
+Five correctness obligations belong to the engine build, not to this
+concept: each subsection below states the obligation, the direction this
+document commits to, and the condition under which that direction fails,
 precisely enough that no engine built against this document can honestly
-ignore it — but not the protocol itself; a builder implementing it owns
-writing that protocol down before shipping it.
+ignore it, without yet specifying the protocol itself — each subsection's
+own status line says so.
 
 ### 9.1 Publication boundary
 
@@ -512,7 +555,11 @@ device that lies about a flush: the engine cannot repair either, and
 recovery must surface the failure rather than silently skip the damaged
 record, the same truthful-flush assumption
 [SQLite's own atomic-commit documentation](https://www.sqlite.org/atomiccommit.html)
-makes for the same reason. **Status: not yet specified** — the exact extent
+makes for the same reason. Because an `fsync` failure here does not tell
+the engine whether the bytes actually reached storage, it leaves the
+transaction's commit outcome unknown rather than a known abort; §5 states
+the resulting reservation-release and recovery contract. **Status: not yet
+specified** — the exact extent
 size, the allocation and reclaim policy, and the checkpoint layout that
 make "never overwrite acknowledged bytes" concrete are engine-phase work.
 
@@ -526,16 +573,20 @@ cannot make a committed fact invalid. The chosen direction backfills by
 replaying the log up to a recorded snapshot watermark, applies new commits
 to both old and new structures during that catch-up phase, and switches at
 a barrier commit where both versions agree the new structures have caught
-up to the same log position as the old ones; migrations are classified as a
-*restriction* (a new, stricter bound, which requires validating every
-existing row before the switch) or a *relaxation* (for example lowering a
-`balance ≥ 0` bound), because a relaxation can let the new version commit
-facts the old invariant would have rejected. Rollback is available only for
-a defined window and only while the old structures keep receiving every
-commit — the rollback window is exactly "while the old structures are still
-maintained"; it becomes unavailable once a commit has occurred that the old
-invariant would reject, because rollback is not simply "switch back" once
-such a fact has committed, or once the old structures have been reclaimed.
+up to the same log position as the old ones. Two independent tests govern
+the switch, replacing any restriction/relaxation taxonomy — a changed
+invariant need not be strictly stricter or strictly looser than the old one
+(dropping `balance ≥ 0` for "balance is even," say, is neither): **forward
+validation** requires every row already committed under the old invariant
+to satisfy the new invariant before the switch is allowed to complete,
+regardless of how the new rule compares to the old one; **rollback
+availability** stays open only while every fact committed since the switch
+still satisfies the *old* invariant — the moment a post-switch commit
+produces a fact the old invariant would reject, rollback closes, whether or
+not the new rule is in any sense stricter. The rollback window is exactly
+"while the old rule still accepts everything committed since the switch,"
+never a schema-level classification decided once at migration time, and it
+closes for the same reason once the old structures have been reclaimed.
 **Status: not yet specified** — the watermark representation, the catch-up
 write path, and the exact rollback-window length and reclaim trigger are
 engine-phase work.
@@ -561,26 +612,55 @@ bounding the checker's own soundness, by formal review, a restricted
 checker language, or a meta-certificate, is engine-phase work
 (`docs/verification.md` names which mechanism, if any, is chosen).
 
+### 9.5 Liveness of tentative waits
+
+A transaction ordered behind a tentative reservation's holder (§5) must
+eventually proceed: the wait must be deadlock-free and bounded. §4's
+deadlock-freedom argument is built on canonical lock ordering over
+*exclusive* resources, where a waiter waits on one holder whose position in
+that order bounds the wait. An escrow draw is not exclusive — several
+transactions can each hold a tentative draw against the same ceiling at
+once — so a waiter behind a contended escrow is not waiting on a single
+ordered holder the way a claim or pin waiter is, and §4's argument does not,
+as written, extend to it. This document does not yet choose a direction (a
+wait budget, a priority rule, or restructuring escrow contention behind a
+single ordering point) — only the obligation: no transaction may wait on a
+tentative holder indefinitely, and no set of tentative waiters may form a
+deadlock cycle. It fails if a sequence of tentative, non-exclusive
+reservation draws can starve a waiter or form a cycle the canonical lock
+order does not prevent. **Status: not yet specified** — proving or
+disproving this is exactly what the TLA+ model of the kernel (§4) must
+settle; [issue #6](https://github.com/overnightworks/kiln/issues/6) owns it.
+
 ## 10. Exit door (operator ruling 15.10.2026)
 
 kiln commits to never locking the operator's data inside a kiln-only
-format. One **export core** — the current state as schema plus rows,
-optionally with the full committed history as extra tables — feeds a set of
-thin **adapters**, one per target format. SQLite and Parquet are the first
-two: together they can be read by practically every other system in
-practice (SQLite as a single queryable file most tools can open directly,
-Parquet as the common interchange format analytics engines already read).
-Postgres, MySQL, and MongoDB adapters are thin follow-ons on the same core.
-All data transfers in every case. A unique, foreign-key, or numeric-bound
-invariant converts to the equivalent SQL constraint (`UNIQUE`, `FOREIGN
-KEY`, `CHECK`) in a target that supports it. An invariant with no SQL
-equivalent — the doctors-on-call example of §3, "at least one must stay on
-call" — cannot become a constraint in any of these targets; it travels as a
-documented hint attached to the exported schema (plain language naming the
-invariant) rather than being silently dropped or silently assumed enforced
-by a target that does not actually check it. Compiled transaction functions
-do not export: they are application code and stay with the application;
-only the data and the invariants that can be expressed travel.
+format. One **export core** — the current state as schema plus rows, at one
+pinned committed version across every table (never a mix of two tables at
+two different committed versions, which could describe a database state
+that never actually existed) — feeds a set of thin **adapters**, one per
+target format. SQLite and Parquet are the first two: together they can be
+read by practically every other system in practice (SQLite as a single
+queryable file most tools can open directly, Parquet as the common
+interchange format analytics engines already read). Postgres, MySQL, and
+MongoDB adapters are thin follow-ons on the same core. All data transfers in
+every case, through a lossless type mapping for every column — an adapter
+that cannot represent a column's exact value range or precision losslessly
+in its target is a gap in that adapter, not a silent narrowing. A unique,
+foreign-key, or numeric-bound invariant converts to the equivalent SQL
+constraint (`UNIQUE`, `FOREIGN KEY`, `CHECK`) in a target that enforces it.
+Every invariant the target does **not** enforce — because the target has no
+SQL-equivalent construct at all (the doctors-on-call example of §3, "at
+least one must stay on call") or because the target enforces no constraints
+of any kind even when one is expressible (Parquet, for example) — travels
+as a documented hint attached to the exported schema (plain language naming
+the invariant), never silently dropped and never silently assumed enforced.
+Compiled transaction functions do not export: they are application code and
+stay with the application; only the data and the invariants that can be
+expressed travel. The optional full committed history, when included as
+extra tables, is a convenience export, not held to this same completeness
+guarantee; only the pinned current-state export is what this section
+commits to.
 
 ## 11. Options, not commitments (operator ruling 15.10.2026)
 
@@ -595,7 +675,15 @@ later, not commitments this document makes:
   a Rust macro or a Django/TypeORM extraction does. The one carve-out is an
   *interactive*, multi-statement SQL transaction — several round trips where
   the client decides what to send next — which cannot be analyzed as one
-  compiled transaction function and takes the slow path of §7 instead.
+  compiled transaction function. A read-only interactive transaction takes
+  the slow path of §7 instead. A read-write interactive transaction is
+  supported only if it declares its full table set at `BEGIN`, covering
+  every resource it might touch up front under the kernel of §4: §4's
+  lock-expansion restart discards tentative effects and restarts from
+  scratch, which is unsound once the client has already observed an
+  intermediate result over an earlier round trip. A read-write interactive
+  transaction that does not declare its table set at `BEGIN` is
+  unsupported. This option, declared or not, stays deferred.
 - **Binary SQLite file compatibility — rejected.** Writing kiln's data
   directly in SQLite's own on-disk format was considered and rejected: it
   would make a SQLite file, not the log, a second thing every adapter and
@@ -604,20 +692,29 @@ later, not commitments this document makes:
 
 ## 12. Performance goal (operator ruling 15.10.2026)
 
-kiln's target is not only to win at scale; it must also not lose to SQLite
-on small data, where SQLite is usually unbeatable because there is almost
-nothing to coordinate and nothing to parallelize. This is measured later by
-a benchmark harness run against SQLite at both small and large data sizes;
-the harness itself is engine-phase work this document does not specify
-further.
+kiln's target is to win at scale *and* to beat SQLite on small data too,
+where SQLite is usually unbeatable because there is almost nothing to
+coordinate and nothing to parallelize. This is measured later by a
+benchmark harness run against SQLite at both small and large data sizes,
+using SQLite's own cached prepared statements (never re-preparing on every
+call), `synchronous = FULL`, WAL mode, and transaction boundaries identical
+to kiln's own; the harness itself is engine-phase work this document does
+not specify further.
 
 A win at small sizes is plausible where kiln's closed-world compilation
-removes work SQLite still pays on every call: no SQL text to parse or
-compile to bytecode at request time, because the transaction function is
-already compiled; a lookup SQLite would answer by walking a B-tree index can
-instead be answered by a view §7 keeps current on every write; and a group
-of writers committing in the same short window can share one `fsync` (group
-commit) instead of each paying a full sync round trip alone.
+removes work a well-tuned SQLite still pays on every call even with a
+statement prepared once and reused — preparation itself is not the honest
+saving, since SQLite amortizes it across calls the same way kiln does. The
+honest saving is bytecode interpretation of that prepared statement, and
+generic row decoding into SQLite's dynamically typed column values: kiln's
+transaction function is already compiled to the specific columns it
+touches, with no bytecode interpreter or generic decode step in between
+([SQLite's C interface documentation](https://www.sqlite.org/cintro.html)
+describes prepared-statement compilation and reuse directly). Separately, a
+lookup SQLite would answer by walking a B-tree index can instead be
+answered by a view §7 keeps current on every write; and a group of writers
+committing in the same short window can share one `fsync` (group commit)
+instead of each paying a full sync round trip alone.
 
 Parity, not a win, is the realistic ceiling on one path: a single writer
 committing one transaction at a time, each acknowledged only after its own
@@ -631,14 +728,17 @@ overhead on top of it.
 kiln's bet dies on either of these:
 
 - **Navigational transactions dominate.** If most frequency-weighted
-  transaction instances fall into E1's **unknown** footprint category
-  (`docs/experiments.md`, §"E1" — not static, one-hop, or domain-bounded;
-  this is E1's own measured category, stated independently of the pairwise
-  execution classes of §3, not a restatement of class 4), the compiler has
-  nothing to classify and kiln degenerates into a deterministic database
-  with an expensive compiler attached — "Calvin with extra steps" — and
-  loses on latency to a conventional engine. E1's 70%/50% coverage
-  thresholds are exactly this kill criterion made numeric and falsifiable.
+  transaction instances fail E1's gating predicate — a footprint that is
+  **static or one-hop, as defined by the IR** (§2.1; `docs/experiments.md`,
+  §"E1" — stated independently of the pairwise execution classes of §3, not
+  a restatement of class 4; domain-bounded and partition-confined coverage
+  are reported separately and do not count toward this predicate), the
+  compiler has nothing to classify and kiln degenerates into a
+  deterministic database with an expensive compiler attached — "Calvin with
+  extra steps" — and loses on latency to a conventional engine. E1's
+  70%/50% coverage thresholds are exactly this gating predicate made
+  numeric and falsifiable; `docs/experiments.md` states the full verdict
+  rules this threshold is checked against.
 - **Transaction summaries do not stay compact.** If the associative
   summaries class 3 needs (§3.3) grow without bound for realistic
   contended-state transaction families — or if most such families simply
@@ -682,8 +782,10 @@ mutant-rejection check are defined in `docs/experiments.md`, section "E3".
 
 ## 15. Prior art, confidence, and the closest collisions
 
-Confidence levels below are the prior-art report's own, not restated
-stronger or weaker here. Where a conclusion says no matching system was
+Confidence levels below are the prior-art report's own. Where this document
+narrows one of the report's own levels — as in the Amato row below — that
+narrowing is stated explicitly, with the reasoning that drove it, never
+silently changed. Where a conclusion says no matching system was
 found, it reports a **bounded search** of the cited notes, not a universal
 claim that no such system exists anywhere.
 
@@ -692,9 +794,20 @@ claim that no such system exists anywhere.
 | Part of the thesis | Closest prior art | Where a bounded search stops | Confidence it is still open |
 |---|---|---|---|
 | Compiling a whole engine from a known workload (§1, §3) | **Bespoke OLAP** (2026) — LLM-agent pipeline synthesizing a whole OLAP engine from a workload contract; **Beta** — already compiles whole database application programs and specializes their execution ([arXiv 1807.09887](https://arxiv.org/abs/1807.09887)) | Bespoke OLAP is OLAP-only, single-threaded, in-memory, explicitly leaves transactions/concurrency as future work. Beta compiles and specializes, but the search found no certified algebra in it for parallel evaluation of guarded ACID batches — it is a closer collision for "compile a whole engine from known code" than Bespoke OLAP, not a match for kiln's class-3 bet | Medium (`prior-art-report.md`; Beta per `docs/research/ideation/codex-astra-ideation.md`) |
-| Static, build-time read/write-set derivation driving the compiled schedule (§3, §4) | **Amato, Giannotti & Mainetto, VLDB 1993** — abstract interpretation automatically derives an approximate read/write set from transaction source and feeds a scheduler implementing conservative two-phase locking: the closest collision in shape for §3+§4 combined, three decades before any system below ([VLDB 1993 PDF](https://www.vldb.org/conf/1993/P405.PDF)); **Calvin lineage** (Calvin, Bohm, Aria, Caracal) — derive footprints by declaration or by one runtime pass, never by static analysis of compiled code; **VoltDB** — abort-free, but by partitioning the schema and serializing cross-partition work through a coordinator; **IC3** (SIGMOD 2016) — pairs static workload analysis with runtime dependency tracking, reporting ~434K TPS on single-warehouse TPC-C on 64 cores ([NYU TR2016-981](https://cs.nyu.edu/media/publications/TR2016-981.pdf)) | Amato 1993 is a pure formal result: a correctness proof that the abstract read/write set safely over-approximates the exact one, two hand-worked examples, no analyzer or scheduler ever implemented, no benchmark, no measured analysis cost or concurrency gain. Its own closing questions — what the analysis costs, and whether the information it gathers is actually useful for realistic optimizations — are exactly what E1 measures, thirty years later; the line stopped after a 1997 follow-on and was never picked up by the Calvin/Bohm/Aria lineage. No system in the search derives read/write sets purely as a function of a transaction's parameters, at build time, with no runtime dependency tracking, *and measured on real code*; among the implemented systems, IC3 is the closest mechanism match (static analysis plus a scheduler) but refines a fixed, pre-known set of stored-procedure-like programs at runtime rather than deriving the schedule once at build time | Medium — plausible, not exhaustively proven (`notes/static_analysis_deterministic_scheduling.md`); narrowed from a higher confidence because a 1993 theoretical precedent for exactly this combination exists and was never carried to measurement |
+| Static, build-time read/write-set derivation driving the compiled schedule (§3, §4) | **Amato, Giannotti & Mainetto, VLDB 1993** — abstract interpretation automatically derives an approximate read/write set from transaction source and feeds a scheduler implementing conservative two-phase locking: the closest collision in shape for §3+§4 combined, three decades before any system below ([VLDB 1993 PDF](https://www.vldb.org/conf/1993/P405.PDF)); **Calvin lineage** (Calvin, Bohm, Aria, Caracal) — derive footprints by declaration or by one runtime pass, never by static analysis of compiled code; **VoltDB** — abort-free, but by partitioning the schema and serializing cross-partition work through a coordinator; **IC3** (SIGMOD 2016) — pairs static workload analysis with runtime dependency tracking, reporting ~434K TPS on single-warehouse TPC-C on 64 cores ([NYU TR2016-981](https://cs.nyu.edu/media/publications/TR2016-981.pdf)) | Amato 1993 is a pure formal result: a correctness proof that the abstract read/write set safely over-approximates the exact one, two hand-worked examples, no analyzer or scheduler ever implemented, no benchmark, no measured analysis cost or concurrency gain. Its own closing questions — what the analysis costs, and whether the information it gathers is actually useful for realistic optimizations — are the questions kiln's experiments are aimed at, thirty years later, though not by E1 alone: E1 measures only footprint coverage (§14), not analysis cost or realized optimization benefit (see the evidence map below). The line stopped after a 1997 follow-on and was never picked up by the Calvin/Bohm/Aria lineage. No system in the search derives read/write sets purely as a function of a transaction's parameters, at build time, with no runtime dependency tracking, *and measured on real code*; among the implemented systems, IC3 is the closest mechanism match (static analysis plus a scheduler) but refines a fixed, pre-known set of stored-procedure-like programs at runtime rather than deriving the schedule once at build time | Medium — plausible, not exhaustively proven (`notes/static_analysis_deterministic_scheduling.md`); narrowed from a higher confidence because a 1993 theoretical precedent for exactly this combination exists and was never carried to measurement |
 | Invariants replacing isolation levels (§3.2, §4) | **O'Neil's escrow method**, 1986, general database concurrency, predating geo-replication as a research focus entirely ([EscrowTM PDF](https://www.cs.umb.edu/~poneil/EscrowTM.pdf)); **Doppel**, OSDI 2014, explicitly single-node multicore contention ([Doppel PDF](https://pdos.csail.mit.edu/papers/doppel:osdi14.pdf)); Homeostasis (2015), I-confluence, IPA/Hamsaz/Katara (2015–2022); production escrow-style updates shipped in Microsoft's Extensible Storage Engine ([`JetEscrowUpdate`](https://learn.microsoft.com/en-us/windows/win32/extensible-storage-engine/jetescrowupdate-function)) | A bounded search (`notes/invariant_driven_coordination.md`) found every *fully automatic* system after Doppel confined to geo-replicated or CRDT-store settings, evaluated as research prototypes. That is narrower than "every system in this lineage targets geo-replication": the lineage's origin (O'Neil) predates geo-replication as a concern, its clearest single-node multicore precedent (Doppel) is not geo-replicated, and its one confirmed production deployment (ESE) ships in a non-replicated storage engine. What the search did not find is kiln's combination — single-node, build-time-compiled, fully automatic discovery of the reservation type — not an absence of non-geo-replicated invariant-driven coordination generally | Medium-high (`notes/invariant_driven_coordination.md`) |
 | Migration as a diff of two compiled workloads (§8, §9.3) | Schema-diff tooling (F1, CockroachDB, Atlas) and schema-less log-replay (XTDB, Datomic); Noria's "fast migrations" by reusing dataflow state | A bounded search found no source that diffs two compiled query/transaction sets to derive a migration; the schema-diff and log-replay camps were not found connected to per-query incremental materialization | Medium-high (`notes/migrations_and_combined_systems.md`) |
+
+**What each experiment is evidence for, stated once.** E1 measures only
+footprint coverage (§14; `docs/experiments.md`, §"E1") — not analysis cost,
+not optimization utility, and not any outcome integrated under the kernel
+of §4. E2 measures summary compactness and throughput for class-3 families
+(§14; `docs/experiments.md`, §"E2"). E3 measures automatic-synthesis
+coverage and checker soundness (§14; `docs/experiments.md`, §"E3"). The
+integrated protocol running on real application code — footprint
+derivation, typed reservations, and batch summaries composed together under
+one logical-resource protocol — is engine-phase work; none of E1, E2, or E3
+measures it, individually or combined.
 
 **Deferred hypotheses — named, not adopted:**
 
@@ -728,31 +841,24 @@ hot spot); it does not remove the *dynamic* serialization strict 2PL
 imposes once two live batches actually conflict, and this document does
 not claim otherwise.
 
-**The narrowed candidate contribution.** After the corrections above, and
-against Amato, Giannotti & Mainetto's 1993 precedent for "static analysis
-plus a two-phase-locking scheduler" (above), the candidate contribution
-narrows further than "static analysis plus a lock scheduler" in general —
-that combination is three decades old. What remains is **checked synthesis
-of compact ordered transaction summaries (§3.3, tested by E2 and E3) plus
-*parametric* per-call footprint derivation, typed reservations, and ordered
-batch summaries under one logical-resource protocol, measured on real code
-rather than argued only by a correctness proof (§3, tested by E1)** — not
-the full six-part combination surveyed above, and not a claim that
-invariant-driven coordination itself is novel. Confidence in this narrowed
-claim is no higher than `notes/static_analysis_deterministic_scheduling.md`'s
-own phrase for it: plausible, not exhaustively proven. The two sharpest named
-collisions for the riskiest part of that narrowed claim (class 3, §3.3,
-E2/E3) are, in order: **TransactionMerger** (submitted January 2026), which
-already merges contended transactions and reconstructs per-caller results
-including allocated IDs — but its merged procedures are developer-written,
-not compiler-synthesized, so kiln's claim narrows further to *automatic
-discovery* of the compact summary, which TransactionMerger does not attempt
-(`docs/research/ideation/codex-astra-ideation.md`); and **VoltDB**, the
-closest mechanism match for abort-free determinism generally, which
-sidesteps the hard problem by requiring the developer to declare a
-partition key rather than deriving one, and serializes exactly the
-cross-partition case this document's §4 kernel is chosen to avoid
-serializing statically (though not dynamically, per the paragraph above).
+**The narrowed candidate contribution.** What remains, after the collisions
+named above, is **checked synthesis of compact ordered transaction
+summaries (§3.3, tested by E2 and E3) plus *parametric* per-call footprint
+derivation, typed reservations, and ordered batch summaries under one
+logical-resource protocol, measured on real code rather than argued only by
+a correctness proof (§3, tested by E1)** — not the full six-part
+combination surveyed above, and not a claim that invariant-driven
+coordination itself is novel. Confidence in this narrowed claim is no
+higher than
+`notes/static_analysis_deterministic_scheduling.md`'s own phrase for it:
+plausible, not exhaustively proven. The sharpest named collision for the
+riskiest part of it (class 3, §3.3, E2/E3) is **TransactionMerger**
+(submitted January 2026): it already merges contended transactions and
+reconstructs per-caller results including allocated IDs, but its merged
+procedures are developer-written, not compiler-synthesized, so kiln's claim
+narrows further to *automatic discovery* of the compact summary, which
+TransactionMerger does not attempt
+(`docs/research/ideation/codex-astra-ideation.md`).
 
 ## 16. Open questions for the critic
 
@@ -761,20 +867,18 @@ serializing statically (though not dynamically, per the paragraph above).
    whole compiled program — actually sound for class 3's associative-
    summary evaluation, or does holding locks through the parallel-prefix-
    scan computation reintroduce coordination the mechanism was meant to
-   avoid?
-2. §5's tentative/committed distinction resolves the uniqueness race named
-   in an earlier critique. Does the same ordering rule resolve every
-   escrow and pin interaction equally, or are there reservation types where
-   "wait on the tentative holder's outcome" itself needs a bound to avoid
-   unbounded waiting?
-3. §9 now names four obligations as engine-phase, not yet specified
-   (including §9.4's checker-soundness bound, added this round). Are there
-   others this document should flag the same way before a builder starts,
-   rather than discovering them mid-build?
-4. §9.3's migration classification (restriction vs. relaxation) assumes a
-   migration can always be sorted into one of those two buckets relative to
-   the old invariant. Does that hold for a migration that changes an
-   invariant in a way that is incomparable — neither strictly stricter nor
-   strictly looser — to the old one?
-5. Is there a cheaper experiment than E1/E2/E3 that could kill the thesis
-   faster, which this document does not name?
+   avoid? **Still open** — unresolved; the TLA+ model of the kernel
+   ([issue #6](https://github.com/overnightworks/kiln/issues/6)) is where
+   this gets settled, and has not run yet.
+2. §9 now names five obligations as engine-phase, not yet specified
+   (including §9.4's checker-soundness bound and §9.5's liveness-of-waits
+   bound, both added across critique rounds). Are there others this
+   document should flag the same way before a builder starts, rather than
+   discovering them mid-build? **Still open, recurring** — this round's
+   answer is §9.5 itself, found by asking exactly this question; a later
+   critique round may find another, so the question stays open rather than
+   closing once.
+3. Is there a cheaper experiment than E1/E2/E3 that could kill the thesis
+   faster, which this document does not name? **Still open** — no cheaper
+   falsifier has been proposed or ruled out; stands as a standing question
+   for the critic.

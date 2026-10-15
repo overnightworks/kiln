@@ -5,8 +5,8 @@ instead of a database that defends itself at runtime against an unknown set
 of queries, kiln assumes one application owns the database and its complete
 set of queries, transactions, and invariants is known when the engine is
 built — so a compiler, not a runtime lock manager, decides at build time
-which transactions can run in parallel, which need a typed reservation, and
-which need to stay fully ordered.
+which transactions need no range or table resource at all, which need only
+a small keyed or typed reservation, and which need to stay fully ordered.
 
 kiln is in its research phase: no engine exists yet. The current work is the
 concept, its prior-art record, and the three experiments (E1, E2, E3) that
