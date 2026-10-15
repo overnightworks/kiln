@@ -17,9 +17,11 @@
 //! use (§2.1, "bounded iteration"). Constraints are schema declarations
 //! only: no function body can state one (D1).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
-use crate::identifiers::{AbortName, ColumnName, FunctionName, ParameterName, TableName};
+use crate::identifiers::{
+    AbortName, ColumnName, FunctionName, IndexName, ParameterName, TableName,
+};
 
 /// A literal value a row's column, a call's argument, or a response can hold.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -110,6 +112,19 @@ pub struct ForeignKey {
     pub references: TableName,
 }
 
+/// A secondary index (D1): the rows of `table` ordered by the values they hold
+/// in `columns`, in that order, ties broken by primary key. A row lacking any
+/// of the columns is not in the index. `unique` only declares the index's
+/// intent; a unique constraint is a separate declaration and an index enforces
+/// nothing (D2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Index {
+    pub name: IndexName,
+    pub table: TableName,
+    pub columns: Vec<ColumnName>,
+    pub unique: bool,
+}
+
 /// How a check constraint compares a row's column with its operand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Comparison {
@@ -171,6 +186,7 @@ pub struct Schema {
     pub unique_constraints: Vec<UniqueConstraint>,
     pub foreign_keys: Vec<ForeignKey>,
     pub check_constraints: Vec<CheckConstraint>,
+    pub indexes: Vec<Index>,
 }
 
 impl Schema {
@@ -191,6 +207,13 @@ impl Schema {
                     .iter()
                     .find(|candidate| &candidate.name == column)
             })
+    }
+
+    /// The declared index named `name`, or `None` if the schema declares none.
+    pub fn index(&self, name: &IndexName) -> Option<&Index> {
+        self.indexes
+            .iter()
+            .find(|candidate| &candidate.name == name)
     }
 
     fn has_table(&self, table: &TableName) -> bool {
@@ -238,6 +261,26 @@ impl Schema {
             };
             if !constrained.kind.holds_kind_of(&constraint.operand) {
                 return Err(SchemaError::CheckOperandTypeMismatch(constraint.clone()));
+            }
+        }
+        self.validate_indexes()
+    }
+
+    fn validate_indexes(&self) -> Result<(), SchemaError> {
+        let mut names = HashSet::new();
+        for index in &self.indexes {
+            if index.columns.is_empty() {
+                return Err(SchemaError::IndexWithoutColumns(index.clone()));
+            }
+            let all_declared = index
+                .columns
+                .iter()
+                .all(|column| self.column(&index.table, column).is_some());
+            if !all_declared {
+                return Err(SchemaError::UnknownIndexTarget(index.clone()));
+            }
+            if !names.insert(&index.name) {
+                return Err(SchemaError::DuplicateIndexName(index.name.clone()));
             }
         }
         Ok(())
@@ -297,6 +340,12 @@ pub enum SchemaError {
     /// A check constraint compares its column with an operand of the other
     /// type (integer or text), so the comparison would not depend on the data.
     CheckOperandTypeMismatch(CheckConstraint),
+    /// An index names a table or a column the schema does not declare.
+    UnknownIndexTarget(Index),
+    /// An index declares no column, so it would order nothing.
+    IndexWithoutColumns(Index),
+    /// Two indexes share a name, so a read could not say which it means.
+    DuplicateIndexName(IndexName),
 }
 
 /// A position in a function's body that a later [`Condition`] or [`Expr`]
@@ -396,7 +445,24 @@ pub enum Effect {
         bound: Expr,
         into: Slot,
     },
-    /// Run `body` once for each row `source` bound, in key order, binding
+    /// Read every row of `index`'s table whose indexed values, taken in the
+    /// index's column order, lie in `[start, end]` (one bound per indexed
+    /// column, compared lexicographically), in index order with ties broken
+    /// by primary key, binding the matched sequence to `into` exactly as
+    /// [`Effect::ReadRange`] does: empty if `start` sorts after `end` or
+    /// nothing matches, and aborting past `bound` (`docs/concept.md` §2.2).
+    ///
+    /// The log records one entry for the index read itself; rows reached
+    /// from the result are read by ordinary [`Effect::Read`]s.
+    ReadIndexRange {
+        index: IndexName,
+        start: Vec<Expr>,
+        end: Vec<Expr>,
+        bound: Expr,
+        into: Slot,
+    },
+    /// Run `body` once for each row `source` bound, in the order the read bound
+    /// them, binding
     /// the current row to `row` so the body's own reads, writes, and
     /// projections can use it (§2.1, "bounded iteration"; `docs/concept.md`
     /// §2.2 D6, "bounded iteration proceeds in key order").

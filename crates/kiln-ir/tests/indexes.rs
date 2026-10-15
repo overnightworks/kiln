@@ -63,7 +63,11 @@ fn person(id: i64, last: &str, age: i64) -> RowSpec {
     (
         "people",
         id,
-        vec![("id", integer(id)), ("last", text(last)), ("age", integer(age))],
+        vec![
+            ("id", integer(id)),
+            ("last", text(last)),
+            ("age", integer(age)),
+        ],
     )
 }
 
@@ -122,12 +126,7 @@ fn visited_ids(execution: &Execution) -> Vec<i64> {
         .collect()
 }
 
-fn ids_visited_in(
-    index: &str,
-    start: Vec<Value>,
-    end: Vec<Value>,
-    store: &Store,
-) -> Vec<i64> {
+fn ids_visited_in(index: &str, start: Vec<Value>, end: Vec<Value>, store: &Store) -> Vec<i64> {
     let execution = run_effects(
         vec![
             index_range_read(index, start, end, 10),
@@ -274,7 +273,12 @@ mod kiln_ir_66 {
             ("people", 2, vec![("id", integer(2)), ("last", text("a"))]),
         ]);
 
-        let visited = ids_visited_in("by_age", vec![integer(i64::MIN)], vec![integer(i64::MAX)], &store);
+        let visited = ids_visited_in(
+            "by_age",
+            vec![integer(i64::MIN)],
+            vec![integer(i64::MAX)],
+            &store,
+        );
 
         assert_eq!(visited, vec![1]);
     }
@@ -299,7 +303,12 @@ mod kiln_ir_67 {
             let program = program_with_schema(
                 indexed_schema(),
                 vec![],
-                vec![index_range_read("by_last", vec![text(start)], vec![text(end)], 10)],
+                vec![index_range_read(
+                    "by_last",
+                    vec![text(start)],
+                    vec![text(end)],
+                    10,
+                )],
                 branch_on_range_present(),
             );
             let execution = run_ok(&program, &call_under_test(vec![]), &store);
@@ -368,7 +377,12 @@ mod kiln_ir_69 {
     fn commits_when_the_matches_equal_the_bound() {
         let store = people_store(&[(1, "a", 1), (2, "a", 1)]);
         let execution = run_effects(
-            vec![index_range_read("by_last", vec![text("a")], vec![text("a")], 2)],
+            vec![index_range_read(
+                "by_last",
+                vec![text("a")],
+                vec![text("a")],
+                2,
+            )],
             &store,
         );
 
@@ -379,7 +393,12 @@ mod kiln_ir_69 {
 mod kiln_ir_70 {
     use super::*;
 
-    fn index_entry(index: &str, columns: &[&str], start: Vec<Value>, end: Vec<Value>) -> AccessLogEntry {
+    fn index_entry(
+        index: &str,
+        columns: &[&str],
+        start: Vec<Value>,
+        end: Vec<Value>,
+    ) -> AccessLogEntry {
         AccessLogEntry {
             table: table("people"),
             kind: AccessKind::IndexRangeRead,
@@ -398,14 +417,24 @@ mod kiln_ir_70 {
         let store = people_store(&[(1, "m", 1)]);
         let logged_for = |start: &str, end: &str| {
             run_effects(
-                vec![index_range_read("by_last", vec![text(start)], vec![text(end)], 10)],
+                vec![index_range_read(
+                    "by_last",
+                    vec![text(start)],
+                    vec![text(end)],
+                    10,
+                )],
                 &store,
             )
             .access_log
         };
 
         let expected = |start: &str, end: &str| {
-            vec![index_entry("by_last", &["last"], vec![text(start)], vec![text(end)])]
+            vec![index_entry(
+                "by_last",
+                &["last"],
+                vec![text(start)],
+                vec![text(end)],
+            )]
         };
         assert_eq!(logged_for("a", "z"), expected("a", "z"));
         assert_eq!(logged_for("a", "b"), expected("a", "b"));
@@ -439,13 +468,23 @@ mod kiln_ir_70 {
     fn keeps_the_entry_when_the_call_aborts_on_the_bound() {
         let store = people_store(&[(1, "a", 1), (2, "a", 1)]);
         let execution = run_effects(
-            vec![index_range_read("by_last", vec![text("a")], vec![text("a")], 1)],
+            vec![index_range_read(
+                "by_last",
+                vec![text("a")],
+                vec![text("a")],
+                1,
+            )],
             &store,
         );
 
         assert_eq!(
             execution.access_log,
-            vec![index_entry("by_last", &["last"], vec![text("a")], vec![text("a")])]
+            vec![index_entry(
+                "by_last",
+                &["last"],
+                vec![text("a")],
+                vec![text("a")]
+            )]
         );
     }
 }
@@ -481,7 +520,12 @@ mod kiln_ir_71 {
         let store = people_store(&[(1, "a", 1), (2, "a", 1)]);
 
         let kinds = kinds_of(
-            vec![index_range_read("by_last", vec![text("a")], vec![text("a")], 10)],
+            vec![index_range_read(
+                "by_last",
+                vec![text("a")],
+                vec![text("a")],
+                10,
+            )],
             &store,
         );
 
@@ -500,7 +544,11 @@ mod kiln_ir_71 {
             &store,
         );
 
-        let kinds: Vec<_> = execution.access_log.iter().map(|entry| entry.kind.clone()).collect();
+        let kinds: Vec<_> = execution
+            .access_log
+            .iter()
+            .map(|entry| entry.kind.clone())
+            .collect();
         let point_keys: Vec<_> = execution
             .access_log
             .iter()
@@ -511,7 +559,11 @@ mod kiln_ir_71 {
             .collect();
         assert_eq!(
             kinds,
-            vec![AccessKind::IndexRangeRead, AccessKind::PointRead, AccessKind::PointRead]
+            vec![
+                AccessKind::IndexRangeRead,
+                AccessKind::PointRead,
+                AccessKind::PointRead
+            ]
         );
         assert_eq!(point_keys, vec![integer(1), integer(2)]);
     }

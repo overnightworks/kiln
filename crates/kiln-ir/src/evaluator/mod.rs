@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 
 use crate::call::Call;
-use crate::identifiers::{AbortName, ColumnName, ParameterName, TableName};
+use crate::identifiers::{AbortName, ColumnName, IndexName, ParameterName, TableName};
 use crate::ir::{
     CheckConstraint, ForeignKey, Parameter, Program, Row, SchemaError, Slot, UniqueConstraint,
     Value,
@@ -181,6 +181,7 @@ pub enum AccessedColumns {
 pub enum AccessKind {
     PointRead,
     RangeRead,
+    IndexRangeRead,
     Insert,
     Update,
     Delete,
@@ -193,7 +194,15 @@ pub enum AccessKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccessTarget {
     Point(Value),
-    Range { start: Value, end: Value },
+    Range {
+        start: Value,
+        end: Value,
+    },
+    IndexRange {
+        index: IndexName,
+        start: Vec<Value>,
+        end: Vec<Value>,
+    },
 }
 
 /// Who made an access: the transaction's own effects, or the end-of-

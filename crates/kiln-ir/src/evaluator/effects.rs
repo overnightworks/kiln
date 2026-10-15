@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::identifiers::{ColumnName, TableName};
+use crate::identifiers::{ColumnName, IndexName, TableName};
 use crate::ir::{Block, Effect, Expr, Row, Slot, Terminal, Value};
 use crate::store::Store;
 
@@ -65,6 +65,25 @@ fn apply_effect(
         } => apply_read_range(
             RangeRead {
                 table,
+                start,
+                end,
+                bound,
+                into: *into,
+            },
+            ctx,
+            store,
+            bindings,
+            access_log,
+        ),
+        Effect::ReadIndexRange {
+            index,
+            start,
+            end,
+            bound,
+            into,
+        } => apply_read_index_range(
+            IndexRangeRead {
+                index,
                 start,
                 end,
                 bound,
@@ -157,15 +176,8 @@ fn apply_read_range(
         Ok(end) => end,
         Err(outcome) => return Some(outcome),
     };
-    let bound = match resolve_or_abort(range.bound, ctx, bindings) {
-        Ok(Value::Integer(bound)) => bound,
-        Ok(Value::Text(_)) => {
-            return Some(Outcome::Aborted {
-                reason: AbortReason::NonIntegerBound {
-                    table: range.table.clone(),
-                },
-            });
-        }
+    let bound = match resolve_bound(range.bound, range.table, ctx, bindings) {
+        Ok(bound) => bound,
         Err(outcome) => return Some(outcome),
     };
     access_log.push(AccessLogEntry {
@@ -179,17 +191,120 @@ fn apply_read_range(
         origin: AccessOrigin::TransactionLogic,
     });
     let rows = store.rows_in_range(range.table, &start, &end);
+    bind_within_bound(range.table, bound, rows, range.into, bindings)
+}
+
+/// Resolves a range read's bound, which counts rows and so must be an
+/// integer.
+fn resolve_bound(
+    bound: &Expr,
+    table: &TableName,
+    ctx: &CallContext,
+    bindings: &HashMap<Slot, Binding>,
+) -> Result<i64, Outcome> {
+    match resolve_or_abort(bound, ctx, bindings)? {
+        Value::Integer(bound) => Ok(bound),
+        Value::Text(_) => Err(Outcome::Aborted {
+            reason: AbortReason::NonIntegerBound {
+                table: table.clone(),
+            },
+        }),
+    }
+}
+
+/// Binds the matched `rows` to `into`, or aborts with `BoundExceeded`
+/// without binding anything if they outnumber `bound`.
+fn bind_within_bound(
+    table: &TableName,
+    bound: i64,
+    rows: Vec<Row>,
+    into: Slot,
+    bindings: &mut HashMap<Slot, Binding>,
+) -> Option<Outcome> {
     if usize::try_from(bound).map_or(true, |bound| rows.len() > bound) {
         return Some(Outcome::Aborted {
             reason: AbortReason::BoundExceeded {
-                table: range.table.clone(),
+                table: table.clone(),
                 bound,
                 matched: rows.len(),
             },
         });
     }
-    bindings.insert(range.into, Binding::Range(rows));
+    bindings.insert(into, Binding::Range(rows));
     None
+}
+
+/// An [`Effect::ReadIndexRange`]'s own fields, bundled like [`RangeRead`].
+struct IndexRangeRead<'a> {
+    index: &'a IndexName,
+    start: &'a [Expr],
+    end: &'a [Expr],
+    bound: &'a Expr,
+    into: Slot,
+}
+
+/// Reads every row in `[start, end]` of a declared index, binding them in
+/// index order to `read.into` (`Effect::ReadIndexRange`). The one log entry
+/// names the index and its bounds; no base-row access is logged for the rows
+/// it matches.
+///
+/// Panics if `read.index` is undeclared or a bound's length differs from the
+/// index's column count: static faults of the compiled program, like an
+/// unbound iteration source.
+fn apply_read_index_range(
+    read: IndexRangeRead,
+    ctx: &CallContext,
+    store: &Store,
+    bindings: &mut HashMap<Slot, Binding>,
+    access_log: &mut Vec<AccessLogEntry>,
+) -> Option<Outcome> {
+    let index = ctx
+        .schema
+        .index(read.index)
+        .unwrap_or_else(|| panic!("program declares no index named {:?}", read.index));
+    assert!(
+        read.start.len() == index.columns.len() && read.end.len() == index.columns.len(),
+        "index {:?} has {} columns but its range read gives {} start and {} end bounds",
+        read.index,
+        index.columns.len(),
+        read.start.len(),
+        read.end.len(),
+    );
+    let (start, end) = match (
+        resolve_all(read.start, ctx, bindings),
+        resolve_all(read.end, ctx, bindings),
+    ) {
+        (Ok(start), Ok(end)) => (start, end),
+        (Err(outcome), _) | (_, Err(outcome)) => return Some(outcome),
+    };
+    let bound = match resolve_bound(read.bound, &index.table, ctx, bindings) {
+        Ok(bound) => bound,
+        Err(outcome) => return Some(outcome),
+    };
+    access_log.push(AccessLogEntry {
+        table: index.table.clone(),
+        kind: AccessKind::IndexRangeRead,
+        target: AccessTarget::IndexRange {
+            index: index.name.clone(),
+            start: start.clone(),
+            end: end.clone(),
+        },
+        columns: AccessedColumns::Named(index.columns.clone()),
+        origin: AccessOrigin::TransactionLogic,
+    });
+    let rows = store.rows_in_index_range(&index.table, &index.columns, &start, &end);
+    bind_within_bound(&index.table, bound, rows, read.into, bindings)
+}
+
+fn resolve_all(
+    exprs: &[Expr],
+    ctx: &CallContext,
+    bindings: &HashMap<Slot, Binding>,
+) -> Result<Vec<Value>, Outcome> {
+    exprs
+        .iter()
+        .map(|expr| resolve_or_abort(expr, ctx, bindings))
+        .collect()
 }
 
 /// Runs `body` once for each row `source` bound, in key order, binding the
@@ -239,7 +354,9 @@ fn release_iteration_slots(row: Slot, body: &[Effect], bindings: &mut HashMap<Sl
     bindings.insert(row, Binding::Row(None));
     for effect in body {
         match effect {
-            Effect::Read { into, .. } | Effect::ReadRange { into, .. } => {
+            Effect::Read { into, .. }
+            | Effect::ReadRange { into, .. }
+            | Effect::ReadIndexRange { into, .. } => {
                 bindings.insert(*into, Binding::Row(None));
             }
             Effect::Iterate { row, body, .. } => release_iteration_slots(*row, body, bindings),

@@ -61,6 +61,36 @@ impl Store {
             .unwrap_or_default()
     }
 
+    /// Every row of `table` holding all of `columns` whose values, in that
+    /// order, lie in `[start, end]`, ordered by those values and then by
+    /// primary key — empty if `start` sorts after `end`.
+    pub fn rows_in_index_range(
+        &self,
+        table: &TableName,
+        columns: &[ColumnName],
+        start: &[Value],
+        end: &[Value],
+    ) -> Vec<Row> {
+        let mut entries: Vec<(Vec<&Value>, &Row)> = self
+            .tables
+            .get(table)
+            .into_iter()
+            .flatten()
+            .filter_map(|(_, row)| {
+                let held: Option<Vec<&Value>> = columns
+                    .iter()
+                    .map(|column| row.columns.get(column))
+                    .collect();
+                held.map(|held| (held, row))
+            })
+            .filter(|(held, _)| {
+                held.iter().copied().ge(start.iter()) && held.iter().copied().le(end.iter())
+            })
+            .collect();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries.into_iter().map(|(_, row)| row.clone()).collect()
+    }
+
     /// Whether a row of `table` other than the one at `except_key` holds
     /// `value` in `column`.
     pub(crate) fn value_held_by_another_row(

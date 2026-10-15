@@ -28,11 +28,11 @@ pub use evaluator::{
     run, AbortReason, AccessKind, AccessLogEntry, AccessOrigin, AccessTarget, AccessedColumns,
     Execution, Outcome, OverflowReason,
 };
-pub use identifiers::{AbortName, ColumnName, FunctionName, ParameterName, TableName};
+pub use identifiers::{AbortName, ColumnName, FunctionName, IndexName, ParameterName, TableName};
 pub use ir::{
     ArithmeticOp, Block, CheckConstraint, ClampDomain, Column, ColumnType, Comparison, Condition,
-    Effect, Expr, ForeignKey, Function, IntegerWidth, Parameter, ParameterType, Program, Row,
-    Schema, SchemaError, Slot, Table, Terminal, UniqueConstraint, Value,
+    Effect, Expr, ForeignKey, Function, Index, IntegerWidth, Parameter, ParameterType, Program,
+    Row, Schema, SchemaError, Slot, Table, Terminal, UniqueConstraint, Value,
 };
 pub use replay::replay;
 pub use store::Store;

@@ -76,6 +76,7 @@ fn shop_schema() -> Schema {
             orders_at_least_zero("quantity"),
             orders_at_least_zero("discount"),
         ],
+        ..Default::default()
     }
 }
 
