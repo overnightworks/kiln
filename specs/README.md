@@ -96,32 +96,33 @@ two-phase locking, admission to commit). Escrow draws are deltas, not
 overwrites: two committed draws subtract twice. There is no other abort:
 the only ways a transaction ends are commit and constraint rejection.
 
-**Escrow budgets and reservations (§4, rules 1 and 2).** `Budget(t, k)` is
-a program's statically known total draw on key `k`, the sum of its draw
+**Escrow budgets and reservations (§4, rules 1 and 2).** `Budget(t, k)` is a
+program's statically known total draw on key `k`, the sum of its draw
 amounts there; a branch counts in full whether or not it is taken, and a
 `BuyVal` makes the budget unknown, which counts as unbounded. At admission
 the transaction reserves `min(budget, committed balance)` on each of its
-escrow keys (`Reservation`). Live reservations are funded from the
-committed balance, so a transaction is admitted only while every other
-live reservation on each of its escrow keys leaves room for its own
+escrow keys (`Reservation`). Live reservations are funded from the committed
+balance, so a transaction is admitted only while every other live
+reservation on each of its escrow keys leaves room for its own
 (`EscrowBlocked`); a reservation capped at the committed balance — an
 unfundable or unknown budget — is therefore admitted only once every other
 reservation on that key has resolved, and no reservation at all is taken
-until the whole footprint, every escrow key included, can be funded. A
-draw consumes the transaction's own reservation: the balance a draw sees
+until the whole footprint, every escrow key included, can be funded. A draw
+consumes the transaction's own reservation: the balance a draw sees
 (`DrawView`) is what remains of that reservation, never the committed
 balance other holders draw from, so a transaction that does not lower the
 balance itself never fails an uncapped draw (its own `Update` can lower it
 before a draw, a valid failure) and a capped one fails only on committed
-state, exactly as the serial order "earlier holders, then this
-transaction" does. One exception, one rule (`SoleDrawHolder`, shared by
-`DrawView` and `DrawsWithinReservation`): a transaction holding a covering
-resource on the key incompatible with `DRAW` (`X`, a claim, a delete, a
-read) is the key's only draw holder and draws on its own view; that is how
-an `Update` that raised the balance in the same transaction is drawn from,
-the one case a draw exceeds the reservation. Reservations cover blind
-draws only: `BuyUnder` branches on the row's `val`, so it needs `S` beside
-`DRAW` and is ordered against every other draw on the key
+state, exactly as the serial order "earlier holders, then this transaction"
+does. One exception, one rule (`SoleDrawHolder`, shared by `DrawView` and
+`DrawsWithinReservation`): a transaction holding a covering resource on the
+key incompatible with `DRAW` (`X`, a claim, a delete, a read) is the key's
+only draw holder and draws on its own view; that is how an `Update` that
+raised the balance in the same transaction is drawn from, the one case a
+draw exceeds the reservation when draw amounts are nonnegative (every
+scenario's are; the model does not constrain the parameter). Reservations
+cover blind draws only: `BuyUnder` branches on the row's `val`, so it needs
+`S` beside `DRAW` and is ordered against every other draw on the key
 (`ConcurrentBranch`).
 
 **Admission order (§4, rule 3).** Queued transactions are ordered by
@@ -193,12 +194,12 @@ transactions.
 incompatible resources), `FootprintCovers` (above), `ReservationsFunded`
 (per key, the live reservations sum to at most the committed balance),
 `DrawsWithinReservation` (a transaction never draws more than it reserved
-unless it holds `X` on the key), `Uniqueness` (per key, committed
-successful inserts never exceed committed deletes plus one),
-`ReferentialIntegrity` (a present row's parent is present),
-`BalanceNonNegative`, `TypeOK`, and TLC's deadlock check (a state with a
-live transaction and no enabled step; `Terminating` self-loops once every
-transaction has ended).
+unless it is the key's sole draw holder, `SoleDrawHolder` in concept §4),
+`Uniqueness` (per key, committed successful inserts never exceed committed
+deletes plus one), `ReferentialIntegrity` (a present row's parent is
+present), `BalanceNonNegative`, `TypeOK`, and TLC's deadlock check (a state
+with a live transaction and no enabled step; `Terminating` self-loops once
+every transaction has ended).
 
 **Liveness, deferred.** The model has no fairness condition: `Spec` is
 `Init /\ [][Next]_Vars`, so TLC checks safety and deadlock freedom only.
