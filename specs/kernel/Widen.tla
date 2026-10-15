@@ -31,8 +31,9 @@ WidenInitDb ==
 WidenRestartedUnreached ==
   ~(widened["t1"] # {} /\ Active("t1") /\ Res("S", {3}) \in held["t1"])
 
-(* The restarted call waits for a holder of the widened resource. *)
+(* The restarted call waits for an active holder of the widened resource. *)
 WidenConflictUnreached ==
-  ~(widened["t1"] # {} /\ Queued("t1") /\ "t3" \in WaitsOn("t1"))
+  ~(widened["t1"] # {} /\ Queued("t1") /\ Active("t3") /\ Res("X", {3}) \in held["t3"]
+    /\ "t3" \in WaitsOn("t1"))
 
 ============================================================================
