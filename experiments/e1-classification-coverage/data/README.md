@@ -25,6 +25,6 @@ target/release/kiln-e1 tpcc \
   --sensitivity-out experiments/e1-classification-coverage/data/tpcc-by-id-sensitivity.jsonl
 ```
 
-Produced with the release binary of source commit `e0d4f18bea0ce2f745edd2fac9914ca4676b4062`,
-SHA-256 `fdc7490101d9c6d8a35337f025fb3836bc4b0fe70501c387df12657fc24d437c`. The
+Produced with the release binary of source commit `d1b727c902e55e62c2aef29d4a67dbf7057cb78f`,
+SHA-256 `62eaf8cee3a17f6128ecedac114397c0b8e45fd5c9442b66e47b0ea44727149a`. The
 output is deterministic, so a rebuilt binary must write identical bytes.
