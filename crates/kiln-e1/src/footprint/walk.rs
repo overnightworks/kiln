@@ -1,7 +1,7 @@
 //! Enumerates the feasible paths of a function body (Q1) and records, along
 //! each, the accesses and the reads their targets depend on.
 
-use kiln_ir::{Block, Effect, Expr, Function, ParameterName, Schema, TableName, Terminal};
+use kiln_ir::{Block, Effect, Expr, Function, ParameterName, Schema, Terminal};
 
 use super::cause::UnknownCause;
 use super::dependency::{track_access, AccessRole};
@@ -85,7 +85,7 @@ impl Walker<'_> {
                     },
                 );
             }
-            Effect::Insert { table, key, .. } => {
+            Effect::Insert { key, .. } => {
                 self.keyed_access(facts, AccessRole::InsertKey, key, &node)?;
             }
             Effect::Update { table, key, .. } | Effect::Delete { table, key } => {
