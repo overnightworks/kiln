@@ -22,6 +22,17 @@ explicitly in the relevant section.
   dependent read), driving admission under one logical-resource protocol.
 - **C3.** A measurement of how much real application transaction code admits C2.
 
+This document went through one independent review round after its first draft
+(`28c42f9`). The review found ten blocking defects — a missing research lineage for
+C1, several primary-source misreadings, two misreported numbers, and a protocol
+section that claimed more rigor than it had evidence for — and one follow-up. An
+independent verification against the primary sources confirmed, partly confirmed, or
+corrected each finding; this revision resolves every finding exactly as verified,
+widens §2 into the lineage the verification located, and adds the screening register
+and confidence levels the verification required. Primary sources for every new or
+corrected claim below were fetched and read in this revision, not carried over from
+the verification's prose.
+
 ## 1. Search protocol
 
 ### 1.1 Sources actually reachable from this session
@@ -38,16 +49,15 @@ protocol both resolve to targeted web-search queries that surface DBLP listing p
 author pages, and ACM abstract pages, followed by locating a non-paywalled copy of
 the actual paper (arXiv, an author's or university's homepage, a conference's own
 open proceedings page, or a technical-report mirror) to read in full. This is a real
-limitation on how systematic "systematic" can be here, named in §4, not papered over.
+limitation on how systematic "systematic" can be here, named in §6, not papered over.
 
 Sources used, in the order tried for each candidate: arXiv (abstract and PDF),
 author/university-hosted PDF mirrors, conference open-access proceedings (USENIX,
 VLDB.org, EuroSys, OPODIS/Dagstuhl), DBLP bibliographic pages (via search, for
-venue/year ground truth), Microsoft Learn (for the one production-API citation), and
-general web search as the discovery layer standing in for ACM DL and Google Scholar.
-Semantic Scholar was not queried through its own API; its indexed content overlaps
-heavily with what general web search already surfaces, and no query in this pass was
-run against it directly — named as a gap in §4.
+venue/year ground truth), Microsoft Learn and Microsoft Research's own publication
+pages (for production-API and Microsoft Research citations), and general web search
+as the discovery layer standing in for ACM DL and Google Scholar. Semantic Scholar
+was not queried through its own API in either pass; named as a gap in §6.
 
 ### 1.2 Venues and date range
 
@@ -89,6 +99,24 @@ Django TypeORM paper full citation venue`; `empirical study static inference rea
 write sets real world database transactions percentage coverage 2022 2023 2024`;
 direct fetch and reading of the paper's methodology and figures (§4).
 
+**Fix-pass queries** (same day, second session, resolving an independent review's
+findings against primary sources — §1.6 logs every query below with its disposition):
+direct fetch of Farzan & Nicolet's divide-and-conquer synthesis papers (PLDI 2017,
+2019, 2021) and their mechanical predecessors (Mytkowicz et al., ASPLOS 2014; Raychev,
+Musuvathi & Mytkowicz, SOSP 2015; Fedyukovich & Bodik, SYNT 2016) to open the
+loop-parallelization lineage the first pass missed entirely (§2.4); direct fetch of
+Bartoletti/Galletta/Murgia (arXiv 1905.04366), Conthereum (arXiv 2504.07280), and a
+2025 Ethereum static-conflict-analysis paper (arXiv 2507.04357) to re-check the
+blockchain static-key lineage against C2 (§3.2); re-fetch of TransactionMerger's full
+text, Beta's §7, Homeostasis's Theorem 3.8, Amato's §6, and QURO's full VLDB PDF to
+correct five primary-source misreadings (§2, §3); re-fetch of Nguyen/Niechen/
+DeCarolis/Abadi's full methodology (§3.2/§4.1) to correct two misreported numbers
+(§4); and re-fetch of the CoqSQL thesis (adam.chlipala.net) to replace a secondary
+characterization with a primary-source classification (§2.5). Two further web
+searches (Fisher & Ghuloum, PLDI 1994; Morita et al., PLDI 2007) confirmed
+bibliographic facts for candidates this pass did not open — carried as unresolved,
+§6.
+
 ### 1.4 Inclusion / exclusion rules
 
 A work is **read in full** (primary text obtained and read, not just an abstract or a
@@ -99,207 +127,254 @@ as a tangential citation inside another paper's related-work section, and does n
 itself independently satisfy (a) or (b), is named and classified at citation level
 (bibliographic facts plus the citing paper's characterization of it), not deep-read —
 flagged per entry below. This follows the instruction to prioritize depth on
-collisions and partial overlaps over breadth of irrelevant hits; §4 states what this
+collisions and partial overlaps over breadth of irrelevant hits; §6 states what this
 cost in coverage.
 
 ### 1.5 Date of search
 
-2026-10-15 (same day as this item's pull and dispatch).
+2026-10-15 (original pass and same-day fix pass).
+
+### 1.6 Screening register
+
+What was actually searched, independent of the narrative in §§2–4. For the general
+web-search queries in §1.3 run by the original pass, no per-hit screening count was
+preserved as a structured log — named as a gap, not papered over, in §6; the
+"disposition" column for those rows lists what the queries promoted to a full read.
+Every fix-pass query below was run this session and its screening is exact.
+
+| # | Query / target | Source | Hits screened | Disposition |
+|---|---|---|---|---|
+| 1 | Original pass's 3 C1 queries + citation-chasing from TransactionMerger/Doppel | general web search | not logged per-hit (§6) | promoted: TransactionMerger, Parallel Combining, Cozy, Beta, IC3, Callas, Homeostasis, O'Neil, Doppel, ESE, DBSP, Noria, MRDT/Quark, COMMUTER, Koskinen & Bansal |
+| 2 | Original pass's 2 C2 queries + direct re-read of Calvin/Bohm/Aria/Caracal/IC3/Amato | general web search + direct fetch | not logged per-hit (§6) | promoted: Calvin, Bohm, Aria, Caracal, Amato, chopping, Block-STM, PWV, QURO, FAFO/ParaLyze, Afek/Korland/Zilberstein, CoqSQL |
+| 3 | Original pass's C3 query (111-application study) | general web search + direct fetch | 1 target paper identified | promoted: Nguyen/Niechen/DeCarolis/Abadi, SIGMOD 2025 |
+| 4 | Direct fetch: Farzan & Nicolet, "Automated Synthesis of Divide and Conquer Parallelism," arXiv 1701.08345 | arXiv | 1 (the paper) | promoted — anchors loop-parallelization lineage, §2.4 |
+| 5 | Direct fetch: Mytkowicz, Musuvathi & Schulte, "Data-Parallel Finite-State Machines," ASPLOS 2014 | Microsoft Research | 1 | promoted — §2.4 |
+| 6 | Direct fetch: Raychev, Musuvathi & Mytkowicz, "Parallelizing User-Defined Aggregations using Symbolic Execution" (Symple), SOSP 2015 | Microsoft Research (corrected URL after a first 404) | 1 | promoted — §2.4 |
+| 7 | Direct fetch: Fedyukovich & Bodik, "Approaching Symbolic Parallelization by Synthesis of Recurrence Decompositions" (GRASSP), arXiv 1611.07629 | arXiv | 1 | promoted — §2.4 |
+| 8 | Direct fetch: Farzan & Nicolet, PLDI 2019 ("Modular Divide-and-Conquer Parallelization of Nested Loops") and PLDI 2021 ("Phased Synthesis of Divide and Conquer Programs") | author homepage | 2 | promoted as lineage descendants — §2.4 |
+| 9 | Direct fetch: Bartoletti, Galletta & Murgia, arXiv 1905.04366 | arXiv | 1 | promoted — §3.2, re-opens the declare/discover framing |
+| 10 | Direct fetch: Conthereum, arXiv 2504.07280 | arXiv | 1 | promoted — §3.2 |
+| 11 | Direct fetch: "Static Analysis for Detecting Transaction Conflicts in Ethereum Smart Contracts," arXiv 2507.04357 | arXiv (HTML) | 1 | promoted — §3.2, confirms per-function-pair granularity |
+| 12 | Re-fetch: TransactionMerger full text | arXiv (HTML) | 1 | re-read — corrected §2.2 mechanism description |
+| 13 | Re-fetch: Nguyen/Niechen/DeCarolis/Abadi, full PDF, §3.2/§4.1/Fig. 5 | author homepage | 1 | re-read — corrected §4.1 star thresholds and the 0.9% denominator |
+| 14 | Re-fetch: QURO full VLDB PDF | vldb.org | 1 | re-read — corrected "deployed" to "implemented and benchmarked," §3.2 |
+| 15 | Re-fetch: CoqSQL thesis (Suriyakarn, MIT MEng 2017) | adam.chlipala.net | 1 | promoted from "unverified" to classified — §2.5 |
+| 16 | Re-fetch: Beta, §7/§7.4 | arXiv | 1 | re-read — corrected §2.5/§3.2 concurrency-exclusion claim |
+| 17 | Re-fetch: Homeostasis, Theorem 3.8/§3.2 | arXiv | 1 | re-read — corrected §2.3 exclusion ground |
+| 18 | Web search: "Fisher Ghuloum PLDI 1994 parallelizing complex scans" | web search | ~9 links screened | 1 bibliographic fact confirmed (title/venue/pages); not opened — unresolved, §6 |
+| 19 | Web search: "Morita 2007 PLDI automatic parallelization" | web search | ~10 links screened | 1 bibliographic fact confirmed (title/venue/DOI); not opened — unresolved, §6 |
+| 20 | Web search: "Farzan Nicolet Freund Yahav PLDI 2021" | web search | 10 links screened | corrected a misattribution: Freund and Yahav were PLDI'21 program chairs, not co-authors — the paper is Farzan & Nicolet alone |
 
 ## 2. Claim C1 — checked synthesis of compact non-commuting summaries
 
-### 2.1 Known collisions, re-checked against the primary source
+### 2.1 Three lineages
+
+The first draft of this review split C1's territory into two lineages and concluded
+"no collision." An independent review found this incomplete: a third lineage —
+general-purpose loop- and aggregation-parallelization synthesis — supplies exactly
+the mechanical core C1 needs (automatic, checked, associative, parallel-prefix-
+evaluated summary synthesis), and the first draft's search terms never reached it
+because they were all database-flavored. All three lineages are stated here against
+primary sources read this pass.
+
+- **Lineage A — database-side merging and escrow** (§2.2): manual declaration gives
+  way to automatic reconciliation restricted to commutative updates, and separately to
+  application-side hybrid merging of real OLTP transaction code that reconstructs each
+  caller's individual response but needs a human-written merge and no checked
+  certificate.
+- **Lineage B — CRDT / automatic merge synthesis** (§2.3): automatically derives
+  composable merge functions, now including for explicitly non-commuting operations,
+  but trades serializability for convergence over a replica's final state, in a
+  geo-replicated rather than single-node contended-batch setting.
+- **Lineage C — loop-parallelization synthesis** (§2.4, newly opened this pass):
+  automatically synthesizes an associative combine/join operator for a sequential
+  loop or aggregation and checks its correctness by a generated proof or bounded
+  verification, evaluated by a parallel-prefix scan or symbolic-summary composition —
+  for a single sequential program, never for a database, a transaction, contention, or
+  a per-caller response.
+
+### 2.2 Lineage A — database-side merging and escrow
 
 | Work | What it actually does (verified from primary text) | What it does not do, relative to C1 | Classification |
 |---|---|---|---|
-| **TransactionMerger**, Ren/Li/Wang, arXiv 2601.10596 (Jan 2026), [full text read](https://arxiv.org/html/2601.10596v1) | A middleware plus a static-analysis *detector* that finds merge opportunities; the merged procedure is then **hand-written** by the application developer. The paper's own increment-by-one example is explicit: merging "increment by one" into "increment by n" and reconstructing each caller's allocated ID (`old_id+1`, `old_id+2`, …) is written by the developer, and the paper says outright: *"determining how to do this automatically probably would require complex analysis"* (line 424). Reports 2.65× (TPC-C) and 3.52× (Spree) throughput. | Not automatic synthesis (explicitly named as future, harder work); no associative/parallel-prefix evaluation (one hand-coded aggregate rewrite, not a composable summary structure); no checked equivalence certificate (correctness is argued by the developer and spot-checked by the isolation-violation detector, not proved against a reference semantics). | **Partial overlap** — closest match for "reconstruct every caller's individual result from a merged contended operation," narrows C1 to *automatic* discovery of exactly this, which TransactionMerger does not attempt. |
-| **Parallel Combining**, Aksenov/Kuznetsov/Shalyto, arXiv 1710.07588 (OPODIS 2018), [full text read](https://arxiv.org/pdf/1710.07588) | Takes an already-written "parallel batched algorithm" as input and wraps it with an explicit combiner so concurrent callers' requests become one batch call; evaluated on a read-dominated graph structure and a batched priority queue. | The paper contains **no mention of commutativity, associativity, or prefix scans at all** (grepped the full text; zero hits) — it is a request-batching/combiner technique, not a summary-composition algebra, and it explicitly assumes the batch algorithm is supplied, never discovers or synthesizes one. | **Partial overlap**, narrower than previously characterized — it is adjacent on the "batch instead of serialize" idea but does not even frame the problem in C1's terms. |
-| **Cozy**, Loncaric/Ernst/Torlak, ICSE 2018, [full text read](https://homes.cs.washington.edu/~mernst/pubs/generalized-synthesis-icse2018.pdf) | Synthesizes single-process, in-memory data structures (supporting subsets/aggregations over multiple related collections) from a query+update specification, via enumerative synthesis plus incrementalization. | No transactions, no concurrency, no contended shared state, no ACID — it synthesizes a sequential data structure for one program's internal state. | **Adjacent**, confirmed — not a collision at any granularity relevant to C1. |
-| **Beta**, arXiv 1807.09887, [full text read](https://arxiv.org/pdf/1807.09887) | Compiles and specializes whole database application programs (TPC-C et al.) via partial evaluation and record-structure specialization, in the main-memory, single-partition, single-core, sequential case. | The paper says this itself: *"we first focus on... single-core case where programs are... run in sequence... we later discuss the concurrency aspects... We cannot – and will not claim to – offer a design to address"* concurrency control (lines 287–315). No summary synthesis of any kind is attempted. | **Adjacent** — confirms, from the primary text, the existing note's characterization that concurrency is explicitly out of scope. |
-| **IC3**, Wang/Mu/Cui/Yi/Chen/Li, SIGMOD 2016, [TR version read in full](https://cs.nyu.edu/media/publications/TR2016-981.pdf) | Builds a static conflict graph (SC-graph) over *pieces* of a fixed, known transaction workload, then tracks and enforces only direct runtime dependencies between pieces, merging pieces to break deadlock-prone cycles. Confirmed 434K TPS, single-warehouse TPC-C, 64 cores. | No synthesis of a compact associative summary for a batch; pieces still execute one at a time with ordering enforced, not combined/applied via a scan; no certificate — correctness rests on the SC-graph proof, not a checked equivalence against a reference. | **Partial overlap** (mechanism: static+runtime hybrid reordering of a fixed workload) — not a summary-composition system. |
-| **Callas / MCC**, Xie et al., SOSP 2015 (not VLDB — corrected in the earlier pass already; re-confirmed here), [full text read](https://www.cs.utexas.edu/~lorenzo/papers/Chao15Callas.pdf) | Statically and heuristically partitions the transaction workload into groups, each free to use a specialized, more aggressive concurrency-control mechanism as long as a declared isolation property composes across groups. 8.2× over a MySQL Cluster baseline on TPC-C. | Groups are a partitioning of the *workload*, not a synthesized summary of *effects*; no parallel-prefix evaluation; the in-group mechanism "refines the static analysis approach" with runtime techniques, confirming it is static+runtime hybrid grouping, not synthesis. | **Partial overlap**, same shape as IC3. |
-| **Homeostasis**, Roy et al., SIGMOD 2015, arXiv 1403.2307, [full text read](https://arxiv.org/pdf/1403.2307) | Fully automated program analysis extracts "symbolic tables" and derives **global treaties** — predicates bounding permissible inconsistency between sites — splitting them into local, per-site-checkable treaties. Treaty-violating concurrent writes are resolved by a **voting algorithm that picks one serial winner**, not a parallel-prefix evaluation of the batch. The paper's own definition states its guarantee is explicitly *"a relaxation of view-serializability"* (line 743). | Multi-site/geo-replicated setting, not single-node many-core; guarantee is weaker than serializability by the paper's own statement, where C1 requires preserving every caller's response under (implicitly) the kernel's serializable semantics; no notion of summary size/cost bounds; conflict resolution is a serial vote, not an associative composition evaluated by a scan. | **Partial overlap** on "automatic derivation," narrowed sharply by setting and by guarantee strength. |
-| **O'Neil escrow**, 1986, [full text read](https://www.cs.umb.edu/~poneil/EscrowTM.pdf) | A manually-specified, per-aggregate-type mechanism; the paper states the database must be made an "expert" about the specific update type (grepped for "automat*"/"static analysis"/"compile" in the full text: one incidental hit, unrelated). | No automatic derivation of anything — the escrow method is hand-declared per aggregate, predates and is orthogonal to any synthesis question. This is kiln's own class-2 (typed reservation) mechanism, not class-3 (C1); re-checking confirms it was never a strong C1 collision to begin with, only a C1-adjacent historical root. | **Adjacent**, confirmed. |
-| **Doppel**, Narula/Cutler/Kohler/Morris, OSDI 2014, [full text read](https://pdos.csail.mit.edu/papers/doppel:osdi14.pdf) | Phase reconciliation: splits a contended value per core, reconciling split per-core states back into the global store during a short reconciliation phase. The paper states this explicitly and restrictively: *"all modifications to a contended item must commute"* (line 53) — the technique is defined only for commutative updates. | C1 is specifically about operations that **do not commute** — Doppel is, by its own stated restriction, outside C1's scope entirely, not merely a narrower partial overlap. | **Adjacent**, re-classified down from "partial overlap" — the earlier note already flagged the commutativity restriction, but under this task's stricter four-way taxonomy a mechanism that explicitly excludes the hard case C1 is about is adjacent, not a partial overlap of it. |
-| **ESE `JetEscrowUpdate`**, Microsoft, [docs page read in full](https://learn.microsoft.com/en-us/windows/win32/extensible-storage-engine/jetescrowupdate-function) | A single explicit API a developer calls per column, after declaring that column `JET_bitColumnEscrowUpdate`; confirmed shipping, production, single-column atomic-add mechanism with versioned rollback. | Entirely manual and declared, one operation type (add), no synthesis, no batching, no parallel evaluation. | **Adjacent**, confirmed — the one real production deployment in the escrow lineage, but of the class-2 mechanism, not C1. |
-| **DBSP / Feldera**, arXiv 2203.16684, [full text read](https://arxiv.org/pdf/2203.16684) | Z-sets — functions with finite support into ℤ — form an **abelian group** under addition, which is what makes incremental view updates composable and deletion "free." Transactions are treated as an already-committed, linearizable input *stream*; DBSP incrementally recomputes **query views** from that stream. | This is downstream of commit, not a mechanism for executing or ordering writes: it assumes transactions already happened in a total order and incrementalizes read-side views from the resulting diffs. It says nothing about synthesizing a write-transaction summary, nothing about non-commuting operations on contended state, nothing about per-caller responses to concurrent writers, and no certificate against a reference semantics for writes. | **Adjacent** — the abelian-group framing is a genuine structural cousin of "associative composition," but applied to a different object (query-result deltas, not transaction effects) for a different purpose (read-side incrementalization, not write admission). |
-| **Noria**, Gjengset et al., OSDI 2018, [full text read](https://www.usenix.org/system/files/osdi18-gjengset.pdf) | Partial-state dataflow caches/materializes query results incrementally; for a canonical write-write contention case (vote counts, "hotness" scores) it moves the aggregation into the dataflow so **no transaction is needed at all**, at the cost of consistency: the paper states "Noria... avoids write-write conflicts without a transaction, albeit at the cost of eventual consistency for reads" (line 469) and "Noria operators and the contents of its external views are eventually-consistent" (line 451). Migrations are "near-instantaneous, dynamic transitions for dataflow graphs," reusing existing state, not described as a diff of two compiled programs. | Sidesteps the problem C1 is about rather than solving it: it gives up serializability for contended writes instead of synthesizing a serializability-preserving summary. No per-caller individual-response reconstruction (vote counts are aggregated, not attributed back to callers). | **Adjacent**, confirmed — a different trade entirely, not a narrower version of C1's trade. |
+| **O'Neil escrow**, 1986, [full text read](https://www.cs.umb.edu/~poneil/EscrowTM.pdf) | A manually-specified, per-aggregate-type mechanism; the paper states the database must be made an "expert" about the specific update type (grepped for "automat*"/"static analysis"/"compile" in the full text: one incidental hit, unrelated). | No automatic derivation of anything — the escrow method is hand-declared per aggregate. This is kiln's own class-2 (typed reservation) mechanism, not class-3 (C1). | **Adjacent**. |
+| **ESE `JetEscrowUpdate`**, Microsoft, [docs page read in full](https://learn.microsoft.com/en-us/windows/win32/extensible-storage-engine/jetescrowupdate-function) | A single explicit API a developer calls per column, after declaring that column `JET_bitColumnEscrowUpdate`; confirmed shipping, production, single-column atomic-add mechanism with versioned rollback. | Entirely manual and declared, one operation type, no synthesis, no batching, no parallel evaluation. | **Adjacent** — the one real production deployment in the escrow lineage, but of the class-2 mechanism, not C1. |
+| **Doppel**, Narula/Cutler/Kohler/Morris, OSDI 2014, [full text read](https://pdos.csail.mit.edu/papers/doppel:osdi14.pdf) | Phase reconciliation: splits a contended value per core, reconciling split per-core states back into the global store. States explicitly: *"all modifications to a contended item must commute"* (line 53). | C1 is specifically about operations that do not commute — Doppel is, by its own stated restriction, outside C1's scope entirely. | **Adjacent** — a mechanism that explicitly excludes the hard case C1 is about. |
+| **TransactionMerger**, Ren/Li/Wang, arXiv 2601.10596 (Jan 2026), [full text re-read](https://arxiv.org/html/2601.10596v1) | §IV-A ("Static Analysis to Find Merging Opportunities") is a **static analysis**, not sampling: it relies on **developer-supplied per-statement column annotations** ("relies on the developer to provide statement information, including which columns the statement reads or writes"), groups conflicting statements ("two statements access the same column with at least one write" / "if two groups have a conflict or have an overlap, we merge these two groups"), and argues correctness informally — *"the correctness of this re-ordering can be proved easily using the theory of serialization graph"* — no formal proof is produced, and no execution sampling or runtime isolation testing occurs anywhere in the paper. The merged procedure itself is still **hand-written** by the developer; the paper says automating that step "probably would require complex analysis" (line 424). Reports 2.65× (TPC-C) and 3.52× (Spree) throughput. | Not automatic synthesis of the merge (explicitly future work); no associative/parallel-prefix evaluation (one hand-coded aggregate rewrite); no checked equivalence certificate — the serialization-graph argument is informal prose, not a certificate checked against a reference semantics. *(Corrected from the first draft, which described this as execution sampling rather than static analysis — primary text has no sampling or testing step at all.)* | **Partial overlap** — closest match in this lineage for "reconstruct every caller's individual result from a merged contended operation," narrows C1 to *automatic* discovery of exactly this, which TransactionMerger does not attempt and does not formally certify. |
+| **Parallel Combining**, Aksenov/Kuznetsov/Shalyto, arXiv 1710.07588 (OPODIS 2018), [full text read](https://arxiv.org/pdf/1710.07588) | Takes an already-written "parallel batched algorithm" as input and wraps it with an explicit combiner so concurrent callers' requests become one batch call. | Contains no mention of commutativity, associativity, or prefix scans at all (grepped the full text: zero hits); assumes the batch algorithm is supplied, never discovers or synthesizes one. | **Partial overlap**, narrow — adjacent on "batch instead of serialize," does not frame the problem in C1's terms. |
+| **IC3**, Wang/Mu/Cui/Yi/Chen/Li, SIGMOD 2016, [TR version read in full](https://cs.nyu.edu/media/publications/TR2016-981.pdf) | Builds a static conflict graph over *pieces* of a fixed, known transaction workload, then tracks and enforces runtime dependencies between pieces, merging pieces to break deadlock-prone cycles. 434K TPS, single-warehouse TPC-C, 64 cores. | No synthesis of a compact associative summary; pieces execute one at a time with ordering enforced, not combined via a scan; no certificate — correctness rests on the SC-graph proof, not a checked equivalence. | **Partial overlap** — static+runtime hybrid reordering of a fixed workload, not a summary-composition system. |
+| **Callas / MCC**, Xie et al., SOSP 2015, [full text read](https://www.cs.utexas.edu/~lorenzo/papers/Chao15Callas.pdf) | Statically and heuristically partitions the transaction workload into groups, each free to use a more aggressive concurrency-control mechanism as long as a declared isolation property composes across groups. 8.2× over MySQL Cluster on TPC-C. | Groups are a partitioning of the workload, not a synthesized summary of effects; no parallel-prefix evaluation; the in-group mechanism is a static+runtime hybrid, not synthesis. | **Partial overlap**, same shape as IC3. |
 
-### 2.2 New partial overlaps found by the fresh search, not in the issue's list
+### 2.3 Lineage B — CRDT / automatic merge synthesis
 
-- **Mergeable Replicated Data Types (MRDT) / Quark**, Kaki/Priya/Sivaramakrishnan/
-  Jagannathan, OOPSLA 2019, DOI 10.1145/3360580, [full text read](https://www.cs.purdue.edu/homes/suresh/papers/oopsla19-mrdt.pdf).
-  This is the strongest new partial overlap found for C1. Quark **automatically
-  derives a three-way merge function** for an ordinary sequential OCaml data type
-  from a manually-supplied "invertible relational specification" of its inductive
-  structure — and, unlike every escrow/CRDT-lineage system already in the issue's
-  list, it explicitly targets operations that **do not commute**: its running example
-  is a queue, and the paper states directly, "pop do not commute. Hence, its semantics
-  under (operation-centric) asynchronous replication is..." (line 482), going on to
-  define a context-aware three-way merge for exactly this case. This is a genuine,
-  automatic, non-commutativity-tolerant synthesis mechanism — the closest any single
-  system came, in this search, to C1's hardest requirement. It fails C1 on every other
-  axis, though, and says so of itself: the resulting semantics is explicitly **"not
-  linearizable or serializable... but nonetheless well-defined (i.e., convergent)"**
-  (line 190) — the opposite trade from C1, which requires preserving every caller's
-  response under the kernel's serializable semantics, not merely convergence. It has
-  no notion of reconstructing an individual per-caller response (the object is a
-  branch's final *state* — a counter value, a queue's contents — not a set of
-  responses owed to distinct concurrent callers); no parallel-prefix-scan batch
-  evaluation (merges are pairwise, against a version's lowest common ancestor, in a
-  version-control/branching model, not a scan over a batch of concurrent calls); and
-  the setting is geo-replicated/asynchronous, not single-node many-core. **Classification: partial overlap** — it narrows C1 further than the issue's list did: automatic
-  synthesis of a composable summary *for non-commuting operations* is no longer
-  unattempted anywhere in the literature, but automatic synthesis of one that also
-  preserves individual caller responses under ACID/serializable semantics, evaluated
-  by a parallel scan, remains unattempted everywhere this search reached.
-- **The Scalable Commutativity Rule / COMMUTER**, Clements/Kaashoek/Zeldovich/Morris/
-  Kohler, SOSP 2013, [bibliographic and abstract-level, not deep-read this session — see §4](https://www.read.seas.harvard.edu/~kohler/pubs/clements13scalable.pdf).
-  Automatically derives, from a POSIX-style interface specification (not database
-  transaction code), the precise conditions under which a pair of operations commute,
-  using a SAT-based search (COMMUTER), to guide scalable kernel design (sv6). This is
-  adjacent, not a partial overlap: it discovers *when* operations already commute
-  (to license lock-free concurrency), never synthesizes a summary for operations that
-  do not. Named here because it is the clearest instance of "automatic discovery of a
-  concurrency condition from an interface's code" outside the database literature, and
-  a fresh builder searching nearby terms will find it quickly; it should not be mistaken
-  for a C1 collision. **Classification: adjacent.**
-- **Koskinen & Bansal**, arXiv 2004.08450 (2020), [abstract-level only]. Automatically
-  *proves* commutativity conditions for existing abstract-data-type implementations by
-  reducing the problem to reachability. Same relationship to C1 as COMMUTER: verifies
-  commutativity of given code, does not synthesize summaries for non-commuting code.
-  **Classification: adjacent.**
+| Work | What it actually does (verified from primary text) | What it does not do, relative to C1 | Classification |
+|---|---|---|---|
+| **Homeostasis**, Roy et al., SIGMOD 2015, arXiv 1403.2307, [full text re-read, Theorem 3.8](https://arxiv.org/pdf/1403.2307) | Fully automated program analysis derives per-site **treaties** — predicates bounding permissible inconsistency between sites — and resolves treaty-violating concurrent writers by a **voting algorithm that picks one serial winner**. Its own Theorem 3.8 establishes that treaty-governed execution produces the **same per-transaction logs and the same final database state as some serial execution**; §3.2 defines a log as the transaction's externally visible, i.e. per-caller, output. | Per-caller responses *are* preserved — the first draft's exclusion ground (weaker-than-serializability response loss) was wrong, and is corrected here. What it actually does not do: it synthesizes treaties and resolves conflicts by a serial vote, not by evaluating an associative combine/parallel-prefix scan over a batch — no bounded-size summary structure is composed at all, and the setting is geo-replicated, not single-node contended-batch. | **Partial overlap** — automatic derivation, narrowed by mechanism (vote-resolved treaties, not scan-evaluated summaries) and setting, not by response loss. |
+| **MRDT / Quark**, Kaki/Priya/Sivaramakrishnan/Jagannathan, OOPSLA 2019, DOI 10.1145/3360580, [full text read](https://www.cs.purdue.edu/homes/suresh/papers/oopsla19-mrdt.pdf) | Automatically derives a **three-way merge function** for an ordinary sequential OCaml data type from a manually-supplied invertible relational specification, for operations that explicitly **do not commute** (its running example is a queue: "pop do not commute," line 482). The resulting semantics is explicitly *"not linearizable or serializable... but nonetheless well-defined (i.e., convergent)"* (line 190). | This is automatic synthesis of a three-way *state* merge over versioned data, against a version's lowest common ancestor — not synthesis of a bounded-size summary with a binary associative combine operator evaluated over a batch by a parallel-prefix scan, and not aimed at reconstructing a per-caller response. *(Restated from the first draft, which described this as "summary synthesis" — the mechanism is version-control-style three-way merge, not summary composition.)* | **Partial overlap** — the strongest automatic, non-commutativity-tolerant synthesis mechanism found, for a different target (convergent final state, not serializable per-caller responses) and a different composition shape (pairwise three-way merge, not scan-evaluated associative combine). |
+| **The Scalable Commutativity Rule / COMMUTER**, Clements/Kaashoek/Zeldovich/Morris/Kohler, SOSP 2013, [bibliographic and abstract-level, not deep-read — §6](https://www.read.seas.harvard.edu/~kohler/pubs/clements13scalable.pdf) | Automatically derives, from a POSIX-style interface specification, the precise conditions under which a pair of operations commute (SAT-based search), to license lock-free kernel design. | Discovers *when* operations already commute; never synthesizes a summary for operations that do not. | **Adjacent** — the clearest instance of "automatic discovery of a concurrency condition from code" outside the database literature; should not be mistaken for a C1 collision. |
+| **Koskinen & Bansal**, arXiv 2004.08450 (2020), [abstract-level only] | Automatically *proves* commutativity conditions for existing abstract-data-type implementations by reducing the problem to reachability. | Same relationship to C1 as COMMUTER: verifies commutativity of given code, does not synthesize summaries for non-commuting code. | **Adjacent**. |
 
-### 2.3 Conclusion for C1
+### 2.4 Lineage C — loop-parallelization synthesis (opened this pass)
 
-**No collision.** Nothing found makes C1, read conjunctively (automatic + checked
-certificate + associative + bounded size/cost + non-commuting + parallel-prefix-
-evaluated + per-caller-response-preserving), already-occupied territory. The field
-splits cleanly into two lineages that each supply roughly half the claim: an
-application-side/OLTP lineage (TransactionMerger, Parallel Combining, Doppel, IC3,
-Callas) that reconstructs individual caller responses and targets real contended OLTP
-state, but only for hand-written or commutative merges, with no certificate and no
-compositional-algebra framing; and a replicated-data-type lineage (O'Neil → Homeostasis
-→ MRDT/Quark) that automatically synthesizes composable merges, now including explicitly
-non-commuting operations (MRDT/Quark, 2019), but for convergence rather than
-serializability, over final data-type state rather than per-caller responses, in a
-geo-replicated rather than single-node-batch setting.
+This lineage was entirely absent from the first draft. Its mechanism is exactly the
+"automatic + checked + associative + bounded-cost + parallel-prefix-evaluated"
+clause of C1 — supplied for general sequential loops and aggregations, not for
+database transactions, contended shared state, or batches of concurrent callers at
+all. Each primary text below was grepped in full for "database" and "transaction":
+Farzan & Nicolet (2017) and Fedyukovich & Bodik have zero substantive hits (one
+incidental citation-list match each); Mytkowicz et al. have zero; Symple has one
+incidental related-work mention of SQL pattern-matching UDAs, not transactional
+semantics.
 
-**Confidence: medium.** This is a slight correction, not an escalation, of the earlier
-pass's framing: MRDT/Quark is a materially closer mechanism match than anything
-previously on record (it is the first found system that both automates synthesis *and*
-tolerates non-commutativity), so the gap is narrower than "nobody has tried this," but
-it is still real and specific — no source found merges the serializability-preserving,
-per-caller-response, parallel-prefix-scan requirements with automatic non-commutative
-summary synthesis. Medium rather than high because two active research lines (merge
-synthesis for replicated types; application-side transaction merging) are visibly
-converging on adjacent pieces of this as of 2019–2026, and a full ACM DL/DBLP crawl
-(§4) was not completed.
+| Work | What it actually does (verified from primary text) | What it does not do, relative to C1 | Classification |
+|---|---|---|---|
+| **Data-Parallel Finite-State Machines**, Mytkowicz/Musuvathi/Schulte, ASPLOS 2014, [full text read](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/asplos302-mytkowicz.pdf) | Parallelizes FSM computation by composing transition functions with an associative "gather" operator, evaluated by a parallel-prefix scan (Hillis–Steele style), with a sequential "second phase" that reconstructs per-position outputs from the composed transitions. Up to 21× on 8 cores. | No synthesis (the FSM is given, fixed, and finite); no checked certificate of any kind; no database or transaction framing. | **Partial overlap** — supplies the associative-composition and parallel-prefix-evaluation half of C1's mechanism, mechanically, for a different (finite-state, non-synthesized) object. |
+| **Symple**, Raychev/Musuvathi/Mytkowicz, SOSP 2015, [full text read](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/143-raychev.pdf) | Automatically generates, via symbolic execution, a **symbolic summary** of a user-defined aggregation's effect as a function of unresolved loop-carried dependences; summaries compose associatively across input chunks to match the sequential semantics. Path-explosion is bounded by an explicit, hard-coded fallback: once the number of symbolic paths on one input exceeds **8**, Symple restarts from a fresh "unknown" symbolic variable rather than keep growing the summary (§5.2, "a bound (currently set to 8)"). | No checked equivalence certificate (soundness/precision is a design property Symple assumes, not something it proves and checks per instance); output is one aggregate value per group, not a set of individual per-caller responses; no database/transaction framing. | **Partial overlap** — automatic symbolic-summary synthesis with associative composition, exactly C1's shape for UDAs, with an explicit unbounded-summary fallback that is directly relevant to whether kiln's own summaries would stay bounded (§2.6). |
+| **GRASSP**, Fedyukovich & Bodik, SYNT 2016 ("Approaching Symbolic Parallelization by Synthesis of Recurrence Decompositions"), [full text read](https://arxiv.org/pdf/1611.07629) | Synthesizes a `prefix`/`merge` decomposition for a sequential loop using SMT-based bounded model checking and CEGIS (built on Rosette): `prefix` identifies how segment boundaries must move, `merge` combines partial outputs; a candidate decomposition is **formally verified equivalent** to the original sequential program, bounded by segment count and length. | Verification is bounded (segment count/length), not an unbounded proof; no database/transaction framing anywhere in the text (zero hits for either term). | **Partial overlap** — automatic synthesis with a genuinely checked (if bounded) equivalence certificate, for general recurrence loops. |
+| **Automated Synthesis of Divide and Conquer Parallelism**, Farzan & Nicolet, PLDI 2017, arXiv 1701.08345, [full text read](https://arxiv.org/pdf/1701.08345) | Synthesizes a `join` operator for a sequential loop via syntax-guided synthesis, restricted to loops with a **constant-size homomorphic extension** (the associative, constant-state accumulator C1 needs); §7, "Correctness of the Synthesized Programs," generates and checks the join's correctness as **Dafny proofs**, automatically, per synthesized instance. Worked examples: `sum`, `mts` (maximum tail sum), `is-sorted`, second-smallest — all order-sensitive, non-commuting sequential computations. Corollary 6.5 proves that **not every** single-pass function has a constant-size homomorphic extension — boundedness is a property the algorithm detects, not one it guarantees for arbitrary input code. | No database, transaction, or per-caller-response framing anywhere in the text; targets one sequential program's loop body, not a batch of heterogeneous procedure calls; no notion of contended shared state between concurrent callers. | **Partial overlap** — the closest single match, across every lineage, to C1's "automatic + checked-by-generated-proof + constant-size + associative" clause, entirely outside the database literature. |
+| **Descendants**: Farzan & Nicolet, PLDI 2019 ("Modular Divide-and-Conquer Parallelization of Nested Loops," [full text read](https://www.cs.toronto.edu/~azadeh/resources/papers/pldi19.pdf)) and PLDI 2021 ("Phased Synthesis of Divide and Conquer Programs," [full text read](https://www.cs.toronto.edu/~azadeh/resources/papers/pldi21.pdf) — program chairs Freund and Yahav, confirmed via DBLP and the paper's own byline to be the PLDI'21 chairs, not co-authors; corrected from the independent verification's attribution) | Generalize the 2017 mechanism to nested loops (2019) and to a three-phase split/solve/combine synthesis pipeline implemented in the tool Parsynt (2021), still for general sequential/recursive programs. | Same gap as the 2017 paper: no database, transaction, or contention framing. | **Adjacent/partial** — extend the lineage's generality, not its applicability to C1's database setting. |
+
+### 2.5 Other adjacent systems
+
+- **Cozy**, Loncaric/Ernst/Torlak, ICSE 2018, [full text read](https://homes.cs.washington.edu/~mernst/pubs/generalized-synthesis-icse2018.pdf). Synthesizes single-process, in-memory data structures from a query+update specification. No transactions, no concurrency, no contended shared state. **Adjacent.**
+- **Beta**, arXiv 1807.09887, [full text re-read, §7](https://arxiv.org/pdf/1807.09887). The first draft read Beta's own line *"we cannot — and will not claim to — offer a design to address"* as excluding concurrency outright; re-reading in context, the quoted sentence refers to the whole space of concurrency-control *design directions* it declines to survey exhaustively, not to excluding the topic. §7 evaluates Beta-compiled TPC-C-style programs under **optimistic multi-version concurrency control (OMVCC)**, and §7.4 **precomputes the accessed/modified columns of each program at compile time** to drive that OMVCC validation. For C1 this remains **adjacent** — no summary synthesis of any kind is attempted, and the corrected description does not change that. For C2 it becomes relevant: see §3.2.
+- **DBSP / Feldera**, arXiv 2203.16684, [full text read](https://arxiv.org/pdf/2203.16684). Z-sets form an abelian group under addition, making incremental view updates composable; treats transactions as an already-committed input stream and incrementalizes read-side query views from it. Genuine structural cousin of "associative composition," applied to a different object (query-result deltas) for a different purpose (read-side incrementalization, downstream of commit). **Adjacent.**
+- **Noria**, Gjengset et al., OSDI 2018, [full text read](https://www.usenix.org/system/files/osdi18-gjengset.pdf). For canonical write-write contention (vote counts, "hotness" scores) moves aggregation into a dataflow so no transaction is needed, trading away serializability for eventual consistency rather than solving C1's trade. **Adjacent.**
+- **CoqSQL**, Suriyakarn, MIT MEng thesis, 2017, [full text read](https://adam.chlipala.net/theses/sorawit.pdf), promoted this pass from "unverified" (the first draft could not obtain the primary text). "A Framework for Synthesizing Transactional Database Implementations in a Proof Assistant": §2.3–2.4 build a **predicated structure** (`PStruct`) from an invertible relational specification of a SQL-subset program, using a technique the thesis calls *transactional predication*, and mechanically **prove linearizability in Coq** for the synthesized implementation. This is a genuine automatic-synthesis-plus-checked-certificate mechanism — the certificate (a machine-checked Coq proof) is at least as strong as C1's "checked equivalence certificate" requirement. It synthesizes a whole concurrent implementation from a specification, though, not a composable batch-summary for an already-written procedure, and has no parallel-prefix/scan evaluation over a batch of callers. **Classification: partial overlap for C1** — automatic synthesis plus a mechanically checked certificate, for a different synthesis target (whole-implementation generation, not summary composition over a batch).
+
+### 2.6 Conclusion for C1
+
+Two separate confidence questions apply, not one: whether the *mechanism* C1 names is
+novel, and whether kiln's *specific combination* of that mechanism's clauses with a
+database transaction batch is unoccupied. The first draft's single "medium" confidence
+conflated them; both are restated here with their own evidence.
+
+**C1 as a mechanism — confidence: low.** Automatic, checked synthesis of an
+associative, bounded-size/cost summary, evaluated by a parallel-prefix scan, is
+established prior art for general sequential loops and aggregations: Farzan & Nicolet
+(PLDI 2017, with PLDI 2019/2021 descendants) synthesize such join/combine operators
+and check them with automatically generated Dafny proofs; Fedyukovich & Bodik (SYNT
+2016) do the equivalent with bounded SMT verification; Symple (SOSP 2015) and
+Mytkowicz et al. (ASPLOS 2014) supply the associative-composition and parallel-prefix-
+evaluation machinery for symbolic and finite-state summaries respectively. None of
+this is database-specific, and "can a checked, bounded, associative summary be
+synthesized automatically" has a yes, outside the literature the first draft searched.
+
+**The transaction-batch combination — confidence it remains unoccupied: medium.** No
+source in either pass reaches the specific combination kiln needs: a **batch of
+heterogeneous stored-procedure calls** (not one fixed loop body) on **contended keyed
+database state** (not an array or a UDA's input), where **each caller's individual
+response is reconstructed** under the kernel's serializable semantics (not a
+convergent CRDT-style final state), admitted into an OLTP kernel by a **checked
+certificate against the transaction's own semantics** (not a generic loop-equivalence
+proof). Lineage A has real OLTP batches and per-caller responses but hand-written
+merges and no certificate; lineage B has automatic, checked, non-commutative-tolerant
+synthesis but convergence instead of serializability and no per-caller responses;
+lineage C has the automatic+checked+associative+parallel-prefix mechanism itself but
+no databases, no heterogeneous call batches, and no per-caller responses at all.
+Medium rather than high because three active lineages are now visibly converging on
+adjacent pieces of exactly this (lineage C's synthesis mechanism, 2014–2021; lineage
+B's non-commutativity tolerance, 2015–2019), and a full 2023–2026 proceedings crawl
+across all three lineages' venues was not completed (§6).
+
+**Whether synthesized summaries stay bounded on real transaction code — an open
+empirical question; no confidence is claimed either way.** The two systems closest to
+"automatic synthesis of a bounded, associative summary" both carry an explicit
+boundedness warning on exactly this dimension: Symple falls back to sequential
+re-execution once its symbolic-path count exceeds a hard-coded bound of 8, rather than
+guarantee a bounded summary for every UDA; and Farzan & Nicolet's own Corollary 6.5
+proves that not every single-pass function has a constant-size homomorphic extension —
+boundedness is the exception their algorithm detects, not a property it guarantees.
+Whether kiln's stored-procedure summaries stay bounded on real application code is
+therefore untested by any existing synthesis result in either direction; it is a
+property for E2/E3 to demonstrate empirically, not one literature search can settle.
 
 **Narrowest honest restatement:** *Automatic, checked synthesis of a compact,
-size/cost-bounded associative summary for database transactions whose effects do not
-commute, evaluated by a parallel-prefix scan over a batch, that preserves every
-individual caller's response under the kernel's serializable semantics* — every
-clause of this sentence has independent prior art; no source combines automatic
-non-commutative synthesis with serializability-preserving per-caller response
-reconstruction and scan-based batch evaluation.
+size/cost-bounded associative summary for a batch of heterogeneous stored-procedure
+calls on contended keyed database state, admitted into an OLTP kernel by a certificate
+checked against the batch's own serializable semantics, that reconstructs every
+individual caller's response.* Every clause up to "database state" is independently
+solved, for non-database loop/aggregation code, by lineage C; non-commutativity-
+tolerant automatic synthesis exists for CRDT-style convergence (lineage B); batches of
+real OLTP calls with per-caller response reconstruction exist for hand-written,
+uncertified merges (lineage A). No source combines all of it, and whether the result
+stays size/cost-bounded on real transaction code is untested by any of them.
 
 ## 3. Claim C2 — parametric per-call footprint derivation at build time
 
 ### 3.1 Known collisions, re-checked against the primary source
 
-Re-reading the primary sources for the deterministic-database lineage directly (not
-through the secondary blog retrospective the earlier pass leaned on) sharpens the
-existing "declare vs. discover" framing into a direct quote from each system itself:
-
 | Work | Direct quote / confirmed mechanism | Classification |
 |---|---|---|
-| **Calvin**, Thomson et al., SIGMOD 2012, [full text read](https://www.cs.princeton.edu/courses/archive/fall19/cos418/papers/calvin.pdf) | §3.2.1, "Dependent transactions": for transactions whose read/write set cannot be known in advance, Calvin's own fix is "an inexpensive, low-isolation, unreplicated, read-only reconnaissance query" executed against live data, after which "the actual transaction is... executed, using the reconnaissance query's results for its read/write set" (lines 437–450) — a genuine runtime step against live data, confirmed from Calvin's own text, not a secondary characterization. | **Partial overlap** |
-| **Bohm**, Faleiro & Abadi, PVLDB 2015, [full text read](https://arxiv.org/pdf/1412.2324) | The paper's own words: the concurrency-control phase "needs advance knowledge of each transaction's write-set... it is not necessary for transactions to pre-declare these... sets. For example, Calvin proposes a speculative technique which predicts each transaction's read-/write-sets on the fly... Bohm can make use of this technique if transactions' write-sets are not... derivable in advance" (lines 222–230). | **Partial overlap** |
-| **Aria**, Lu/Yu/Cao/Madden, PVLDB 2020, [full text read](https://www.cs.arizona.edu/~caolei/papers/Aria.pdf) | Direct quote: "earlier deterministic databases require that transaction read/write sets are known before execution" (line 9); Aria's own fix is to execute the batch speculatively against one snapshot and resolve conflicts deterministically after the fact — discovery via one execution pass, not static derivation from code. | **Partial overlap** |
-| **Caracal**, Qin/Demke Brown/Goel, **SOSP 2021** (corrected: the earlier pass flagged the venue as "unverified, possibly SIGMOD 2021"; DBLP confirms SOSP 2021, pp. 180–194), [full text read](https://www.eecg.utoronto.ca/~ashvin/publications/caracal.pdf) | Confirmed: batches transactions into epochs and *analyzes the batch at runtime* ("allows analyzing the transactions in the epoch to determine... contention," line 31) via its batch-append/split-on-demand optimizations — per-epoch runtime analysis, not build-time static derivation from source. | **Partial overlap** |
-| **Amato, Giannotti & Mainetto**, VLDB 1993, [full text read in full — recovered from a poorly-OCR'd scan; every substantive claim below was legible despite character-level noise](https://www.vldb.org/conf/1993/P405.PDF) | Confirmed, from the paper's own closing section ("Discussion and further work"): this is a pure correctness proof with two hand-worked examples; no analyzer or scheduler was ever implemented ("The first next step is the development of a prototype of the analyser"); the paper's own open questions are exactly what E1 measures 33 years later: *"what is the cost of the analysis in terms of space and time... is the information gathered by the analysis significant, i.e., is it really useful for realistic optimizations?"* The read/write-set abstraction is tuned by an abstract-domain granularity parameter, not derived as an explicit function of a call's declared arguments in kiln's sense, and the scheduler is plain conservative 2PL with no typed-reservation distinction (no claims/pins/escrows, no "one logical-resource protocol" spanning several reservation kinds). | **Partial overlap**, confirmed unimplemented and unbenchmarked by its own text — the strongest shape-level match remains the weakest evidentially. |
-| **Transaction chopping**, Shasha/Llirbat/Simon/Valduriez, ACM TODS 20(3), 1995, DOI 10.1145/211414.211427 — **full TODS text not independently obtainable this session** (paywalled; NYU's own mirror and an academia.edu copy both returned HTTP 403 even with a browser user-agent — see §4); characterized here via a short author-written encyclopedia summary, the paper's own citing descendants (IC3, TransactionMerger both cite and summarize it), and DBLP's bibliographic record | Builds a static conflict graph (the "SC-graph") over *pieces* of a **fixed, already-known** set of transaction programs to find the finest safe chopping; TransactionMerger's own related-work section (which was read in full) explicitly lists chopping as one of several *application-side rewriting* techniques, i.e., a transformation of known code, not a build-time derivation of footprints as a function of a call's arguments for a general admission protocol. | **Partial overlap**, access-limited (see §4) — characterization is consistent with, not independently stronger than, the earlier pass's note. |
-| **Block-STM**, arXiv 2203.06871 — not re-fetched this session; the earlier note's direct quote ("every transaction records its own read-set and write-set during (speculative) execution") was itself sourced from the primary text and is carried over unchanged | Runtime discovery via speculative execution, re-executed on conflict. | **Partial overlap**, carried over. |
-| **PWV**, Faleiro/Abadi/Hellerstein, PVLDB 2017, DOI 10.14778/3055540.3055546 — **re-fetch attempted and failed this session** (the NSF Public Access mirror timed out twice; see §4); carried over from the earlier pass's direct quote | Restricts *when* a transaction may abort to make writes visible early; not a footprint-derivation mechanism at all. | **Adjacent**, carried over. |
+| **Calvin**, Thomson et al., SIGMOD 2012, [full text read](https://www.cs.princeton.edu/courses/archive/fall19/cos418/papers/calvin.pdf) | §3.2.1: for transactions whose read/write set cannot be known in advance, Calvin runs "an inexpensive, low-isolation, unreplicated, read-only reconnaissance query" against live data, then executes "using the reconnaissance query's results for its read/write set" — a runtime step against live data. | **Partial overlap** |
+| **Bohm**, Faleiro & Abadi, PVLDB 2015, [full text read](https://arxiv.org/pdf/1412.2324) | "it is not necessary for transactions to pre-declare these... sets... Calvin proposes a speculative technique which predicts each transaction's read-/write-sets on the fly... Bohm can make use of this technique." | **Partial overlap** |
+| **Aria**, Lu/Yu/Cao/Madden, PVLDB 2020, [full text read](https://www.cs.arizona.edu/~caolei/papers/Aria.pdf) | "earlier deterministic databases require that transaction read/write sets are known before execution"; Aria's fix is speculative execution against one snapshot, resolved deterministically afterward — discovery via one execution pass, not static derivation. | **Partial overlap** |
+| **Caracal**, Qin/Demke Brown/Goel, SOSP 2021 (DBLP-confirmed), [full text read](https://www.eecg.utoronto.ca/~ashvin/publications/caracal.pdf) | Batches transactions into epochs and analyzes the batch *at runtime* to determine contention — per-epoch runtime analysis, not build-time static derivation. | **Partial overlap** |
+| **Amato, Giannotti & Mainetto**, VLDB 1993, [full text re-read, §6](https://www.vldb.org/conf/1993/P405.PDF) | A correctness proof with two hand-worked examples; its own closing section proposes "the development of a prototype of the analyser" as next work, and no later publication by these authors or citing this one, found in either pass, reports that prototype built. The actual discriminator from C2 is mechanism, not implementation status: the read/write-set abstraction is tuned by an **abstract-domain granularity parameter approximating a snapshot of the whole schema's state space**, not derived as a pure function of one call's declared arguments — the paper analyzes relative to an approximated store, where C2 derives a footprint from argument values alone (plus at most one dependent read). *(Corrected from the first draft, which treated the 1993 future-work sentence as proof the mechanism was never implemented, and which added "typed reservations" and "deployed" as exclusion grounds not present in C2's own definition.)* | **Partial overlap**, the strongest shape-level match on "derive from code, feed a scheduler," excluded by its abstract-domain-over-a-store mechanism rather than by implementation status. |
+| **Transaction chopping**, Shasha/Llirbat/Simon/Valduriez, ACM TODS 20(3), 1995, DOI 10.1145/211414.211427 — full text not independently obtainable (paywalled, 403 on two mirrors; §6); characterized via a short author-written encyclopedia summary and two citing papers' own descriptions (both read in full) | Builds a static conflict graph over *pieces* of a fixed, already-known set of transaction programs — a transformation of known code, not a build-time derivation of footprints as a function of a call's arguments for a general admission protocol. | **Partial overlap**, access-limited. |
+| **Block-STM**, arXiv 2203.06871 (carried over, primary-source quote unchanged) | "every transaction records its own read-set and write-set during (speculative) execution." | **Partial overlap**, carried over. |
+| **PWV**, Faleiro/Abadi/Hellerstein, PVLDB 2017, DOI 10.14778/3055540.3055546 — re-fetch attempted and failed again (NSF Public Access mirror timeout, §6); carried over from the first draft's primary-source quote | Restricts *when* a transaction may abort to make writes visible early; not a footprint-derivation mechanism. | **Adjacent**, carried over. |
+
+Every deterministic database re-read this pass resolves an unknown footprint at
+*runtime* — a reconnaissance query, a snapshot-and-reconcile pass, or a per-epoch
+batch analysis — never by static derivation from source code; this remains true after
+re-checking each primary text. What the first draft overstated was turning that
+observation into a strict "declared or discovered, nothing else" dichotomy: §3.2
+below re-opens it with two mechanisms found this pass that are static, code-derived,
+*and* per-call-instance — located outside the OLTP lineage entirely.
 
 ### 3.2 New partial overlaps found by the fresh search
 
-- **QURO**, Yan & Cheung, VLDB 2016, [characterized via author project page and
-  secondary summaries — not independently full-text read this session, see §4](https://db.cs.washington.edu/projects/quro/).
-  A genuine, deployed, build-time compiler that statically analyzes **real** OLTP
-  application transaction code (not a research toy language) and automatically
-  reorders statements within a transaction to move contended queries later, reducing
-  lock-hold time; reported up to 6.53× throughput and 85% latency reduction, without
-  changing the concurrency-control mechanism. This is the clearest real-world instance
-  found of "a compiler performs static analysis of actual application transaction code
-  at build time" — but the output is a *reordering* of one transaction's own statements,
-  not a read/write footprint exported as a function of the call's arguments to a
-  cross-transaction admission protocol. **Classification: partial overlap** for the
-  "build-time static analysis of real transaction code" half of C2; it does not touch
-  the "drives admission under one logical-resource protocol" half at all.
-- **FAFO / ParaLyze**, arXiv 2507.10757 (2025), blockchain/EVM setting. Determines an
-  approximate read/write set either from node-supplied metadata (an access list) or
-  from simulation — confirming the declare-or-discover dichotomy holds even in the
-  newest (2025) blockchain-adjacent lineage, with no static-analysis-of-code third
-  path found there either. **Classification: adjacent.**
-- **Afek, Korland & Zilberstein**, LCPC 2010/2011, "Lowering STM Overhead with Static
-  Analysis." Compile-time data-flow analysis that **removes redundant instrumentation**
-  in already-compiled software-transactional-memory code (eliding read/write barrier
-  calls the analysis proves unnecessary) — a genuine build-time static analysis, but of
-  STM bookkeeping overhead in a general in-process program, not of a database
-  transaction's footprint as a function of declared call arguments, and it optimizes
-  existing instrumentation rather than deriving information that drives an admission
-  decision. **Classification: adjacent.**
-- **CoqSQL**, Suriyakarn (MIT MEng thesis, 2017), building on Kaseorg's and Lesani's
-  prior framework. Per secondary description (the thesis itself was not independently
-  obtained this session — see §4), automatically synthesizes concurrent, multi-processor
-  transaction implementations from a SQL-subset specification, with accompanying
-  correctness proofs. This is a plausible partial overlap for both C1's certificate
-  requirement and C2's build-time-derivation requirement, but it was not possible to
-  confirm from primary text within this session's reach whether footprints are derived
-  parametrically from call arguments or the specification is closer to Amato-style
-  whole-schema analysis; flagged honestly as **unverified** rather than classified with
-  confidence — a gap for a future pass, not a claim either way.
+- **QURO**, Yan & Cheung, VLDB 2016, [full VLDB PDF obtained and read this pass](https://www.vldb.org/pvldb/vol9/p444-yan.pdf) — corrected from the first draft's project-page characterization, and from an over-read "deployed" that the paper's text does not support. A build-time compiler that statically analyzes real OLTP application transaction code (C/C++ with embedded ODBC calls) and reorders statements to reduce lock-hold time, up to 6.53× throughput and 85% latency reduction. The paper states plainly: *"we implemented a prototype of QURO"* (§1) and *"our current prototype is built on Clang"* (§3); the one "deploys" in the text ("QURO deploys the instrumented version using the same settings as the original application," §3) describes deploying its own profiling build for benchmarking, not a production rollout. **Classification: partial overlap** for "build-time static analysis of real transaction code" — implemented and benchmarked, not deployed in production; the output is a within-transaction statement reordering, not a cross-transaction footprint export, so it does not touch C2's admission-protocol half at all.
+- **Beta**, arXiv 1807.09887, §7.4 (re-read this pass, §2.5) — precomputes the accessed/modified columns of each compiled OLTP program at compile time, to drive OMVCC validation. A genuine build-time static footprint, but at the wrong granularity for C2: per-*program*, not per-call-argument, and feeding a single concurrency-control mechanism rather than a protocol spanning typed reservations and conservative locking. **Classification: adjacent** for C2.
+- **Bartoletti, Galletta & Murgia**, arXiv 1905.04366, [full text read, p.10 and Example 6](https://arxiv.org/pdf/1905.04366) — the most materially relevant new finding for C2. "We over-approximate the set of keys read and written by transactions, by statically analysing the code of the called functions" (p.10), and the approximation is **per transaction instance**: Example 6 derives concrete key sets such as `{A.balance, C.balance, C.k1}` for one specific call with a concrete sender `A`, not a per-function or per-contract set. This is a static, code-derived, per-call-argument-parametric footprint — the mechanism half of C2 the first draft's "declared or discovered" dichotomy implied did not exist anywhere. It is used to test whether two transactions are swappable for an Ethereum/EVM scheduler, not to drive a general OLTP admission protocol: no "one logical-resource protocol," no typed reservations, no one-hop dependent-read carve-out, and no application-code setting (it targets smart-contract bytecode with implicit global storage-slot addressing). **Classification: partial overlap.**
+- **Conthereum**, Zareh Chahoki/Herlihy/Roveri, arXiv 2504.07280, [full text read](https://arxiv.org/pdf/2504.07280) — builds "an offline phase that equips its real-time scheduler with a conflict analysis repository obtained through static analysis" of contract code, operationalizing Bartoletti-style per-key static analysis into an actual multi-core scheduler rather than only a correctness test. Still per-function/per-contract in its own static-analysis step, still blockchain-specific. **Classification: partial overlap.**
+- **"Static Analysis for Detecting Transaction Conflicts in Ethereum Smart Contracts"**, arXiv 2507.04357, [full text read via HTML](https://arxiv.org/html/2507.04357v1) — extracts conflict patterns at the granularity of conflict-prone **function pairs**, coarser than Bartoletti's per-call-instance approximation; confirms the blockchain lineage is actively exploring several static-footprint granularities. **Classification: adjacent** (per-function-pair, not per-instance).
+- **FAFO / ParaLyze**, arXiv 2507.10757 (2025), blockchain/EVM setting. Determines an approximate read/write set from node-supplied metadata or from simulation — no static-analysis-of-code path. **Classification: adjacent.**
+- **Afek, Korland & Zilberstein**, LCPC 2010/2011, "Lowering STM Overhead with Static Analysis." Compile-time data-flow analysis that removes redundant STM instrumentation — a genuine build-time static analysis, but of STM bookkeeping overhead in a general in-process program, not of a database transaction's footprint. **Classification: adjacent.**
+- **CoqSQL**, Suriyakarn thesis, [full text read this pass, §2.4](https://adam.chlipala.net/theses/sorawit.pdf) — classified for C1 in §2.5; for C2 specifically, its predicated structures are built from predicates **parameterized by the database schema** ("a predicate is parameterized by the schema on which the test is performed," §4), not by a call's declared arguments. **Classification: adjacent** for C2 — schema-level, not call-argument-level.
 
 ### 3.3 Conclusion for C2
 
-**No collision.** The declared-or-discovered dichotomy holds across every deterministic
-database this search reached, confirmed this time directly from each system's own
-primary text rather than through a secondary retrospective: Calvin's reconnaissance
-query, Bohm's "derivable in advance... Calvin's speculative technique," Aria's
-snapshot-and-reconcile, Caracal's per-epoch runtime analysis, Block-STM's and
-ParaLyze's speculative/metadata discovery. Amato et al. (1993) remains the one source
-that automatically derives an approximate footprint *from transaction source text*
-feeding a 2PL scheduler — the closest match in shape — but it is an unimplemented,
-unbenchmarked correctness proof for a research language, with no per-call parametric
-sense, no one-hop/dependent-read category, and no unified protocol spanning typed
-reservations; it was never picked up by the deterministic-database lineage that
-followed it by two decades. QURO (2016) is the one real system found that performs
-genuine build-time static analysis of real OLTP application code, but at the wrong
-granularity (within-transaction reordering, not cross-transaction footprint export).
+**No collision**, and the margin is narrower than the first draft's "medium-high"
+claimed, for two reasons surfaced this pass. First, Amato's (1993) exclusion rests on
+the wrong ground in the first draft — a 1993 future-work sentence cannot prove an
+analyzer was never built, and "typed reservations" and "deployed" are requirements C2
+itself does not state; the honest basis for exclusion is that Amato's approximation is
+tuned relative to an abstract snapshot of the whole schema's state space, not derived
+purely from a call's own arguments. Second, and more materially, Bartoletti, Galletta &
+Murgia (2019) do exactly what C2's build-time, per-call, code-derived half requires,
+for a smart-contract call — confirmed from primary text (arXiv 1905.04366, p.10,
+Example 6), not a secondary characterization — and Conthereum (2025) has already
+operationalized that mechanism into a real scheduler. The "declared or discovered,
+nothing else" dichotomy the first draft used to exclude every deterministic-database
+system no longer holds as a blanket claim once the blockchain lineage is in scope; it
+holds only within the deterministic-OLTP lineage itself.
 
-**Confidence: medium-high** that the exact combination in C2 — parametric, build-time,
-per-call derivation from compiled application code, with a one-hop carve-out for
-dependent reads resolved through a known foreign key, driving admission under one
-logical-resource protocol spanning typed reservations and conservative locking alike —
-remains open. This is unchanged from, and now better evidenced than, the earlier
-pass's conclusion: every primary source re-read this session confirmed rather than
-complicated the "nobody derives it statically from code" finding, and the dedicated
-2023–2026 search (§1.3) surfaced no counter-example, only QURO (2016, wrong
-granularity) and FAFO/ParaLyze (2025, confirms the dichotomy persists into the newest
-lineage). Not "high" because a full ACM DL/DBLP proceedings crawl for this specific
-combination was not completed (§4).
+**Confidence: medium** (down from the first draft's medium-high), reflecting
+Bartoletti et al.'s per-instance static key approximation directly. What C2 needs that
+is not yet found anywhere: the per-call, static, code-derived footprint mechanism
+*transplanted* into ordinary OLTP application source code (not smart-contract
+bytecode with implicit global storage-slot addressing), driving admission under **one
+logical-resource protocol spanning typed reservations and conservative locking
+together**, with a one-hop carve-out for dependent reads resolved through a
+statically-known foreign key. Medium, not low, because the two settings differ enough
+— storage-slot addressing versus arbitrary application data access; a pairwise
+swappability test versus a unified reservation-and-locking admission kernel — that the
+transplant is not mechanical. Medium, not medium-high, because the "can a per-call,
+code-derived footprint be statically approximated at all" question — which is most of
+what made the first draft's dichotomy feel airtight — is no longer open: it has a
+confirmed yes, just not yet in kiln's setting.
 
-**Narrowest honest restatement:** unchanged from `docs/concept.md` §15 — *static,
-build-time derivation of a transaction's read/write footprint as a pure function of
-its declared call arguments (plus at most one dependent read resolved through a
-statically-known foreign key), from compiled application code, feeding one admission
-protocol that spans typed reservations and conservative locking* — this review found
-no system that does this, and the two nearest neighbors on either side of the
-combination (Amato 1993 for "derive from code, feed a scheduler"; QURO 2016 for
-"real build-time static analysis of real OLTP code") were each already named or
-findable, and each misses the combination for a different, now-confirmed reason.
+**Narrowest honest restatement:** unchanged in substance from `docs/concept.md` §15 —
+*static, build-time derivation of a transaction's read/write footprint as a pure
+function of its declared call arguments (plus at most one dependent read resolved
+through a statically-known foreign key), from compiled OLTP application code, feeding
+one admission protocol that spans typed reservations and conservative locking.* This
+review found the per-call-instance static-derivation half of that sentence already
+occupied, outside the OLTP/application-code setting, by Bartoletti et al. (2019) and
+Conthereum (2025); it found no source occupying the whole sentence, including the
+OLTP/application-code setting and the unified-protocol half.
 
 ## 4. Claim C3 — measuring how much real code admits C2
 
@@ -307,136 +382,153 @@ findable, and each misses the combination for a different, now-confirmed reason.
 
 **Nguyen, Niechen, DeCarolis & Abadi, "Are Database System Researchers Making Correct
 Assumptions About Transaction Workloads?", SIGMOD 2025 (Proc. ACM Manag. Data 3(3),
-Article 131), DOI 10.1145/3725268 — [full text obtained and read](http://www.cs.umd.edu/~abadi/papers/database-workloads.pdf).**
-This is the "111-application study" `docs/experiments.md` already cites and explicitly
-declines to treat as a substitute for E1. Reading the full methodology (not only the
-figures already quoted) confirms and sharpens that framing:
+Article 131), DOI 10.1145/3725268 — [full text re-read this pass](http://www.cs.umd.edu/~abadi/papers/database-workloads.pdf).**
+This is the "111-application study" `docs/experiments.md` already cites. Re-reading
+the methodology and Fig. 5 directly (not the figures as already quoted) corrects two
+numbers the first draft got wrong:
 
-- The study defines four increasingly precise **access-set definitions** — Relation,
-  Predicate, CDA-Based (conflict-detection attribute), CDAeq-Based — each with named
-  **fallback scenarios** that force a runtime mechanism: Complex Predicates, Attribute
-  Dependency (a predicate that depends on a value read earlier in the same
-  transaction — the paper's closest analogue to kiln's "dependent read"), CDA Mismatch
-  (looking a row up by a non-primary attribute), and Non-equality Predicates.
-- The oft-quoted **58%/90% figure** is specifically the CDA-Based definition's result:
-  "for 90% of applications, at least 58% of transactions have read/write sets that are
-  possible to infer in advance" (line 126), confirmed against the paper's own CDF
-  figure description (line 1310: "over 90% of applications can run the majority of
-  their transactions without fallbacks" under CDA-Based). The **27%-by-secondary-attribute
-  figure** `docs/experiments.md` cites corresponds exactly to the paper's own number:
-  "26.9% transactions per application would result in a CDA Mismatch" (line 1200) —
-  confirmed as an accurate prior citation, not an approximation.
-- Crucially, the paper's **Attribute Dependency** category — its only analogue to a
-  "dependent read" — is a strict, uniform fallback: *any* predicate depending on a
-  value read earlier always needs a runtime mechanism in this paper's scheme (occurring
-  in only 30% of applications, averaging 0.9% of transactions). The paper draws **no
-  distinction** between a dependent read that resolves through a statically-known
-  foreign key (kiln's "one-hop," pinned and therefore still staticaly admissible) and
-  one that does not (kiln's "unknown") — confirming, from the primary text itself, that
-  `docs/experiments.md`'s own statement ("the study's binary inferable/not-inferable
-  split does not distinguish static from one-hop") is accurate and that E1's one-hop
-  category measures something this paper's own categories cannot answer.
-- The paper is **purely a measurement**; it proposes no compiler, no admission
-  protocol, and does not discuss driving scheduling decisions from parametric,
-  argument-indexed footprints — it only asks whether today's systems' *existing*
-  assumptions about inferability hold on real code. It therefore cannot be stretched
-  into even a partial overlap for C1 or C2, only for C3.
-- Corpus: 78 Django + 33 TypeORM applications, selected by GitHub-star popularity
-  (≥1000/≥500 stars respectively), over 30,000+ transactions, via a semi-automated
-  annotation tool with manual review specifically for interactive-transaction and
-  attribute-dependency cases (confirmed from the methodology section, lines 292–637).
+- **Corpus and star thresholds, corrected:** 78 Django applications (≥1000 GitHub
+  stars) **and 33 TypeORM applications (≥300 stars, not ≥500** as the first draft
+  stated — confirmed from the paper's own text, §3.2: "Django repositories were
+  required to have at least 1000 stars, and TypeORM repositories were required to have
+  at least 300 stars"), over 30,000+ transactions.
+- **The 0.9% figure, corrected:** "Attribute dependencies only exist in (33/111 ≈ 30%)
+  of the applications, averaging 0.9% of transactions per application **among the 33
+  applications**" (confirmed verbatim) — the first draft's phrasing left it ambiguous
+  whether 0.9% averaged over all 111 applications or over the 33 that exhibit the
+  dependency at all; it is the latter, a materially higher per-affected-application
+  rate than the ambiguous reading implied.
+- The 58%/90% CDA-Based figure and the 26.9% CDA-Mismatch figure, both already quoted
+  by `docs/experiments.md`, are confirmed accurate against the primary text and
+  unchanged by this correction.
+- **The Predicate and CDA-Based access-set definitions (Def. 4.2–4.4) are themselves a
+  static, value-parametric footprint notion**, not merely a measurement category with
+  no mechanism behind it: each is a set of triples (relation, predicate, read/write)
+  evaluated against concrete attribute values extracted statically from the query
+  code. This is a genuine, if coarser, partial overlap for C2's "derive a footprint
+  statically" half (cross-referenced at §3.2) — the first draft's blanket "cannot even
+  be a partial overlap for C2" was too strong. The **Relation definition's** fallback
+  (Def. 4.1) is itself a static, conservative, whole-relation approximation, not a
+  runtime-discovery fallback; only the Predicate/CDA-Based definitions' own fallback
+  scenarios (Complex Predicates, Attribute Dependency, CDA Mismatch, Non-equality
+  Predicates) force a genuinely dynamic mechanism. The paper proposes no admission
+  protocol and does not drive scheduling decisions from these footprints — it only
+  measures whether today's systems' existing inferability assumptions hold.
+- The paper's **Attribute Dependency** category remains, as the first draft noted, a
+  strict uniform fallback that draws no distinction between kiln's statically-known
+  "one-hop" dependent read and an unresolvable one — confirming `docs/experiments.md`'s
+  own statement that this study's binary split cannot answer what E1's one-hop
+  category measures.
 
-**Classification: partial overlap for C3** — a close, careful, primary-source-verified
-measurement of a *related but not identical* question, on a narrower and non-random
-corpus (popular open-source ORM-driven web apps only, explicitly not TPC-C-style
-enterprise or ad hoc analyst workloads), using a category scheme that is strictly
-coarser than kiln's own (no one-hop carve-out). It does not and cannot settle C3.
+**Classification: partial overlap for C3** on the measurement question, and a **minor
+partial overlap for C2's static-derivation half** at the relation/predicate
+granularity (coarser than C2's per-call-argument granularity). It does not and cannot
+settle either claim.
 
 ### 4.2 Other measurements sought and not found
 
-No other empirical study was found — in this pass or recoverable from the existing
-notes — that measures static read/write-set or footprint inferability on a corpus of
-real application transaction code, under any category scheme, for any date range.
-The only other quantitative data point in the lineage is Amato et al.'s own two
-hand-worked examples (not a corpus measurement) and IC3's single TPC-C throughput
-number (a performance result, not a coverage measurement). No TPC-C-focused,
+No other empirical study was found, in either pass, that measures static read/write-
+set or footprint inferability on a corpus of real application transaction code, under
+any category scheme, for any date range. Amato et al.'s two hand-worked examples and
+IC3's single TPC-C throughput number are not corpus measurements. No TPC-C-focused,
 non-ORM, or enterprise-codebase replication of the Abadi et al. study was found.
 
 ### 4.3 Conclusion for C3
 
-C3 is, by its own nature, not a claim literature search can resolve — it names a
-measurement to run, not a question with a citable answer. This review's job for C3 is
-narrower: confirm that no existing measurement already settles it (so E1 is not
-redundant) and confirm that the one measurement close enough to cite as a cross-check
-(Abadi et al. 2025) is being relied on at exactly the strength it supports — as an
-order-of-magnitude proxy on a related but coarser and narrower-corpus question, not as
-a substitute result. Both hold, confirmed by a full reading of the paper rather than
-its abstract. **Confidence: not applicable in the usual sense** — there is nothing to
-have confidence in or against yet; the honest statement is that the literature search
-found no reason to believe E1 is already answered, and found one useful, honestly-
-scoped calibration point for roughly what order of magnitude to expect.
+C3 names a measurement to run, not a question literature search settles directly —
+but it still earns a confidence, not "not applicable": the honest question is how
+confident this review is that no existing measurement already answers it, and how
+confident it is that the one close measurement found is a usable proxy.
+
+**Confidence: high** that no existing measurement already settles C3. The Abadi et al.
+(2025) study is the only close measurement found across both passes, and it answers a
+related but coarser, binary (inferable/not), narrower-corpus (popular open-source
+Django/TypeORM web applications only) question that cannot distinguish kiln's
+statically-known one-hop case from an unresolvable dependent read; no replication on
+TPC-C-style, enterprise, or non-ORM codebases was found in either pass.
+
+**Confidence: medium** that the Abadi et al. figures are a usable order-of-magnitude
+proxy for what E1 will find. Medium, not high, because the corpus and the category
+scheme both differ from kiln's target population in directions this review cannot
+resolve from the paper alone — a narrower, ORM-driven, open-source corpus could read
+either more or less statically admissible than kiln's own target workloads, and the
+paper's coarser categories (no one-hop carve-out) could over- or under-state the
+one-hop share specifically.
 
 ## 5. Summary of new collisions / partial overlaps not in the issue's original list
 
-- **Mergeable Replicated Data Types / Quark** (OOPSLA 2019) — the single most
-  important new finding: automatic synthesis of a composable summary for explicitly
-  **non-commuting** operations, the first found anywhere in this or the prior search
-  pass. Narrows C1's novelty (§2.2) without eliminating it.
+- **The loop-parallelization synthesis lineage** (Mytkowicz et al., ASPLOS 2014;
+  Symple, SOSP 2015; GRASSP, SYNT 2016; Farzan & Nicolet, PLDI 2017/2019/2021) — the
+  most important correction in this revision: a third, previously unsearched lineage
+  that supplies C1's automatic+checked+associative+parallel-prefix mechanism in full,
+  for general sequential loops rather than database transactions (§2.4, §2.6).
+- **Mergeable Replicated Data Types / Quark** (OOPSLA 2019) — automatic synthesis of a
+  three-way merge for explicitly non-commuting operations, restated this pass as
+  state-merge synthesis rather than summary synthesis (§2.3).
+- **Bartoletti, Galletta & Murgia** (arXiv 1905.04366, 2019), **Conthereum** (arXiv
+  2504.07280, 2025), and a 2025 Ethereum static-conflict-analysis paper (arXiv
+  2507.04357) — a static, per-call-instance (Bartoletti/Conthereum) or per-function-
+  pair (the 2025 paper) key-derivation lineage in the blockchain/smart-contract
+  setting, materially narrowing C2's confidence (§3.2, §3.3).
 - **The Scalable Commutativity Rule / COMMUTER** (SOSP 2013) and **Koskinen & Bansal**
   (arXiv 2004.08450, 2020) — automatic discovery of commutativity conditions from code,
-  adjacent to C1's "automatic" angle but solving the opposite problem (verifying
-  existing commutativity, not synthesizing summaries for its absence).
+  adjacent to C1's "automatic" angle but solving the opposite problem.
 - **QURO** (VLDB 2016) — the clearest real-world instance of build-time static
-  analysis of actual OLTP application code found for C2, at the wrong granularity
-  (within-transaction reordering).
+  analysis of actual OLTP application code found for C2, at the wrong granularity;
+  corrected this pass from "deployed" to "implemented and benchmarked" (§3.2).
+  **Beta** (arXiv 1807.09887) — corrected this pass from "excludes concurrency
+  entirely" to "evaluates under OMVCC and precomputes columns at compile time," newly
+  relevant to C2 at the wrong (per-program) granularity.
 - **Strife** (SIGMOD 2020, Prasaad/Cheung/Suciu) — runtime, sampling-based clustering
   of transactions into conflict-free batches; adjacent to both C1 and C2 but neither
   static/build-time nor a synthesized summary.
-- **FAFO/ParaLyze** (arXiv 2507.10757, 2025) — confirms the declare-or-discover
-  dichotomy persists into the newest (2025) blockchain-adjacent lineage.
-- **Afek/Korland/Zilberstein** (LCPC 2010/2011) — build-time static analysis, but of
-  STM instrumentation overhead, not transaction footprints.
-- **CoqSQL** (MIT thesis, 2017) — a plausible partial overlap for C1's certificate and
-  C2's build-time derivation that this session could not verify from primary text;
-  named honestly as unverified, not claimed.
-- A corrected bibliographic fact carried forward: **Caracal is SOSP 2021**, not an
-  "unverified, possibly SIGMOD 2021" venue as the earlier pass's note had it (confirmed
-  via DBLP, page range 180–194).
+- **FAFO/ParaLyze** (arXiv 2507.10757, 2025) and **Afek/Korland/Zilberstein** (LCPC
+  2010/2011) — adjacent, as in the first draft.
+- **CoqSQL** (MIT thesis, Suriyakarn, 2017) — promoted this pass from "unverified" to
+  classified using primary text: partial overlap for C1 (synthesis plus a mechanically
+  Coq-checked certificate), adjacent for C2 (schema-parameterized, not call-argument-
+  parameterized) (§2.5, §3.2).
+- Corrected bibliographic facts carried forward: **Caracal is SOSP 2021** (unchanged
+  from the first draft); the Abadi et al. **TypeORM threshold is ≥300 stars** and the
+  **0.9% Attribute Dependency figure averages over the 33 affected applications**, not
+  the whole 111-application corpus or ≥500 stars as the first draft had both (§4.1);
+  the PLDI 2021 divide-and-conquer paper's program chairs (Freund, Yahav) were
+  corrected to not be co-authors.
 
 ## 6. Limits of this search
 
-- **No independent ACM Digital Library, DBLP crawler/API, or Google Scholar access.**
-  Every "DBLP" or "ACM DL" lookup in this protocol was actually a general web search
-  for the bibliographic record plus a hunt for a non-paywalled mirror of the paper
-  itself. This is the single largest structural limit on how systematic this review
-  can claim to be; a reviewer with institutional ACM DL access or a DBLP API key could
-  run the proceedings-by-venue-by-year crawl this session could not.
-- **Two primary sources could not be obtained despite repeated attempts:**
-  Shasha/Llirbat/Simon/Valduriez's full ACM TODS 1995 text (the NYU and academia.edu
-  mirrors both returned HTTP 403 even with a browser user-agent; characterized instead
-  via a short author-written encyclopedia summary and two citing papers' own
-  descriptions, read in full) and Faleiro/Abadi/Hellerstein's PWV, PVLDB 2017 (the NSF
-  Public Access mirror timed out on two separate attempts; characterized via the
-  earlier pass's already-primary-source-sourced direct quote and an independently
-  confirmed DOI, not re-verified beyond that).
-- **Semantic Scholar was not queried through its own interface or API** — a targeted
-  pass specifically against its citation-graph tooling (rather than general web search)
-  might surface forward citations this session's method could miss, particularly for
-  the youngest items (TransactionMerger, MRDT/Quark, FAFO).
+- **No independent ACM Digital Library, DBLP crawler/API, or Google Scholar access, in
+  either pass.** The single largest structural limit on how systematic this review can
+  claim to be.
+- **The original pass's general web-search queries were not logged with per-hit
+  screening counts** — §1.6's register states this plainly for rows 1–3 rather than
+  retrofitting invented numbers onto a session this review did not run; every query
+  this pass ran itself has an exact count in §1.6.
+- **Two primary sources could not be obtained despite repeated attempts, in either
+  pass:** Shasha/Llirbat/Simon/Valduriez's full ACM TODS 1995 text (two mirrors, both
+  403) and Faleiro/Abadi/Hellerstein's PWV, PVLDB 2017 (NSF Public Access mirror
+  timeout, twice).
+- **Two candidates surfaced by bibliographic search this pass were not opened and are
+  carried as unresolved, not classified:** Fisher & Ghuloum, "Parallelizing Complex
+  Scans and Reductions," PLDI 1994, pp. 135–146 — a plausible, earlier ancestor of the
+  loop-parallelization lineage (§2.4), confirmed to exist and its title/venue/pages
+  confirmed, but its primary text was not located within this session's reach; and
+  Morita/Morihata/Matsuzaki/Hu/Takeichi, "Automatic Inversion Generates Divide-and-
+  Conquer Parallel Programs," PLDI 2007, pp. 146–155, DOI 10.1145/1250734.1250752 — a
+  plausible intermediate step in the same lineage, same status. Neither is scored
+  above; a future pass that opens them may narrow lineage C's history further, but
+  neither changes §2.6's confidences, which already treat lineage C's mechanism as
+  established.
+- **Semantic Scholar was not queried through its own interface or API**, in either
+  pass — a targeted citation-graph pass might surface further descendants of lineage C
+  or the blockchain static-key lineage that general web search missed.
 - **No full SIGMOD/VLDB/CIDR/OSDI/SOSP/EuroSys/NSDI/PLDI/POPL/OOPSLA/ASPLOS/PPoPP/SPAA
-  proceedings-by-year crawl was run for 2023–2026** beyond the targeted queries in
-  §1.3; per the dispatch brief's own instruction, depth on named collisions and partial
-  overlaps was prioritized over such breadth. A dedicated pass reading every 2024–2026
-  CIDR/SIGMOD/VLDB proceedings table of contents for titles plausibly touching
-  "transaction," "commute," "footprint," or "synthesis" would be the natural next
-  increment if the operator wants higher confidence than "medium" on C1 or "medium-high"
-  on C2.
-- **Not re-verified this session, carried over from the existing notes unchanged**
-  (not flagged in the issue as needing re-check, and not independently re-surfaced by
-  the fresh queries): Katara, Hamsaz, Hampa, IPA, ECROs, CISE/CISE3, Bailis et al.'s
-  I-confluence paper itself, and the chopping-lineage follow-ons (Dias/Lourenço/Preguiça
-  StarTM). Their characterization in `docs/research/notes/invariant_driven_coordination.md`
-  is accepted as-is for this review.
-- **CoqSQL's thesis text itself was not obtained** — characterized only via secondary
-  description of its abstract and catalog record; flagged as unverified in §3.2/§5
-  rather than scored.
+  proceedings-by-year crawl was run for 2023–2026**, beyond the targeted queries in
+  §1.3, in either pass — the natural next increment if the operator wants higher
+  confidence than this revision's "medium" on C1's transaction-batch combination or C2.
+- **Not re-verified this pass, carried over from the existing notes unchanged** (not
+  flagged by the independent review, not independently re-surfaced by any fresh
+  query): Katara, Hamsaz, Hampa, IPA, ECROs, CISE/CISE3, Bailis et al.'s I-confluence
+  paper, and the chopping-lineage follow-ons (Dias/Lourenço/Preguiça StarTM). Their
+  characterization in
+  `docs/research/notes/invariant_driven_coordination.md` is accepted as-is.
