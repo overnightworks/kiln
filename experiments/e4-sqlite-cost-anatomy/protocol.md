@@ -9,20 +9,22 @@ run E4 from this file alone.
 
 ## 1. Question and verdict quantity
 
-Where does SQLite spend time on a small, single-row-or-few-row transaction —
-flushing to disk, writing pages, or something else — and how does that
+Where does SQLite spend time on a small, single-row-or-few-row transaction
+— flushing to disk, writing pages, or something else — and how does that
 change between a dataset that fits SQLite's page cache and one that does
 not? `docs/concept.md` §12 names "parity, not a win" as the ceiling on a
-single-writer path bound by flush time, and names the costs a closed-world
-compiler could remove (parse/compile at request time, a skippable B-tree
-walk, per-writer lock bookkeeping). E4 puts a number on that ceiling before
-kiln exists.
+single-writer path bound by flush time, and names a skippable B-tree walk
+and per-writer lock bookkeeping as removable costs — not parse/compile at
+request time, a third cost it names but out of scope, since §2's cached
+prepared statements already remove it from every operation. E4 puts a
+number on the ceiling for the two costs it does measure, before kiln
+exists.
 
 **Verdict quantity.** Per (workload, size, `synchronous` setting), the share
-of per-operation wall time spent outside `xSync` and `xWrite` calls
-(§5). This is the directly measured, flush-independent, write-independent
-remainder — the only part a closed-world compiler could plausibly shrink.
-§10 fixes the thresholds and the decision rule.
+of per-operation wall time spent outside `xSync` and `xWrite` calls (§5)
+— the directly measured, flush-independent, write-independent remainder,
+the only part a closed-world compiler could plausibly shrink. §10 fixes
+the thresholds and decision rule.
 
 ## 2. Schema and workloads
 
@@ -38,21 +40,18 @@ CREATE UNIQUE INDEX accounts_email ON accounts(email);
 `id` aliases the rowid, so a point lookup/update by `id` touches one B-tree.
 `accounts_email` is the one secondary index; only workload C uses it.
 
-Every workload is one transaction per call. Read workloads use
-`BEGIN DEFERRED` (a read needs no write lock); write workloads use
-`BEGIN IMMEDIATE` (a write starts its write lock at `BEGIN`, not on its
-first write statement).
-`BEGIN`, `COMMIT`, and each workload's statement are each prepared once per
-connection at startup and reused by `sqlite3_reset()` + rebind, never
-re-prepared per call (https://www.sqlite.org/cintro.html, fetched
-2026-10-15 — "the time needed to run `sqlite3_prepare()` equals or exceeds
-the time needed by `sqlite3_step()`"). The harness never calls
-`rusqlite`'s `Connection::transaction()`/`Transaction` helper for this
-reason: that type issues `BEGIN ...`/`COMMIT` through `execute_batch`, a
-one-off call, not a cached prepared statement
+Every workload is one transaction per call: `BEGIN DEFERRED` for reads (no
+write lock needed), `BEGIN IMMEDIATE` for writes (the write lock starts at
+`BEGIN`, not the first write statement). `BEGIN`, `COMMIT`, and each
+statement are prepared once per connection at startup and reused by
+`sqlite3_reset()` + rebind, never re-prepared per call
+(https://www.sqlite.org/cintro.html, fetched 2026-10-15 — "the time
+needed to run `sqlite3_prepare()` equals or exceeds `sqlite3_step()`").
+The harness never calls `rusqlite`'s `Connection::transaction()` helper,
+since it issues `BEGIN`/`COMMIT` through `execute_batch`, a one-off call,
+not a cached statement
 (https://docs.rs/rusqlite/0.40.2/src/rusqlite/transaction.rs.html, fetched
-2026-10-15). The harness prepares the three `BEGIN` variants and `COMMIT`
-itself, the same way as every other statement in this section.
+2026-10-15); it prepares the three `BEGIN` variants and `COMMIT` itself.
 
 - **A. Point read.** `BEGIN DEFERRED; SELECT id, email, balance FROM
   accounts WHERE id = ?1; COMMIT;` `?1` uniform random in
@@ -63,46 +62,50 @@ itself, the same way as every other statement in this section.
 - **C. Insert under a unique index.** `BEGIN IMMEDIATE; INSERT INTO
   accounts (id, email, balance) VALUES (?1, ?2, 0); COMMIT;` `?1` is the
   next id from a counter starting at `row_count + 1`. `?2` is 16 random
-  lowercase hex characters (the random-leading component) followed by `-`
-  and the harness's repetition counter (the uniqueness suffix) — the
-  random component leads so inserts land in random regions of the index's
-  B-tree, not append-only ones. On `SQLITE_CONSTRAINT` (a collision), redraw
-  the random component once; a second collision aborts the run as a
-  protocol violation.
+  lowercase hex characters (leading, so inserts land in random B-tree
+  regions, not append-only ones) followed by `-` and the repetition
+  counter (uniqueness). On `SQLITE_CONSTRAINT` (collision), redraw the
+  random component once; a second collision aborts the run as a protocol
+  violation.
 - **D. Transfer.** One transaction: `SELECT balance FROM accounts WHERE id
-  = ?1;`; if that balance is ≥ the transfer amount (fixed at **1**, the
-  same unit §2.1 loads `balance` in), `UPDATE accounts SET balance =
-  balance - 1 WHERE id = ?2;` then `UPDATE
-  accounts SET balance = balance + 1 WHERE id = ?3;`. `?2`/`?3` are
-  independent uniform-random draws in `[1, row_count]`, redrawing `?3` on a
-  collision with `?2`. Every repetition commits exactly one transaction
-  regardless of the guard outcome; the harness counts and reports how often
-  the guard blocked a transfer.
+  = ?1;`; if that balance is ≥ the transfer amount (fixed at **1**, §2.1's
+  `balance` unit), `UPDATE accounts SET balance = balance - 1 WHERE id =
+  ?2;` then `UPDATE accounts SET balance = balance + 1 WHERE id = ?3;`.
+  `?1`/`?2` are bound to the same value, the sender's id, so the guard
+  reads exactly the row the first `UPDATE` debits; `?3` is an independent
+  uniform-random draw in `[1, row_count]`, redrawn on a collision with
+  `?1`/`?2`. Every repetition commits one transaction regardless of the
+  guard outcome; the harness counts how often it blocked a transfer.
 
 ### 2.1 Inputs, frozen
 
-- **PRNG.** `ChaCha8Rng` from the `rand_chacha` crate, version `0.10.0`
-  (https://lib.rs/crates/rand_chacha, fetched 2026-10-15), seeded once per
-  cell from a single fixed integer seed: **`1`**. Reason: any fixed seed
-  reproduces the same key sequence byte for byte; `1` is the simplest
-  value that is not itself a parameter being tuned.
-- **Initial load.** Each size (§3) is loaded once with `id = 1..row_count`,
-  `email = 'user' || id || '@example.test'` (deterministic; only the C
-  workload's hot-path email needs the random-leading property, §2), and
-  `balance = 1000000` (an arbitrary round unit, large enough relative to
-  the transfer amount that D's guard almost never fires). After loading,
-  the harness asserts `SELECT count(*) FROM accounts` equals `row_count`,
-  then copies the database and WAL files to a pristine backup under
-  `data/<cell>/pristine/`.
-- **Per-repetition correctness checks.** After B or D, the harness
-  periodically (every repetition) checks no `balance` is negative. After D
-  specifically, it checks `SELECT sum(balance) FROM accounts` is unchanged
-  from before the repetition (a transfer is zero-sum). After C, it checks
-  the row count grew by exactly the operation count run (§8).
-- **Baseline restore.** Workloads A, B, D mutate values but never row
-  count or schema; a fresh process per repetition (§8) is restore enough.
-  Workload C grows the table; its pristine backup is copied back over the
-  working files before every repetition, outside the timed window.
+- **PRNG.** `ChaCha8Rng` from `rand_chacha` `0.10.0`
+  (https://lib.rs/crates/rand_chacha, fetched 2026-10-15), re-seeded at
+  the start of every repetition **attempt** (original or retried, §9)
+  from `1 + cell_index × 1000 + repetition_index` — never one seed running
+  across a whole cell, so a retry draws the same trace as the attempt it
+  replaces. `1` is the simplest base value not itself a tuned parameter;
+  the offsets keep every (cell, repetition) seed distinct.
+- **Initial load.** Each size (§3) loads once with `id = 1..row_count`,
+  `balance = 1000000` (large enough D's guard almost never fires), and
+  `email` = 16 lowercase hex characters deterministically derived from
+  `id` (not the repetition PRNG) plus `-init-` and `id` — C's inserted
+  emails' random-leading shape (§2), so initial and inserted keys
+  interleave through the B-tree instead of concentrating. The harness
+  then asserts the row count, closes the connection, runs `PRAGMA
+  wal_checkpoint(TRUNCATE);` ("checkpoints all frames... and syncs the
+  database file," then truncates the WAL "to zero bytes upon successful
+  completion," https://www.sqlite.org/pragma.html#pragma_wal_checkpoint,
+  fetched 2026-10-15), and copies that main file plus the empty WAL to
+  `data/<cell>/pristine/` — the state restored before every attempt.
+- **Per-repetition correctness checks.** After B/D: no `balance` negative.
+  After D: `SELECT sum(balance)` unchanged (zero-sum). After C: row count
+  grew by exactly the operation count.
+- **Baseline restore.** The pristine backup is copied back over the
+  working database/WAL files before every attempt, outside the timed
+  window — including A, B, D, which mutate values but not row count: a
+  fresh process alone does not restore on-disk files, so a repetition
+  would otherwise inherit whatever the previous attempt left.
 
 ## 3. Sizes
 
@@ -111,14 +114,13 @@ Two sizes, both frozen:
 - **Small: 10,000 rows.**
 - **Medium: 10,000,000 rows.**
 
-§4 fixes a 64 MiB page-cache budget. 10,000 rows of this schema sit far
-below it; 10,000,000 rows sit far above it under any cache budget this
-protocol freezes — three orders of magnitude, chosen so the two sizes land
-unambiguously on opposite sides of the cache boundary. After loading each
-size, the harness reads the database file's on-disk byte size (main file +
-WAL file) and the active `cache_size`, writes both into the size's manifest
-entry, and reports a violation if the intended fits/does-not-fit relation
-does not hold.
+§4 fixes a 64 MiB page-cache budget. 10,000 rows sit far below it;
+10,000,000 sit far above it under any budget this protocol freezes —
+three orders of magnitude, so the two sizes land unambiguously on
+opposite sides of the cache boundary. After loading, the harness reads
+the on-disk byte size (main + WAL) and active `cache_size` into the
+manifest, and reports a violation if the fits/does-not-fit relation
+fails.
 
 ### 3.1 Key distribution
 
@@ -129,53 +131,41 @@ Workload C's keys are described in §2.
 
 ## 4. Connection settings, frozen
 
-- **SQLite version.** Linked via the `rusqlite` crate `0.40.2` with its
-  `bundled` feature, which vendors SQLite `3.53.2` via `libsqlite3-sys`
-  `0.38.2` (both latest published as of 2026-10-15:
-  https://lib.rs/crates/rusqlite, https://lib.rs/crates/libsqlite3-sys,
-  fetched 2026-10-15). `Cargo.lock` pins both exactly. At startup the
-  harness calls `sqlite3_libversion()` and writes the returned string into
-  every run's manifest; a mismatch against `3.53.2` is logged as a protocol
-  deviation, not silently accepted.
+- **SQLite version.** Linked via `rusqlite` `0.40.2`'s `bundled` feature,
+  vendoring SQLite `3.53.2` via `libsqlite3-sys` `0.38.2` (both latest as
+  of 2026-10-15: https://lib.rs/crates/rusqlite,
+  https://lib.rs/crates/libsqlite3-sys, fetched 2026-10-15), pinned
+  exactly in `Cargo.lock`. The harness calls `sqlite3_libversion()` at
+  startup and writes it into the manifest; a mismatch is a logged
+  deviation.
 - **WAL and synchronous.** `PRAGMA journal_mode = WAL;` once per
-  connection. Both `PRAGMA synchronous = FULL;` and `= NORMAL;` are
-  measured — every cell runs under both, never only one. In WAL mode,
-  "writers sync the WAL on every transaction commit if `PRAGMA synchronous`
-  is set to FULL but omit this sync if `PRAGMA synchronous` is set to
-  NORMAL"; NORMAL "does lose durability" but stays consistent
-  (https://www.sqlite.org/pragma.html#pragma_synchronous, fetched
-  2026-10-15). FULL is the case concept.md §12 calls the realistic ceiling;
-  NORMAL approximates what is left once the per-commit flush is gone,
-  without building anything to remove it.
+  connection; both `PRAGMA synchronous = FULL;` and `= NORMAL;` are
+  measured, every cell under both. In WAL mode, writers sync on commit
+  under FULL but skip it under NORMAL, which "does lose durability" but
+  stays consistent (https://www.sqlite.org/pragma.html#pragma_synchronous,
+  fetched 2026-10-15). FULL is concept.md §12's realistic ceiling; NORMAL
+  approximates what is left once the flush is gone.
 - **Page cache.** `PRAGMA cache_size = -65536;` once per connection — an
-  explicit 64 MiB budget (not the compiled-in default of about 2 MiB)
+  explicit 64 MiB budget, not the ~2 MiB default
   (https://www.sqlite.org/pragma.html#pragma_cache_size, fetched
-  2026-10-15). This is the budget §3's two sizes straddle.
+  2026-10-15), the budget §3's two sizes straddle.
 - **Page size and checkpointing.** `PRAGMA page_size = 4096;` (this
-  machine's filesystem block size) set before the table is created.
-  `PRAGMA wal_autocheckpoint = 1000;` — SQLite's own documented default
+  machine's block size), set before table creation. `PRAGMA
+  wal_autocheckpoint = 1000;`, SQLite's documented default
   (https://www.sqlite.org/pragma.html#pragma_wal_autocheckpoint, fetched
-  2026-10-15: "Autocheckpointing is enabled by default with an interval of
-  1000") is left in force, not disabled, so a checkpoint fires naturally
-  within a cell and its cost is measured, not hidden (§5, §8). A checkpoint
-  "does require sync operations," making "an occasional COMMIT... much
-  slower" (https://www.sqlite.org/wal.html, fetched 2026-10-15) — this is
-  expected, and the per-operation shares (§8, "reported statistics") are
-  reported with a range across repetitions precisely so one expensive,
-  checkpoint-triggered operation does not get averaged away.
-- **One connection, one thread, single writer.** No second connection, no
-  concurrent reader or writer. This measures a transaction's own cost, not
-  contention (a different experiment, `docs/experiments.md` E2's analogue
-  once kiln exists).
-- **In-memory control.** Every workload also runs once, at the small size
-  only, against `:memory:` instead of a file, with the same `cache_size`
-  and prepared-statement discipline, no `journal_mode` pragma, and no
-  `xSync`/`xWrite` calls to measure (there is no file). §6 uses it as a
-  cross-check, not an independent primary number.
-- **Effective-settings check.** After opening, the harness queries
-  `page_size`, `cache_size`, `wal_autocheckpoint`, `synchronous`, and
-  `journal_mode` and writes all five into the manifest; any value that does
-  not match this section is a logged protocol deviation.
+  2026-10-15), stays in force, so a checkpoint fires naturally and its
+  cost is measured, not hidden — "an occasional COMMIT" becomes "much
+  slower" (https://www.sqlite.org/wal.html, fetched 2026-10-15), and
+  §5/§8 weight that cost by wall time rather than averaging it away.
+- **One connection, one thread, single writer.** Measures a transaction's
+  own cost, not contention (E2's analogue once kiln exists).
+- **In-memory control.** Every workload also runs once, small size only,
+  against `:memory:` with the same `cache_size` and statement discipline,
+  no `journal_mode`, no `xSync`/`xWrite` to measure. §6 uses it as a
+  cross-check, not a primary number.
+- **Effective-settings check.** The harness queries `page_size`,
+  `cache_size`, `wal_autocheckpoint`, `synchronous`, `journal_mode` after
+  opening and writes them into the manifest; any mismatch is logged.
 
 ## 5. Primary measurement: the VFS shim
 
@@ -183,30 +173,24 @@ A sampling profiler cannot see this experiment's main signal: a thread
 blocked inside `fsync` accrues no CPU cycles, so a cycle-sampling profiler
 attributes it near-zero time no matter how long the wait actually was
 (https://perfwiki.github.io/main/tutorial/#profiling-sleep-times, fetched
-2026-10-15 — cycle sampling "does not count when the processor is idle" and
-"is not equivalent to wall clock time"). E4's gating measurement is
-therefore a direct timer at the real boundary, not a statistical sample of
-an indirect proxy.
+2026-10-15 — cycle sampling "does not count when the processor is idle").
+E4's gating measurement is therefore a direct timer at the real boundary,
+not a statistical sample of an indirect proxy.
 
 **The shim.** A custom `sqlite3_vfs`, registered with
-`sqlite3_vfs_register(&shimVfs, 0)` (`makeDflt = 0`; the harness opens
-connections by name), wraps the platform's default VFS found via
-`sqlite3_vfs_find(0)` — the documented shim pattern: "a particular VFS might
-just be a thin wrapper around another VFS that does the real work... We
-call a wrapper VFS a 'shim'" (https://www.sqlite.org/vfs.html, fetched
-2026-10-15). Its `io_methods` delegate every call unchanged to the wrapped
-file's own methods (https://www.sqlite.org/c3ref/io_methods.html, fetched
-2026-10-15, for the full method table) except `xWrite` and `xSync`, which
-the shim times around the delegate call with `clock_gettime(CLOCK_MONOTONIC,
-...)`. `xOpen`'s flags argument carries `SQLITE_OPEN_MAIN_DB` or
-`SQLITE_OPEN_WAL` (https://www.sqlite.org/c3ref/c_open_autoproxy.html,
-fetched 2026-10-15), so the shim keeps separate call counts and total
-durations per file kind — this is how checkpoint syncs (against the main
-file) are told apart from per-commit WAL syncs: an ordinary WAL commit
-never calls `xSync` on the `SQLITE_OPEN_MAIN_DB` file, only on the WAL
-file, so the count of `xSync` calls against the main-file handle is
-exactly the checkpoint count for that cell, no separate instrumentation
-needed.
+`sqlite3_vfs_register(&shimVfs, 0)` (`makeDflt = 0`), wraps the default
+VFS found via `sqlite3_vfs_find(0)` — the documented shim pattern
+(https://www.sqlite.org/vfs.html, fetched 2026-10-15: "a particular VFS
+might just be a thin wrapper around another VFS that does the real
+work... We call a wrapper VFS a 'shim'"). Its `io_methods` delegate every
+call unchanged (https://www.sqlite.org/c3ref/io_methods.html, fetched
+2026-10-15) except `xWrite`/`xSync`, timed with
+`clock_gettime(CLOCK_MONOTONIC, ...)`. `xOpen`'s flags carry
+`SQLITE_OPEN_MAIN_DB`/`SQLITE_OPEN_WAL`
+(https://www.sqlite.org/c3ref/c_open_autoproxy.html, fetched 2026-10-15),
+so counts/durations are kept per file kind: an ordinary commit never
+calls `xSync` on the main-file handle, only the WAL file, so the
+main-file `xSync` count is exactly the checkpoint count.
 
 **Per-operation accounting.** The harness is single-threaded (§4), so the
 shim's accumulators are plain globals, reset by the harness immediately
@@ -214,44 +198,64 @@ before issuing an operation's first statement and read immediately after
 its `COMMIT` step returns. For each operation the harness records:
 
 - **wall** — `CLOCK_MONOTONIC` delta from just before the first statement
-  to just after `COMMIT` returns.
-- **xsync_time** — sum of the shim's timed `xSync` durations inside that
+  to just after `COMMIT` returns. PRNG draws/key formatting (§2) happen
+  before this window opens (the call's inputs, not SQLite's work);
+  result-column materialization (`sqlite3_column_*` after `sqlite3_step`
+  on A's/D's `SELECT`) happens inside it — SQLite's own work on the path
+  §1 measures.
+- **xsync_time** — sum of the shim's timed `xSync` durations in that
   window.
-- **xwrite_time** — sum of the shim's timed `xWrite` durations inside that
-  window, its own bucket, never folded into "outside flush."
-- **remainder** = `wall - xsync_time - xwrite_time`. Exact by construction
-  — the three always sum to `wall`, so bucket shares always sum to 100%.
-- **cpu_time** — `clock_gettime(CLOCK_THREAD_CPUTIME_ID, ...)` delta over
-  the same window, measured by the harness, not the shim. This clock
-  "measures CPU time consumed by this thread" and "is not settable"
+- **xwrite_time** — sum of the shim's timed `xWrite` durations, its own
+  bucket, never folded into "outside flush."
+- **remainder** = `wall - xsync_time - xwrite_time`, exact per operation
+  — the three always sum to `wall`. §8 aggregates by summing each over a
+  repetition before dividing, never medianing a share first, so the same
+  exactness holds at the level §10's verdict rule consumes — and so a
+  checkpoint firing inside a commit (§4), whose `xSync` cost lands inside
+  that one operation's `xsync_time`, is weighted by the wall time it
+  actually occupied rather than lost to a per-operation median.
+- **cpu_time** — `clock_gettime(CLOCK_THREAD_CPUTIME_ID, ...)` delta,
+  measured by the harness, not the shim — "measures CPU time consumed by
+  this thread," "not settable"
   (https://man7.org/linux/man-pages/man2/clock_gettime.2.html, fetched
-  2026-10-15). It is a cross-check, not a fourth bucket: `cpu_time` should
-  sit near zero during `xsync_time` (a blocked thread burns no CPU) and
-  track `remainder + xwrite_time` otherwise; a material, repeated
-  disagreement is reported as a limitation (§13), not resolved silently.
+  2026-10-15). A cross-check, not a fourth bucket: it should sit near
+  zero during `xsync_time` and track `remainder + xwrite_time` otherwise;
+  a material, repeated disagreement is a limitation (§14), not resolved
+  silently.
 
-A checkpoint that fires inside a commit (§4) runs on the same thread, so its
-`xSync` cost lands inside that one operation's `xsync_time` — amortized
-cost, not a separate event, and visible in that cell's reported range
-(§8, "reported statistics") rather than averaged away.
+**Overhead acceptance bound, frozen.** A second, identical build with a
+passthrough shim (no timer calls) measures what the two `clock_gettime`
+calls per `xWrite`/`xSync` cost. Bound: the instrumented build's
+per-repetition `Σwall/N` (§8) must not exceed the uninstrumented's by
+more than **2%** — a VDSO read costs tens of nanoseconds, so 2% covers
+that plus jitter while still catching an unexpectedly costly shim. A
+failed bound is repaired by cheaper instrumentation, never loosened;
+§13's pilot checks it first. The gating run never runs under `perf`; §7
+is a separate invocation of the same binary afterward.
 
 The shim's own code is reviewed, not benchmarked; it adds two timer calls
 around two already-existing method calls, nothing else.
 
 ## 6. Controls
 
-- **Flush-only control.** A SQLite-free benchmark mode opens a scratch
-  file beside the experiment's database files, writes a small fixed
-  512-byte buffer, and calls `fsync`, repeated for the same operation count
-  §8 fixes, timed the same way (`CLOCK_MONOTONIC` around each call). This
-  gives this machine's own device-level flush cost, independent of SQLite,
-  to sanity-check the shim's `xsync_time` against (§13: not a decomposition
-  of SQLite's cost, a cross-check on one number).
-- **In-memory cross-check.** The small-size, `synchronous=FULL`,
-  on-disk median wall time minus the `:memory:` median wall time (§4) is a
-  second, shim-independent estimate of flush-plus-write cost, reported
-  alongside the shim's own `xsync_time + xwrite_time` for the same cell. A
-  material disagreement is reported, not resolved in either number's favor.
+- **Flush-only control.** A SQLite-free mode opens a scratch file beside
+  the database files and repeats, for §8's operation count: append a
+  fixed 512-byte buffer, then `fdatasync` — append, since every workload
+  here only appends to the WAL between checkpoints (§4); `fdatasync`, not
+  `fsync`, since it "does not flush modified metadata unless that
+  metadata is needed," and the file's size is fixed after its first write
+  (https://man7.org/linux/man-pages/man2/fdatasync.2.html, fetched
+  2026-10-15). Timed the same way (`CLOCK_MONOTONIC`), giving this
+  machine's device-level flush cost to sanity-check `xsync_time` against
+  (§14: a cross-check, not a decomposition).
+- **In-memory cross-check.** Small-size, `synchronous=FULL`, on-disk
+  median wall time minus the `:memory:` median (§4) is an **upper-bound**
+  cross-check, not a second estimate: `:memory:` removes every
+  `xWrite`/`xSync` call entirely, so the difference also includes
+  file-only work (page allocation, WAL bookkeeping) no closed-world
+  proposal has committed to removing. Reported alongside `xsync_time +
+  xwrite_time` as a ceiling check, not averaged in; a material
+  disagreement is reported, not resolved either way.
 
 ## 7. Secondary, non-gating breakdown (perf)
 
@@ -260,272 +264,293 @@ granted, this section is skipped and the output says so explicitly — never
 silently retried with reduced permissions.
 
 If run: `perf record --call-graph dwarf -F 999 --delay=-1 --control=fifo:ctl,ack
--- <harness invocation>` (`-1` starts with events disabled; the harness
-sends `enable` to the control FIFO immediately before an operation's first
-statement and `disable` immediately after `COMMIT` returns, so sampling
-covers exactly the timed window, not process startup or warm-up —
+-- <harness invocation>` (`-1` starts disabled; the harness sends `enable`
+before an operation's first statement and `disable` after `COMMIT`
+returns, so sampling covers exactly the timed window —
 https://raw.githubusercontent.com/torvalds/linux/master/tools/perf/Documentation/perf-record.txt,
 fetched 2026-10-15). `-F 999` avoids lockstep with round-frequency system
-activity (perf's own default is 1000 Hz,
+activity (perf's default is 1000 Hz,
 https://perfwiki.github.io/main/tutorial/, fetched 2026-10-15).
 
-This breaks down only `remainder` (the already-isolated non-flush,
-non-write wall time) into SQLite's VDBE, B-tree/page, locking, and "rest"
-modules, by line range, not by function name — the bundled amalgamation
-`sqlite3.c` concatenates SQLite's source files with `/* Begin file <name>
-*/` / `/* End file <name> */` comment markers. Before the frozen run, the
-harness greps these markers out of the exact `sqlite3.c` the build actually
-vendored and writes a `{source file → [start_line, end_line)}` table —
-disjoint and exhaustive by construction, because the markers partition the
-whole file. For every self-overhead sample
-(https://perfwiki.github.io/main/tutorial/#overhead-calculation, fetched
-2026-10-15 — self overhead sums period values, and "the sum of all the
-'self' overhead values should be 100%"), the harness resolves the sample's
-line inside `sqlite3.c` from the build's debug info (`addr2line` against
-the `-g` symbols §12 keeps), looks up which file-range contains that line,
-and assigns a bucket by that file, per `sqlite3`'s architecture page: VDBE
-for `vdbe.c`, `vdbeaux.c`, `vdbeapi.c`, `vdbemem.c`; B-tree/page for
-`btree.c`, `pager.c`, `wal.c`, `pcache.c`, `pcache1.c`; locking for
-`os_unix.c` (https://www.sqlite.org/arch.html, fetched 2026-10-15) —
-`os_unix.c` means locking here specifically because the shim (§5) has
-already pulled every `xWrite`/`xSync` call out of `remainder`, so any
-`os_unix.c` function left in a `remainder` sample is lock/file-state work,
-not I/O; everything else (parser, code generator, allocator, API glue) is
-"rest." A sample whose line falls outside every known range is logged
-**unclassified**, never folded into "rest." The primary build (§12) keeps
-normal optimization and inlining — this section is informational and
-approximate, so disabling inlining to chase attribution precision is not
-worth the risk of changing the measured cost (review finding 5).
+This reports **period-weighted CPU samples only** ("the sum of all the
+'self' overhead values should be 100%,"
+https://perfwiki.github.io/main/tutorial/#overhead-calculation, fetched
+2026-10-15) — a CPU-sampled profile of the whole enable/disable window,
+flush included, since the FIFO brackets one full operation, not the
+`xWrite`/`xSync` sub-intervals §5 times separately; nothing here
+subtracts a sample already counted as `xsync_time`/`xwrite_time` by §5 —
+the two sections measure the same window by overlapping methods. Buckets
+are named for what `sqlite3.c`'s own file boundaries contain, by line
+range: the amalgamation marks source files with `/* Begin file <name>
+*/`/`/* End file <name> */`, and before the frozen run the harness greps
+these into a `{source file → [start_line, end_line)}` table, disjoint and
+exhaustive by construction. Each sample's line is resolved from debug
+info (`addr2line -i`, to its **innermost** frame when inlined), looked up
+in that table, and bucketed per `sqlite3`'s architecture page
+(https://www.sqlite.org/arch.html, fetched 2026-10-15): VDBE
+(`vdbe.c`/`vdbeaux.c`/`vdbeapi.c`/`vdbemem.c`); B-tree/page
+(`btree.c`/`pager.c`/`wal.c`/`pcache.c`/`pcache1.c`); **"unix VFS (reads,
+locking, other)"** for `os_unix.c` — not "locking" alone, since it also
+implements `xRead`; everything else is "rest." A sample outside every
+range is **unclassified**, never folded into "rest." The primary build
+(§12) keeps normal optimization and inlining — disabling it to chase
+attribution precision risks changing the measured cost (finding 5).
 
-The line-range table is written once to
-`experiments/e4-sqlite-cost-anatomy/data/bucket-map.tsv` before the frozen
-run and is not extended afterward; a cell whose unclassified share exceeds
-2% is reported as provisional, not as a finished secondary number. If the
-vendored `sqlite3.c` carries no `Begin file`/`End file` markers, this
-section reports itself unable to run rather than guessing file boundaries.
+The line-range table is written once to `data/bucket-map.tsv` before the
+frozen run, not extended afterward; a cell whose unclassified share
+exceeds 2% is provisional. No `Begin file`/`End file` markers means this
+section reports itself unable to run rather than guessing boundaries.
 
 ## 8. Run procedure
 
 For each cell (one workload × one size × one `synchronous` setting, plus
 the in-memory and flush-only controls):
 
-1. **Operation count, fixed now, not duration-driven.** 2,000 operations
-   for A, B, D; 500 for C. Same count for every `synchronous` setting and
-   every repetition of a cell — no doubling, no adaptation to how fast a
-   cell runs. Reason for C's smaller count: it grows the table, and growth
-   must stay small relative to `row_count` (§3) in both directions; 500
-   plus the 200-operation warm-up below is ≤ 7% of the small size's 10,000
-   rows.
-2. **Warm-up.** 200 operations of the cell's workload run first and are
-   discarded from timing and from the shim's counters — letting the OS and
-   SQLite's page cache reach steady state. For workload C, warm-up
-   insertions count toward the growth bound above; the pristine-backup
-   restore (§2.1) happens before warm-up, once per repetition.
+1. **Operation count, fixed, not duration-driven.** 2,000 for A, B, D;
+   500 for C — same for every `synchronous` setting and repetition, no
+   adaptation to run speed. C's count is smaller because it grows the
+   table and growth must stay small relative to `row_count` (§3): 500
+   plus the warm-up below is ≤7% of the small size's 10,000 rows.
+2. **Warm-up.** 200 operations run first, discarded from timing and the
+   shim's counters, letting the OS and page cache reach steady state. For
+   C, warm-up insertions count toward the growth bound above; the
+   pristine restore (§2.1) happens before warm-up, once per attempt.
 3. **Timed window.** The cell's fixed operation count runs back-to-back,
-   one transaction per operation, each one's shim counters and
-   `cpu_time` recorded individually (§5).
-4. **Repetitions.** 9 per cell, each its own process (no state leaks
-   between repetitions). Reason for 9: with the per-operation median as the
-   repetition's summary statistic, the min and max across 9 independent
-   repetitions bound the true per-cell median with (1 − 2×0.5⁹) ≈ 99.6%
-   confidence — each repetition has an even chance of landing above or
-   below the true median, so the two-sided failure probability is
-   2×(1/2)⁹. This is a property of order statistics, not a tuned number;
-   9 was chosen as the smallest count clearing 99% under this rule.
-5. **Reported statistics.** Per repetition: the median `wall`, `xsync_time`,
-   `xwrite_time`, `remainder`, `cpu_time`, and each as a share of `wall`.
-   Across the 9 repetitions: the median of those per-repetition medians,
-   and the min–max range (a range, not a standard deviation — flush-bound
-   latencies are expected to be skewed, and a range assumes nothing about
-   the shape of that skew).
-6. **Cell order.** Cells are interleaved — repetition 1 of every cell, then
-   repetition 2 of every cell, and so on — so a transient load spike biases
-   every cell's data equally instead of concentrating in whichever cells
-   happen to run consecutively.
+   one transaction per operation, shim counters and `cpu_time` recorded
+   individually (§5).
+4. **Repetitions.** 9 per cell, each its own process, from the same
+   restored pristine state and input trace (§2.1) — i.i.d. under that
+   restoration, the assumption the bound below relies on. The min/max of
+   `n` i.i.d. repetition summaries (`Σremainder/Σwall`, below) bound the
+   true population median with `(1 − 2×0.5ⁿ)` confidence. `n = 8` already
+   clears 99% (`≈99.219%`); 9, the next count up, is chosen odd over the
+   sufficient 8 because an odd `n` has one well-defined middle value,
+   where even `n` needs an averaging convention; 9 gives `≈99.609%`.
+5. **Reported statistics.** Per repetition: `Σxsync_time`,
+   `Σxwrite_time`, `Σremainder`, `Σwall`, summed over every operation
+   (checkpoints included, §5); the first three divided by `Σwall` give
+   that repetition's share — exact, summing to 100%, and the gating
+   quantity §10 consumes (not a per-operation median's share). Also:
+   `Σwall/N` (mean per-operation wall time) and the latency tail
+   (99th-percentile/maximum per-operation `wall`). Across the 9
+   repetitions: the median of each statistic and its min–max range (not
+   a standard deviation — flush-bound latencies are expected skewed).
+6. **Cell order.** Interleaved — repetition 1 of every cell, then
+   repetition 2, and so on — so a load spike biases every cell equally.
 
 ## 9. Machine conditions
 
-Hardware, read on this machine 2026-10-15: AMD Ryzen 5 5600X, 6 physical
-cores, SMT2 (12 logical CPUs, per `/proc/cpuinfo`/`lscpu`); storage
-`/dev/nvme0n1`, non-rotational per `lsblk`'s `ROTA=0`; filesystem `ext4` at
-`/`. A different machine re-collects these facts fresh; they are not a
-portable assumption.
+Hardware, read 2026-10-15: AMD Ryzen 5 5600X, 6 physical cores, SMT2 (12
+logical CPUs, `/proc/cpuinfo`/`lscpu`); storage `/dev/nvme0n1`,
+non-rotational per `lsblk`'s `ROTA=0`; filesystem `ext4` at `/`. A
+different machine re-collects these fresh; not a portable assumption.
 
-- **Pinning.** The harness runs under `taskset -c 2`. Its SMT sibling is
-  logical CPU 8, confirmed by reading
-  `/sys/devices/system/cpu/cpu2/topology/thread_siblings_list` (`2,8`) — a
-  different machine re-derives its own sibling pair the same way, never
-  reusing "2,8." Nothing else is deliberately scheduled onto 2 or 8.
-- **Profiler placement (§7 only).** `perf record` attaches to the already
-  running, already-pinned harness process (`perf record -p <pid> ...`)
-  from an unpinned shell, or one pinned away from CPUs 2 and 8 — it never
-  shares a CPU with the measured harness.
-- **Interference monitoring.** During every timed window, a separate,
-  unpinned monitor process samples `/proc/stat`'s per-CPU fields for CPUs 2
-  and 8, and `/proc/loadavg`, every 200 ms — frequent enough to catch an
-  interference burst within a single cell's run, which can last a few
-  seconds. Reason for 200 ms over the old 5-second interval: a 5-second
-  sample can miss an entire short run; 200 ms cannot, at negligible
-  overhead since the monitor itself never runs on 2 or 8.
-- **Validity.** A repetition is discarded in full (not partially kept) and
-  retried from its warm-up step if, at any sample during its timed window:
-  CPU 8 shows any utilization from another process (the sibling must stay
-  idle — that is the point of pinning away from it), or `/proc/loadavg`'s
-  1-minute average is at or above **18** (1.5× this machine's 12 logical
-  CPUs — the same bound this environment already uses to decide whether to
-  start a job, so one number governs both decisions).
+- **Pinning.** The harness runs under `taskset -c 2` (`-c`: "a numerical
+  list of processors," https://man7.org/linux/man-pages/man1/taskset.1.html,
+  fetched 2026-10-15). Its SMT sibling is CPU 8, confirmed via
+  `/sys/devices/system/cpu/cpu2/topology/thread_siblings_list` (`2,8`). The
+  monitor and, if §7 runs, `perf record` both run `taskset -c` pinned to
+  the complement of `{2, 8}`, never merely "unpinned," since an unpinned
+  process can still land there by scheduler choice.
+- **Interference monitoring.** The pinned monitor samples every 200 ms:
+  `/proc/stat`'s idle field for CPU 8; `/proc/schedstat`'s field 8 for
+  CPU 2 ("sum of all time spent waiting to run by tasks on this processor
+  (in nanoseconds)," https://docs.kernel.org/scheduler/sched-stats.html,
+  fetched 2026-10-15 — `/proc/stat` lacks this signal, so CPU 2 needs
+  schedstat where CPU 8's idle check does not); and `/proc/loadavg`.
+  200 ms catches a burst within a multi-second run; 5 seconds could miss
+  one entirely.
+- **Interference limits, frozen.** A sample fails the repetition if: CPU
+  8 shows any non-idle time; CPU 2's schedstat field 8 increases by more
+  than **1,000,000 ns (1 ms)** over the window (decision: hundreds of
+  sub-millisecond operations fill a window, so 1 ms of wait implies real
+  contention, not noise); or `/proc/loadavg`'s 1-minute average is at or
+  above **18** (1.5× 12 logical CPUs, the bound this environment already
+  uses to gate a job).
+- **Retry budget.** A repetition failing a sample above is discarded and
+  retried from warm-up (§8.2) with the same input trace (§2.1) — up to
+  **3 retries (4 attempts)**: one clears a single spike, two more guard a
+  second, and a 4th failure shows sustained contention, so the run stops
+  and reports the gap. **Exhausted:** marked `FAILED-INTERFERENCE`,
+  excluded from statistics (§8.5); fewer than **5** of 9 succeeding makes
+  the verdict `inconclusive — insufficient repetitions` (distinct from
+  §10's inconclusive), since that no longer carries §8.4's confidence
+  bound. Warm-up count and cell order (§8.2, §8.6) stay fixed per attempt.
 - **Rejected-attempt log.** Every discarded attempt (timestamp, cell,
-  reason) is appended to
-  `experiments/e4-sqlite-cost-anatomy/data/rejected.log`, kept, never
-  overwritten.
+  attempt, reason) is appended to `data/rejected.log`, never overwritten.
 
 ## 10. Verdict rule
 
-For a (workload, size, `synchronous`) cell, `nonflush% = remainder / wall`
-(§5), as a median over repetitions with its min–max range (§8, "reported
-statistics"). FULL and
-NORMAL are judged separately and never combined into one number — NORMAL
-mostly skips the per-commit sync by design (§4), so its `nonflush%` answers
-a different question (what is left once the flush is already gone) than
-FULL's (what is left while still paying the realistic ceiling).
+For a (workload, size, `synchronous`) cell, the gating quantity is each
+repetition's `Σremainder/Σwall` (§8.5), summarized by its **min** and
+**max** across the 9 repetitions — not the median, since this is a
+boundary check and the min/max already carry §8.4's confidence bound.
+FULL and NORMAL are judged separately, never combined — NORMAL mostly
+skips the per-commit sync (§4), so it answers what is left once the
+flush is gone, versus FULL's what is left while paying the ceiling.
 
-A genuinely removable wall-time fraction `f` bounds the best-case speedup at
-`1 / (1 - f)` — e.g. `f = 0.10 → 1.11×`, `f = 0.25 → 1.33×`, `f = 0.50 → 2×`.
-This fixes the two thresholds below by naming the smallest and largest
-speedup bounds worth distinguishing, not by picking round percentages after
-the fact:
+A genuinely removable wall-time fraction `f` bounds the best-case speedup
+at `1 / (1 - f)` — e.g. `0.10 → 1.11×`, `0.25 → 1.33×`, `0.50 → 2×` —
+**conditional** on removing `remainder` entirely while `xsync_time`/
+`xwrite_time` stay as measured: kiln need not match SQLite's own I/O
+cost, so this is what a closed-world compiler could win on the
+flush/write path unchanged, not an unconditional prediction. This fixes
+the thresholds below, naming the smallest/largest conditional bounds
+worth distinguishing, not round percentages:
 
-- **A small-data win is plausible** if the median `nonflush% ≥ 20%` (bounds
-  a best-case speedup ≥ 1.25×, chosen as the smallest bound worth the
-  engineering cost of a closed-world compiler) **and** the cell's min–max
-  range does not cross below 20% (precedence: a range straddling a
-  threshold outranks the point estimate — see "inconclusive" below).
-- **Parity is the ceiling** if the median `nonflush% < 5%` (bounds a
-  best-case speedup < 1.05×, below which the measurement's own noise could
-  explain the whole gap) **and** the range does not cross above 5%.
-- **Inconclusive** otherwise — the median falls in `[5%, 20%)`, or a
-  threshold falls inside the min–max range. Reported as inconclusive, not
-  rounded to either side.
+- **A small-data win is plausible** if **min** `≥ 20%` (speedup ≥ 1.25×,
+  the smallest bound worth a closed-world compiler's engineering cost).
+- **A low conditional ceiling** holds if **max** `< 5%` (speedup
+  `1/0.95 ≈ 1.0526×` — stated "< 1.0526×", not "< 1.05×").
+- **Inconclusive** otherwise — neither bound holds, including a range
+  straddling both figures. Not rounded to either side.
 
-These three outcomes are mutually exclusive and apply to every (workload,
-size, synchronous) cell independently — both sizes, not only the small one.
-The medium size is expected, not assumed, to show a smaller `nonflush%` as
-the page-handling share of `remainder` grows with data that no longer fits
-the frozen cache (§3); the verdict table (§11) reports what is measured.
+These three outcomes are mutually exclusive, applied to every cell
+independently. The medium size is expected to show a **larger**
+`Σremainder/Σwall` than the small size: only `xWrite`/`xSync` are timed
+out of `remainder` (§5), so a larger-than-cache set's extra cost —
+reading pages outside the 64 MiB budget (§3, §4) — lands inside
+`remainder`; the verdict table (§11) reports what is measured.
 
-E4's overall statement is the full table of per-cell verdicts, never a
-single collapsed number — the four workloads are not expected to land on
-the same side of any threshold.
+E4's overall statement is the full table of per-cell verdicts, never one
+collapsed number — the four workloads need not land on the same side.
 
 ## 11. Outputs
 
 **Tables.** One table per `synchronous` setting, one row per (workload ×
-size), columns: median `wall`, its range, and `xsync_time`, `xwrite_time`,
-`remainder`, `cpu_time` each as a median share of `wall` with its range,
-plus the §10 verdict. A separate table holds the in-memory and flush-only
-controls. If §7 ran, its module breakdown of `remainder` is a separate,
-clearly labeled secondary table.
+size), columns: the median and min–max range, across repetitions, of
+`Σwall/N`, the 99th-percentile and maximum per-operation `wall`, and the
+`xsync_time`/`xwrite_time`/`remainder`/`cpu_time` shares (§8.5), plus the
+§10 verdict. A separate table holds the in-memory and flush-only controls.
+If §7 ran, its module breakdown is a separate, clearly labeled secondary
+table.
 
 **Figures.** One stacked-bar chart per `synchronous` setting, one bar per
-(workload × size), three segments (xsync, xwrite, remainder). One chart
-compares on-disk `synchronous=FULL` median wall time against the in-memory
-control, small size, per workload (§6).
+(workload × size), three segments (xsync, xwrite, remainder); one chart
+compares on-disk `FULL` median wall time against the in-memory control,
+small size, per workload (§6).
 
-**Raw data.** Every repetition's per-operation `wall`, `xsync_time`,
-`xwrite_time`, `remainder`, `cpu_time`; the rejected-attempt log (§9); and
-each cell's manifest (settings actually in force, PRNG seed, on-disk byte
-size and `cache_size` check, `sqlite3_libversion()`, hardware facts) under
-`experiments/e4-sqlite-cost-anatomy/data/`, one subdirectory per cell. If
-§7 ran, its `bucket-map.tsv` lives alongside this protocol.
+**Raw data.** Every repetition's per-operation `wall`/`xsync_time`/
+`xwrite_time`/`remainder`/`cpu_time`; the rejected-attempt log (§9); each
+cell's manifest (settings, PRNG seed, byte size, `cache_size` check,
+`sqlite3_libversion()`, hardware facts) under `data/`, one subdirectory
+per cell. If §7 ran, `bucket-map.tsv` lives alongside this protocol.
 
 ## 12. Prerequisites and operator grants
 
-**Needed from the operator.** A Rust toolchain (not installed in this
-environment yet): install via rustup (https://rustup.rs), then `rustup
-toolchain install stable` matching the pin below. `perf` access, only if
-§7 is run.
+**Needed from the operator.** A Rust toolchain (not installed yet):
+install via rustup (https://rustup.rs), then `rustup toolchain install
+stable` matching the pin below. `perf` access, only if §7 runs.
 
 **Toolchain pin.** A `rust-toolchain.toml` pins the latest stable Rust
-release available at the time the harness is first built — confirmed by
-`rustc --version --verbose` and written verbatim into the manifest, exactly
-as `sqlite3_libversion()` already is (§4). This rule is deterministic
-(there is exactly one "latest stable release" at any moment); it needs no
-number decided in this document. The C compiler is whichever of `$CC`,
-`cc`, `gcc`, `clang` the `cc` crate finds first on `$PATH`; its `--version`
-output is recorded in the manifest, and a run with no C compiler found
-fails closed. `libsqlite3-sys`'s build script sets no C optimization or
-debug flags of its own (confirmed by reading its source at the pinned tag,
+release when the harness is first built, confirmed by `rustc --version
+--verbose` and written into the manifest like `sqlite3_libversion()`
+(§4). The C compiler is whichever of `$CC`, `cc`, `gcc`, `clang` the `cc`
+crate finds first on `$PATH` (recorded; none found fails closed).
+`libsqlite3-sys`'s build script sets no C optimization/debug flags of
+its own (pinned-tag source,
 https://raw.githubusercontent.com/rusqlite/rusqlite/v0.40.2/libsqlite3-sys/build.rs,
-fetched 2026-10-15); it inherits them from Cargo's active profile.
+fetched 2026-10-15) — it inherits Cargo's profile unless overridden via
+`CC`/`CFLAGS` (the `cc` crate reads these,
+https://docs.rs/cc/latest/cc/#external-configuration-via-environment-variables,
+fetched 2026-10-15) or the script's own `LIBSQLITE3_FLAGS` (extra
+`-D`/`-U`/`SQLITE_*` defines) and `LIBSQLITE3_SYS_USE_PKG_CONFIG`
+(non-`"0"` skips the bundled build). Any of these four, set in the
+environment, can silently change what this protocol measures, so
+preflight asserts all are unset.
 
-**Build.** `cargo build --release`, with `[profile.release]` set to
-`opt-level = 3`, `debug = true` (symbols kept for §7's optional mapping,
-without disabling optimization), `lto = false`. This is the one build this
-protocol runs measurements against; §7's build is the same build, not a
-separate diagnostic one.
+**Build.** `cargo build --release`, `[profile.release]` =
+`opt-level = 3`, `debug = true` (symbols for §7), `lto = false` — the one
+build measurements run against; §7 uses the same build.
 
 **Preflight, non-result-bearing, fails closed.** Before any frozen run:
-`rustc --version` matches the pinned toolchain; `sqlite3_libversion()`
-returns `3.53.2`; CPU 2 and CPU 8 are confirmed SMT siblings via sysfs; the
-shim VFS registers and `sqlite3_vfs_find("<shim name>")` returns non-null.
-If §7 is requested, `perf stat -e cycles:u -- /bin/true` must succeed; if it
-fails, §7 alone is skipped (logged), the rest of the run proceeds.
+`rustc --version` matches the pin; `sqlite3_libversion()` returns
+`3.53.2`; `CC`, `CFLAGS`, `LIBSQLITE3_FLAGS`,
+`LIBSQLITE3_SYS_USE_PKG_CONFIG` are unset; CPU 2/8 confirmed SMT siblings;
+the shim VFS registers and `sqlite3_vfs_find` returns non-null;
+`addr2line -i` resolves a known `sqlite3_step` address into the
+`vdbeapi.c` range §7's bucket-map assigns it, proving symbolization works
+before the frozen run. Preflight hashes the harness binary (SHA-256) into
+the manifest; the result-bearing run re-hashes and fails closed on a
+mismatch — preflight's build must be the exact bytes producing the
+result, not a rebuild in between. If §7 is requested, `perf stat -e
+cycles:u -- /bin/true` and the symbolization check must both pass; either
+failing skips §7 alone (logged), the rest proceeds.
 
-## 13. Threats to validity
+## 13. Feasibility pilot
 
-- **E4 says nothing about kiln's own speed.** It bounds SQLite's side only.
-- **One machine, one device, one filesystem.** The flush numbers are
-  specific to this NVMe SSD and `ext4`. WAL itself "does not work over a
-  network filesystem" at all (https://www.sqlite.org/wal.html, fetched
-  2026-10-15).
-- **Shared, loaded machine.** Pinning and the load/sibling monitors (§9)
-  reduce, not eliminate, interference from memory bandwidth, cache, or
-  thermal sharing with the pinned core.
-- **No concurrency.** One writer, one connection (§4); the locking cost
-  measured is single-writer bookkeeping, not contention.
-- **Workload C's table grows during its timed window** — bounded to ≤7% of
-  the starting size (§8) and documented, not hidden.
-- **§7's module mapping comes from one pilot pass**, not exhaustive static
-  analysis; its unclassified-bucket and 2% rules exist because of that, and
-  it is informational, not gating.
-- **The exact C compiler is not version-pinned**, only recorded (§12) —
-  a limitation accepted rather than invented a false precision around.
+After freezing, before the result-bearing run, a pilot checks mechanics
+only — never the quantities §10 judges.
+
+**What it measures.** Per-operation `wall` for instrumented and
+uninstrumented builds (§5's overhead bound); run duration; monitor
+sample coverage (200 ms samples §9 expects versus written); and, if §7
+is granted, `perf` sample count per operation, proving the FIFO
+bracketing gates sampling. **Its output never contains `xsync_time`,
+`xwrite_time`, `remainder`, or any ratio from them** — only mechanics —
+so it cannot leak the verdict quantity into how the protocol is judged.
+
+**What it may change.** A finding may justify amending, each logged with
+its reason and the binary's SHA-256 before/after, to
+`data/amendments.log`: monitor CPU mask, sampling method/interval,
+bracketing, perf FIFO ack handling, retry mechanics, logging.
+**Everything else is untouchable** — workloads (§2), inputs (§2.1),
+verdict quantity (§1, §10), thresholds (§10), repetition count (§8.4),
+overhead bound (§5); a finding against one of these means re-reviewing
+and re-freezing, not amending.
+
+**Before the result-bearing run**, a delta check reads
+`amendments.log`: every entry names an amendable knob; the hash chain is
+continuous; the current binary's hash matches the last logged "after"
+(preflight's if empty). Any break fails the run closed.
+
+## 14. Threats to validity
+
+- **E4 says nothing about kiln's own speed** — it bounds SQLite's side only.
+- **One machine, device, filesystem.** Flush numbers are specific to this
+  NVMe SSD and `ext4`; WAL "does not work over a network filesystem"
+  (https://www.sqlite.org/wal.html, fetched 2026-10-15).
+- **Shared, loaded machine.** Pinning and the monitors (§9) reduce, not
+  eliminate, interference from memory, cache, or thermal sharing.
+- **No concurrency.** One writer, one connection (§4); locking cost is
+  single-writer bookkeeping, not contention.
+- **Workload C's table grows during its window** — bounded to ≤7% (§8).
+- **§7's module mapping comes from one pilot pass**, not exhaustive
+  static analysis — hence the unclassified-bucket and 2% rules.
+- **The C compiler is recorded, not version-pinned** (§12) — accepted
+  rather than inventing false precision.
 
 ## References
 
-- SQLite VFS `io_methods`: https://www.sqlite.org/c3ref/io_methods.html
-- SQLite VFS and shims: https://www.sqlite.org/vfs.html
-- SQLite `sqlite3_vfs_find`/`sqlite3_vfs_register`:
-  https://www.sqlite.org/c3ref/vfs_find.html
-- SQLite `xOpen` flags (`SQLITE_OPEN_MAIN_DB`, `SQLITE_OPEN_WAL`):
+- SQLite VFS `io_methods`, VFS/shims, `vfs_find`/`vfs_register`, `xOpen`
+  flags: https://www.sqlite.org/c3ref/io_methods.html,
+  https://www.sqlite.org/vfs.html, https://www.sqlite.org/c3ref/vfs_find.html,
   https://www.sqlite.org/c3ref/c_open_autoproxy.html
-- SQLite C API introduction (prepared statements, reset/reuse):
-  https://www.sqlite.org/cintro.html
-- SQLite WAL mode and checkpointing: https://www.sqlite.org/wal.html
-- SQLite `PRAGMA synchronous`:
-  https://www.sqlite.org/pragma.html#pragma_synchronous
-- SQLite `PRAGMA cache_size`:
-  https://www.sqlite.org/pragma.html#pragma_cache_size
-- SQLite `PRAGMA wal_autocheckpoint`:
-  https://www.sqlite.org/pragma.html#pragma_wal_autocheckpoint
+- SQLite C API intro (prepared statements): https://www.sqlite.org/cintro.html
+- SQLite WAL mode/checkpointing: https://www.sqlite.org/wal.html
+- SQLite `PRAGMA synchronous`/`cache_size`/`wal_autocheckpoint`/
+  `wal_checkpoint`: https://www.sqlite.org/pragma.html (anchors
+  `#pragma_synchronous`, `#pragma_cache_size`,
+  `#pragma_wal_autocheckpoint`, `#pragma_wal_checkpoint`)
 - SQLite transaction types: https://www.sqlite.org/lang_transaction.html
-- SQLite architecture (module/source-file ownership):
-  https://www.sqlite.org/arch.html
-- `clock_gettime(2)`, `CLOCK_THREAD_CPUTIME_ID`/`CLOCK_MONOTONIC`:
-  https://man7.org/linux/man-pages/man2/clock_gettime.2.html
-- `perf` tutorial (sampling rate, self-overhead, sleep-time limits):
+- SQLite architecture: https://www.sqlite.org/arch.html
+- Linux man pages: `clock_gettime(2)`
+  https://man7.org/linux/man-pages/man2/clock_gettime.2.html,
+  `fdatasync(2)` https://man7.org/linux/man-pages/man2/fdatasync.2.html,
+  `taskset(1)` https://man7.org/linux/man-pages/man1/taskset.1.html
+- `/proc/schedstat` per-CPU fields: https://docs.kernel.org/scheduler/sched-stats.html
+- `perf` tutorial and `perf record` manual:
   https://perfwiki.github.io/main/tutorial/,
   https://perfwiki.github.io/main/tutorial/#profiling-sleep-times,
-  https://perfwiki.github.io/main/tutorial/#overhead-calculation
-- `perf record` manual (`--call-graph`, `-F`, `--delay`, `--control`):
+  https://perfwiki.github.io/main/tutorial/#overhead-calculation,
   https://raw.githubusercontent.com/torvalds/linux/master/tools/perf/Documentation/perf-record.txt
-- `rusqlite` crate: https://lib.rs/crates/rusqlite
-- `libsqlite3-sys` crate: https://lib.rs/crates/libsqlite3-sys
-- `libsqlite3-sys` build script (v0.40.2 tag):
+- `rusqlite`/`libsqlite3-sys`/`rand_chacha` crates and the
+  `libsqlite3-sys` build script: https://lib.rs/crates/rusqlite,
+  https://lib.rs/crates/libsqlite3-sys, https://lib.rs/crates/rand_chacha,
   https://raw.githubusercontent.com/rusqlite/rusqlite/v0.40.2/libsqlite3-sys/build.rs
-- `rand_chacha` crate: https://lib.rs/crates/rand_chacha
-- `rusqlite`'s `Transaction` helper (uses `execute_batch`, not a cached
-  prepared statement):
+- `cc` crate environment variables:
+  https://docs.rs/cc/latest/cc/#external-configuration-via-environment-variables
+- `rusqlite`'s `Transaction` helper (`execute_batch`, not cached):
   https://docs.rs/rusqlite/0.40.2/src/rusqlite/transaction.rs.html
 
 All URLs above were fetched 2026-10-15, the day this protocol was rewritten.
