@@ -1,8 +1,0 @@
-claim_id = "8768d4eed7994cf890a58e90d0123537"
-agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
-role = "builder"
-base = "d1135a31a00d89172778d0c8bf98fea4a595ea01"
-branch = "claude/issue-43-e1-django-extractor"
-scope = [".github/workflows/ci.yml", "experiments/e1-classification-coverage/extract/django", "experiments/e1-classification-coverage/inputs.md", "specs/kiln-e1-django.spec.md"]
-opened_commit = "343a1a6ea70b551d2a51531298f970446f16ab22"
-whole_reason = "one extractor directory, its criteria file and the one CI job that runs its tests"
