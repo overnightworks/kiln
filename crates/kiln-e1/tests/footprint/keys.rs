@@ -214,6 +214,30 @@ mod kiln_e1_37 {
     }
 
     #[test]
+    fn a_key_mixing_two_iteration_rows_of_the_same_range_is_unknown_for_primary_and_index_ranges() {
+        let mixed_key = vec![
+            column_of(1, "w_id"),
+            column_of(2, "d_id"),
+            column_of(2, "o_id"),
+        ];
+        for range in [lines_of_one_order(), lines_of_one_item()] {
+            let body = returns(vec![
+                range,
+                iterate(
+                    0,
+                    1,
+                    vec![iterate(
+                        0,
+                        2,
+                        vec![update_at(LINES, mixed_key.clone(), &[])],
+                    )],
+                ),
+            ]);
+            assert_unknown(body, key_not_identified());
+        }
+    }
+
+    #[test]
     fn a_key_projected_from_a_range_over_another_table_with_the_same_key_columns_is_unknown() {
         let archive_ranges = [
             read_range_at(

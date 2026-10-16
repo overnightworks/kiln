@@ -116,7 +116,7 @@ fn lookup_edge(facts: &PathFacts, schema: &Schema, target: &TableName, key: &[&O
         return edge;
     }
     match key {
-        [Operand::Column { read, column }] => {
+        [Operand::Column { read, column, .. }] => {
             single_column_edge(facts, schema, target, read, column)
         }
         _ => Edge::Blocked(UnknownCause::KeyNotIdentified {
@@ -126,7 +126,8 @@ fn lookup_edge(facts: &PathFacts, schema: &Schema, target: &TableName, key: &[&O
 }
 
 /// The key of `target` read whole from one row of a range over `target`: every
-/// component projects the matching key column of that row.
+/// component projects the matching key column of the same row binding, so the
+/// key is that row's and no mix of two rows of the range.
 fn whole_key_of_one_row(
     facts: &PathFacts,
     schema: &Schema,
@@ -134,10 +135,10 @@ fn whole_key_of_one_row(
     key: &[&Operand],
 ) -> Option<Edge> {
     let key_columns = schema.table(target)?.key_columns();
-    let [Operand::Column { read, .. }, ..] = key else {
+    let [Operand::Column { read, row, .. }, ..] = key else {
         return None;
     };
-    let matches_key_column = |(component, key_column): (&&Operand, &ColumnName)| matches!(component, Operand::Column { read: from, column } if from == read && column == key_column);
+    let matches_key_column = |(component, key_column): (&&Operand, &ColumnName)| matches!(component, Operand::Column { row: from, column, .. } if from == row && column == key_column);
     if key.len() != key_columns.len() || !key.iter().zip(key_columns).all(matches_key_column) {
         return None;
     }

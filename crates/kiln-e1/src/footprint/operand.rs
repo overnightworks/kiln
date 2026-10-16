@@ -19,7 +19,13 @@ pub struct ReadRef {
 pub enum Operand {
     Literal(Value),
     Parameter(ParameterName),
-    Column { read: ReadRef, column: ColumnName },
+    /// `column` of the row `row` stands for, which `read` produced. Rows of
+    /// one read are many; only components of one `row` come from one row.
+    Column {
+        read: ReadRef,
+        row: Slot,
+        column: ColumnName,
+    },
     Arithmetic(ArithmeticOp, Box<Operand>, Box<Operand>),
 }
 
@@ -62,6 +68,7 @@ pub fn operand_of(
                 Some(used) => used.clone(),
                 None => Operand::Column {
                     read,
+                    row: *slot,
                     column: column.clone(),
                 },
             }
