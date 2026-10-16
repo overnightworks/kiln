@@ -1,0 +1,8 @@
+claim_id = "22308e7308be40f29efc72cbc917c356"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "3b570fb45293b83dca841080294cb51d49ed0ccd"
+branch = "claude/issue-102-s1d-constraint-accesses"
+scope = ["crates/kiln-e1/src/footprint", "crates/kiln-e1/tests", "specs/kiln-e1.spec.md"]
+opened_commit = "e12585d4daebba1dc4705013bd9b67bcf683c570"
+whole_reason = "the classifier's constraint-access rule touches the walker, dependency and supporting footprint analyses plus their tests"
