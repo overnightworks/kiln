@@ -12,28 +12,32 @@ pub enum Effect {
     /// later [`Condition::RowPresent`] to test.
     Read {
         table: TableName,
-        key: Expr,
+        key: Vec<Expr>,
         into: Slot,
     },
-    /// Insert a new row. Aborts if a row already exists at `key`.
+    /// Insert a new row. Aborts if a row already exists at `key`. `columns`
+    /// holds the row's non-key columns: the key columns come only through
+    /// `key` (D8).
     Insert {
         table: TableName,
-        key: Expr,
+        key: Vec<Expr>,
         columns: BTreeMap<ColumnName, Expr>,
     },
     /// Overwrite the named columns of an existing row, leaving its other
-    /// columns unchanged. Aborts if no row exists at `key`.
+    /// columns unchanged. Aborts if no row exists at `key`. A key column is
+    /// never named: keys do not change (D8).
     Update {
         table: TableName,
-        key: Expr,
+        key: Vec<Expr>,
         columns: BTreeMap<ColumnName, Expr>,
     },
     /// Remove a row. Aborts if no row exists at `key`.
-    Delete { table: TableName, key: Expr },
-    /// Read every row whose key falls in `[start, end]`, in key order,
-    /// binding the matched sequence to `into` — empty if `start` sorts
-    /// after `end` or no row's key falls between them (`docs/concept.md`
-    /// §2.2 D6, "an empty range reads as an empty sequence").
+    Delete { table: TableName, key: Vec<Expr> },
+    /// Read every row whose key falls in `[start, end]`, in key order (keys
+    /// compare component by component), binding the matched sequence to
+    /// `into` — empty if `start` sorts after `end` or no row's key falls
+    /// between them (`docs/concept.md` §2.2 D6, "an empty range reads as an
+    /// empty sequence").
     ///
     /// Always bounded (§2.1, "never an open-ended loop"): if more rows
     /// match than `bound` resolves to, the call aborts with
@@ -41,8 +45,8 @@ pub enum Effect {
     /// instead of binding `into` at all.
     ReadRange {
         table: TableName,
-        start: Expr,
-        end: Expr,
+        start: Vec<Expr>,
+        end: Vec<Expr>,
         bound: Expr,
         into: Slot,
     },

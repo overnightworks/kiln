@@ -7,31 +7,34 @@
 use std::collections::BTreeSet;
 
 use crate::identifiers::{ColumnName, TableName};
-use crate::ir::Value;
+use crate::ir::{Key, Table};
 
 use super::{AccessKind, AccessLogEntry, AccessTarget, AccessedColumns};
 
 /// Keys of the rows of `table` the transaction inserted or updated with a
-/// value for `column`, however often it wrote each.
+/// value for `column`, however often it wrote each. An insert writes every
+/// key column through its key (D8); an update never writes one.
 pub(super) fn keys_written_on(
     access_log: &[AccessLogEntry],
-    table: &TableName,
+    table: &Table,
     column: &ColumnName,
-) -> BTreeSet<Value> {
-    point_keys(access_log, table, |entry| {
-        matches!(entry.kind, AccessKind::Insert | AccessKind::Update)
-            && match &entry.columns {
-                AccessedColumns::Named(columns) => columns.contains(column),
-                AccessedColumns::EntireRow => false,
-            }
+) -> BTreeSet<Key> {
+    let is_key_column = table.key_position(column).is_some();
+    point_keys(access_log, &table.name, |entry| {
+        let names_column = match &entry.columns {
+            AccessedColumns::Named(columns) => columns.contains(column),
+            AccessedColumns::EntireRow => false,
+        };
+        match entry.kind {
+            AccessKind::Insert => is_key_column || names_column,
+            AccessKind::Update => names_column,
+            _ => false,
+        }
     })
 }
 
 /// Keys of the rows of `table` the transaction deleted.
-pub(super) fn keys_deleted_from(
-    access_log: &[AccessLogEntry],
-    table: &TableName,
-) -> BTreeSet<Value> {
+pub(super) fn keys_deleted_from(access_log: &[AccessLogEntry], table: &TableName) -> BTreeSet<Key> {
     point_keys(access_log, table, |entry| entry.kind == AccessKind::Delete)
 }
 
@@ -39,13 +42,15 @@ fn point_keys(
     access_log: &[AccessLogEntry],
     table: &TableName,
     selects: impl Fn(&AccessLogEntry) -> bool,
-) -> BTreeSet<Value> {
+) -> BTreeSet<Key> {
     access_log
         .iter()
         .filter(|entry| &entry.table == table && selects(entry))
         .filter_map(|entry| match &entry.target {
             AccessTarget::Point(key) => Some(key.clone()),
-            AccessTarget::Range { .. } | AccessTarget::IndexRange { .. } => None,
+            AccessTarget::Range { .. }
+            | AccessTarget::IndexRange { .. }
+            | AccessTarget::ConstraintLookup { .. } => None,
         })
         .collect()
 }

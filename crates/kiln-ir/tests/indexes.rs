@@ -5,12 +5,12 @@ mod support;
 
 use kiln_ir::{
     AbortReason, AccessKind, AccessLogEntry, AccessOrigin, AccessTarget, AccessedColumns, Block,
-    Column, ColumnType, Condition, Effect, Execution, Expr, Index, IndexName, IntegerWidth,
-    Outcome, Schema, SchemaError, Slot, Store, Table, Terminal, Value,
+    Column, ColumnType, Condition, Effect, Execution, Expr, Index, IndexName, IntegerWidth, Key,
+    Outcome, ProgramError, Schema, SchemaError, Slot, Store, Terminal, Value,
 };
 use support::{
-    aborted_reason, call_under_test, column, committed_response, insert_row, integer,
-    program_with_schema, run_ok, store_of_rows, table, text, RowSpec,
+    aborted_reason, call_under_test, column, committed_response, insert_row, integer, keyed_by_id,
+    literal_key, one_part, program_with_schema, run_ok, store_of_rows, table, text, RowSpec,
 };
 
 fn index_name(name: &str) -> IndexName {
@@ -35,17 +35,19 @@ fn people_schema(indexes: Vec<Index>) -> Schema {
         },
     };
     Schema {
-        tables: vec![Table {
-            name: table("people"),
-            columns: vec![
-                integer_column("id"),
-                Column {
-                    name: column("last"),
-                    kind: ColumnType::Text,
-                },
-                integer_column("age"),
-            ],
-        }],
+        tables: vec![
+            keyed_by_id(
+                "people",
+                vec![
+                    Column {
+                        name: column("last"),
+                        kind: ColumnType::Text,
+                    },
+                    integer_column("age"),
+                ],
+            ),
+            keyed_by_id("visited", vec![]),
+        ],
         indexes,
         ..Default::default()
     }
@@ -63,11 +65,7 @@ fn person(id: i64, last: &str, age: i64) -> RowSpec {
     (
         "people",
         id,
-        vec![
-            ("id", integer(id)),
-            ("last", text(last)),
-            ("age", integer(age)),
-        ],
+        vec![("last", text(last)), ("age", integer(age))],
     )
 }
 
@@ -81,13 +79,20 @@ fn index_range_read(index: &str, start: Vec<Value>, end: Vec<Value>, bound: i64)
     }
 }
 
+fn id_of_row(slot: Slot) -> Expr {
+    Expr::Projection {
+        slot,
+        column: column("id"),
+    }
+}
+
 fn visit_each_row_into_visited() -> Effect {
     Effect::Iterate {
         source: Slot(0),
         row: Slot(1),
         body: vec![Effect::Insert {
             table: table("visited"),
-            key: Expr::PrimaryKey { slot: Slot(1) },
+            key: vec![id_of_row(Slot(1))],
             columns: Default::default(),
         }],
     }
@@ -117,7 +122,10 @@ fn visited_ids(execution: &Execution) -> Vec<i64> {
         .iter()
         .filter(|entry| entry.table == table("visited") && entry.kind == AccessKind::Insert)
         .map(|entry| match &entry.target {
-            AccessTarget::Point(Value::Integer(id)) => *id,
+            AccessTarget::Point(Key(components)) => match components.as_slice() {
+                [Value::Integer(id)] => *id,
+                other => panic!("expected a one-part integer key, got {other:?}"),
+            },
             other => panic!("expected an integer point target, got {other:?}"),
         })
         .collect()
@@ -224,7 +232,10 @@ mod kiln_ir_65 {
 
         let result = kiln_ir::run(&program, &call_under_test(vec![]), &Store::empty());
 
-        assert!(matches!(result, Err(SchemaError::IndexWithoutColumns(_))));
+        assert!(matches!(
+            result,
+            Err(ProgramError::Schema(SchemaError::IndexWithoutColumns(_)))
+        ));
     }
 }
 
@@ -327,11 +338,7 @@ mod kiln_ir_68 {
         let store = people_store(&[(1, "a", 1), (3, "c", 1)]);
         let execution = run_effects(
             vec![
-                insert_row(
-                    "people",
-                    2,
-                    [("id", integer(2)), ("last", text("b")), ("age", integer(1))],
-                ),
+                insert_row("people", 2, [("last", text("b")), ("age", integer(1))]),
                 index_range_read("by_last", vec![text("a")], vec![text("c")], 10),
                 visit_each_row_into_visited(),
             ],
@@ -495,7 +502,7 @@ mod kiln_ir_71 {
             row: Slot(1),
             body: vec![Effect::Read {
                 table: table("people"),
-                key: Expr::PrimaryKey { slot: Slot(1) },
+                key: vec![id_of_row(Slot(1))],
                 into: Slot(2),
             }],
         }
@@ -538,10 +545,10 @@ mod kiln_ir_71 {
                     row: Slot(1),
                     body: vec![Effect::Insert {
                         table: table("visited"),
-                        key: Expr::Projection {
+                        key: vec![Expr::Projection {
                             slot: Slot(1),
                             column: column("age"),
-                        },
+                        }],
                         columns: Default::default(),
                     }],
                 },
@@ -570,10 +577,10 @@ mod kiln_ir_71 {
                     row: Slot(1),
                     body: vec![Effect::Insert {
                         table: table("visited"),
-                        key: Expr::Projection {
+                        key: vec![Expr::Projection {
                             slot: Slot(1),
                             column: column("age"),
-                        },
+                        }],
                         columns: Default::default(),
                     }],
                 },
@@ -617,7 +624,7 @@ mod kiln_ir_71 {
                 AccessKind::PointRead
             ]
         );
-        assert_eq!(point_keys, vec![integer(1), integer(2)]);
+        assert_eq!(point_keys, vec![one_part(1), one_part(2)]);
     }
 }
 
@@ -631,10 +638,10 @@ mod kiln_ir_72 {
             vec![],
             vec![Effect::Read {
                 table: table("people"),
-                key: Expr::Literal(integer(key)),
+                key: literal_key(key),
                 into: Slot(0),
             }],
-            Terminal::Return(Expr::PrimaryKey { slot: Slot(0) }),
+            Terminal::Return(id_of_row(Slot(0))),
         );
         run_ok(&program, &call_under_test(vec![]), &store)
     }
@@ -664,8 +671,8 @@ mod kiln_ir_72 {
             vec![
                 Effect::ReadRange {
                     table: table("people"),
-                    start: Expr::Literal(integer(1)),
-                    end: Expr::Literal(integer(3)),
+                    start: literal_key(1),
+                    end: literal_key(3),
                     bound: Expr::Literal(integer(10)),
                     into: Slot(0),
                 },
@@ -692,7 +699,7 @@ mod kiln_ir_72 {
             indexed_schema(),
             vec![],
             vec![],
-            Terminal::Return(Expr::PrimaryKey { slot: Slot(4) }),
+            Terminal::Return(id_of_row(Slot(4))),
         );
 
         let execution = run_ok(&program, &call_under_test(vec![]), &Store::empty());

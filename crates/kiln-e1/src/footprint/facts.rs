@@ -9,7 +9,7 @@ use super::ClassifyError;
 
 #[derive(Clone, Debug)]
 pub enum BindingKind {
-    PointRead { table: TableName, key: Operand },
+    PointRead { table: TableName, key: Vec<Operand> },
     PrimaryRange { table: TableName },
     IndexRange { table: TableName },
     UndeclaredIndexRange(IndexName),
@@ -44,7 +44,7 @@ impl RangeBounds {
 pub enum Target {
     Row {
         table: TableName,
-        key: Operand,
+        key: Vec<Operand>,
     },
     PrimaryRange {
         table: TableName,

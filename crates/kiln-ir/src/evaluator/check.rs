@@ -4,6 +4,7 @@
 use crate::ir::Schema;
 use crate::store::Store;
 
+use super::constraints::constrained_table;
 use super::written::keys_written_on;
 use super::{AbortReason, AccessLogEntry};
 
@@ -16,10 +17,11 @@ pub(super) fn first_violation(
     access_log: &[AccessLogEntry],
 ) -> Option<AbortReason> {
     for constraint in &schema.check_constraints {
-        for key in keys_written_on(access_log, &constraint.table, &constraint.column) {
+        let table = constrained_table(schema, &constraint.table);
+        for key in keys_written_on(access_log, table, &constraint.column) {
             let value = final_store
-                .row(&constraint.table, &key)
-                .and_then(|row| row.columns.get(&constraint.column));
+                .row(&table.name, &key)
+                .and_then(|row| table.column_value(&key, row, &constraint.column));
             if value.is_some_and(|value| !constraint.accepts(value)) {
                 return Some(AbortReason::CheckViolation {
                     constraint: constraint.clone(),

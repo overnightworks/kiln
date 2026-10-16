@@ -3,19 +3,20 @@
 //!
 //! A `BTreeMap` orders each table's rows by key rather than merely indexing
 //! them, because `docs/concept.md` §2.2 fixes bounded iteration to proceed
-//! in key order; a later slice's range read walks this same ordering
-//! instead of needing a different structure.
+//! in key order, and keys order component by component (D8); a later
+//! slice's range read walks this same ordering instead of needing a
+//! different structure.
 
 use std::collections::BTreeMap;
 
 use crate::identifiers::{ColumnName, TableName};
-use crate::ir::{Row, Value};
+use crate::ir::{Key, Row, Table, Value};
 
-/// A row together with the primary key it is stored under, so a read's
-/// result can answer `Expr::PrimaryKey` without the row restating its key.
+/// A row together with the key it is stored under, so a read's result can
+/// answer a key-column projection without the row restating its key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyedRow {
-    pub key: Value,
+    pub key: Key,
     pub row: Row,
 }
 
@@ -23,7 +24,7 @@ pub struct KeyedRow {
 /// the `Store` it is given; it returns a new one.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Store {
-    tables: BTreeMap<TableName, BTreeMap<Value, Row>>,
+    tables: BTreeMap<TableName, BTreeMap<Key, Row>>,
 }
 
 impl Store {
@@ -33,8 +34,8 @@ impl Store {
     }
 
     /// A store containing exactly the given `(table, key, row)` triples.
-    pub fn containing(rows: impl IntoIterator<Item = (TableName, Value, Row)>) -> Self {
-        let mut tables: BTreeMap<TableName, BTreeMap<Value, Row>> = BTreeMap::new();
+    pub fn containing(rows: impl IntoIterator<Item = (TableName, Key, Row)>) -> Self {
+        let mut tables: BTreeMap<TableName, BTreeMap<Key, Row>> = BTreeMap::new();
         for (table, key, row) in rows {
             tables.entry(table).or_default().insert(key, row);
         }
@@ -43,7 +44,7 @@ impl Store {
 
     /// The row at `key` in `table`, or `None` if the table has no row
     /// there — an absent table behaves exactly like an empty one.
-    pub fn row(&self, table: &TableName, key: &Value) -> Option<&Row> {
+    pub fn row(&self, table: &TableName, key: &Key) -> Option<&Row> {
         self.tables.get(table).and_then(|rows| rows.get(key))
     }
 
@@ -55,7 +56,7 @@ impl Store {
     /// empty range, not a panic: `BTreeMap::range` would panic on a
     /// reversed bound, so this checks for it first instead of ever calling
     /// into that panic (`docs/concept.md` §2.2 D6).
-    pub fn rows_in_range(&self, table: &TableName, start: &Value, end: &Value) -> Vec<KeyedRow> {
+    pub fn rows_in_range(&self, table: &TableName, start: &Key, end: &Key) -> Vec<KeyedRow> {
         if start > end {
             return Vec::new();
         }
@@ -74,24 +75,25 @@ impl Store {
 
     /// Every row of `table` holding all of `columns` whose values, in that
     /// order, lie in `[start, end]`, ordered by those values and then by
-    /// primary key — empty if `start` sorts after `end`. Each result carries
-    /// its key and only the indexed columns: the index holds nothing else.
+    /// key — empty if `start` sorts after `end`. A key column holds its
+    /// key's component. Each result carries its key and the indexed columns
+    /// that are no key column: the index holds nothing else.
     pub fn rows_in_index_range(
         &self,
-        table: &TableName,
+        table: &Table,
         columns: &[ColumnName],
         start: &[Value],
         end: &[Value],
     ) -> Vec<KeyedRow> {
-        let mut entries: Vec<(Vec<&Value>, &Value)> = self
+        let mut entries: Vec<(Vec<&Value>, &Key)> = self
             .tables
-            .get(table)
+            .get(&table.name)
             .into_iter()
             .flatten()
             .filter_map(|(key, row)| {
                 let held: Option<Vec<&Value>> = columns
                     .iter()
-                    .map(|column| row.columns.get(column))
+                    .map(|column| table.column_value(key, row, column))
                     .collect();
                 held.map(|held| (held, key))
             })
@@ -107,8 +109,9 @@ impl Store {
                 row: Row {
                     columns: columns
                         .iter()
-                        .cloned()
-                        .zip(held.into_iter().cloned())
+                        .zip(held)
+                        .filter(|(column, _)| table.key_position(column).is_none())
+                        .map(|(column, value)| (column.clone(), value.clone()))
                         .collect(),
                 },
             })
@@ -119,41 +122,36 @@ impl Store {
     /// `value` in `column`.
     pub(crate) fn value_held_by_another_row(
         &self,
-        table: &TableName,
+        table: &Table,
         column: &ColumnName,
         value: &Value,
-        except_key: &Value,
+        except_key: &Key,
     ) -> bool {
         self.keys_holding(table, column, value)
             .any(|key| key != except_key)
     }
 
     /// Whether any row of `table` holds `value` in `column`.
-    pub(crate) fn any_row_holds(
-        &self,
-        table: &TableName,
-        column: &ColumnName,
-        value: &Value,
-    ) -> bool {
+    pub(crate) fn any_row_holds(&self, table: &Table, column: &ColumnName, value: &Value) -> bool {
         self.keys_holding(table, column, value).next().is_some()
     }
 
     fn keys_holding<'a>(
         &'a self,
-        table: &TableName,
+        table: &'a Table,
         column: &'a ColumnName,
         value: &'a Value,
-    ) -> impl Iterator<Item = &'a Value> {
+    ) -> impl Iterator<Item = &'a Key> {
         self.tables
-            .get(table)
+            .get(&table.name)
             .into_iter()
             .flatten()
-            .filter(move |(_, row)| row.columns.get(column) == Some(value))
+            .filter(move |(key, row)| table.column_value(key, row, column) == Some(value))
             .map(|(key, _)| key)
     }
 
     /// Writes `row` at `key` in `table`, overwriting whatever was there.
-    pub(crate) fn put_row(&mut self, table: TableName, key: Value, row: Row) {
+    pub(crate) fn put_row(&mut self, table: TableName, key: Key, row: Row) {
         self.tables.entry(table).or_default().insert(key, row);
     }
 
@@ -163,7 +161,7 @@ impl Store {
     /// left with no rows anywhere compares equal to [`Store::empty`] — an
     /// empty table map left behind would otherwise make two stores with
     /// identical readable contents compare unequal.
-    pub(crate) fn remove_row(&mut self, table: &TableName, key: &Value) {
+    pub(crate) fn remove_row(&mut self, table: &TableName, key: &Key) {
         if let Some(rows) = self.tables.get_mut(table) {
             rows.remove(key);
             if rows.is_empty() {
@@ -179,13 +177,17 @@ mod tests {
     use crate::identifiers::ColumnName;
     use proptest::prelude::*;
 
+    fn one_part(component: i64) -> Key {
+        Key(vec![Value::Integer(component)])
+    }
+
     mod kiln_ir_19 {
         use super::*;
 
         #[test]
         fn insert_then_delete_from_empty_store_equals_the_empty_store() {
             let table = TableName("t".to_owned());
-            let key = Value::Integer(1);
+            let key = one_part(1);
             let mut store = Store::empty();
 
             store.put_row(table.clone(), key.clone(), Row::default());
@@ -227,10 +229,10 @@ mod tests {
                 let mut sorted_keys: Vec<i64> = keys.iter().copied().collect();
                 sorted_keys.sort_unstable();
                 let store = Store::containing(
-                    keys.iter().map(|&key| (table.clone(), Value::Integer(key), row_keyed(key))),
+                    keys.iter().map(|&key| (table.clone(), one_part(key), row_keyed(key))),
                 );
 
-                let rows = store.rows_in_range(&table, &Value::Integer(i64::MIN), &Value::Integer(i64::MAX));
+                let rows = store.rows_in_range(&table, &one_part(i64::MIN), &one_part(i64::MAX));
 
                 prop_assert_eq!(observed_keys(&rows), sorted_keys);
             }
@@ -242,10 +244,10 @@ mod tests {
             let store = Store::containing(
                 [0, 5, 10, 15]
                     .into_iter()
-                    .map(|key| (table.clone(), Value::Integer(key), row_keyed(key))),
+                    .map(|key| (table.clone(), one_part(key), row_keyed(key))),
             );
 
-            let rows = store.rows_in_range(&table, &Value::Integer(5), &Value::Integer(10));
+            let rows = store.rows_in_range(&table, &one_part(5), &one_part(10));
 
             assert_eq!(observed_keys(&rows), vec![5, 10]);
         }
@@ -254,12 +256,12 @@ mod tests {
         fn rows_in_range_includes_the_single_row_when_start_equals_end() {
             let table = TableName("t".to_owned());
             let store = Store::containing([
-                (table.clone(), Value::Integer(4), row_keyed(4)),
-                (table.clone(), Value::Integer(5), row_keyed(5)),
-                (table.clone(), Value::Integer(6), row_keyed(6)),
+                (table.clone(), one_part(4), row_keyed(4)),
+                (table.clone(), one_part(5), row_keyed(5)),
+                (table.clone(), one_part(6), row_keyed(6)),
             ]);
 
-            let rows = store.rows_in_range(&table, &Value::Integer(5), &Value::Integer(5));
+            let rows = store.rows_in_range(&table, &one_part(5), &one_part(5));
 
             assert_eq!(observed_keys(&rows), vec![5]);
         }
@@ -271,9 +273,9 @@ mod tests {
         #[test]
         fn rows_in_range_is_empty_when_start_sorts_after_end() {
             let table = TableName("t".to_owned());
-            let store = Store::containing([(table.clone(), Value::Integer(5), Row::default())]);
+            let store = Store::containing([(table.clone(), one_part(5), Row::default())]);
 
-            let rows = store.rows_in_range(&table, &Value::Integer(10), &Value::Integer(0));
+            let rows = store.rows_in_range(&table, &one_part(10), &one_part(0));
 
             assert!(rows.is_empty());
         }
@@ -283,7 +285,7 @@ mod tests {
             let table = TableName("t".to_owned());
             let store = Store::empty();
 
-            let rows = store.rows_in_range(&table, &Value::Integer(0), &Value::Integer(10));
+            let rows = store.rows_in_range(&table, &one_part(0), &one_part(10));
 
             assert!(rows.is_empty());
         }

@@ -14,6 +14,9 @@ mod branches;
 #[path = "footprint/comparisons.rs"]
 mod comparisons;
 
+#[path = "footprint/keys.rs"]
+mod keys;
+
 mod kiln_e1_18 {
     use super::*;
 

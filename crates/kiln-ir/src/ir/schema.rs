@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::identifiers::{ColumnName, IndexName, TableName};
 
-use super::value::Value;
+use super::value::{Key, Row, Value};
 
 /// The declared width of a column's checked-integer domain (D1). Arithmetic
 /// and literal writes targeting the column are checked against this width's
@@ -99,10 +99,19 @@ pub enum Comparison {
 }
 
 impl ColumnType {
-    fn holds_kind_of(&self, value: &Value) -> bool {
+    pub(crate) fn holds_kind_of(&self, value: &Value) -> bool {
         matches!(
             (self, value),
             (ColumnType::Integer { .. }, Value::Integer(_)) | (ColumnType::Text, Value::Text(_))
+        )
+    }
+
+    /// Whether both are integers, whatever their widths, or both are text.
+    fn is_same_kind_as(&self, other: &ColumnType) -> bool {
+        matches!(
+            (self, other),
+            (ColumnType::Integer { .. }, ColumnType::Integer { .. })
+                | (ColumnType::Text, ColumnType::Text)
         )
     }
 }
@@ -138,11 +147,60 @@ impl CheckConstraint {
     }
 }
 
-/// A table declaration: its name and the columns rows in it may carry.
+/// How a table identifies its rows (D8): by an ordered, non-empty list of
+/// its own columns, or not at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyDeclaration {
+    Columns(Vec<ColumnName>),
+    Keyless,
+}
+
+/// A table declaration: its name, its columns and its key. The key columns
+/// are among `columns` for their kind and width, but a stored row never
+/// repeats them: they live only in the row's [`Key`] (D8).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Table {
     pub name: TableName,
     pub columns: Vec<Column>,
+    pub key: KeyDeclaration,
+}
+
+impl Table {
+    /// The declared column `name`, or `None` if the table has none.
+    pub fn column(&self, name: &ColumnName) -> Option<&Column> {
+        self.columns
+            .iter()
+            .find(|candidate| &candidate.name == name)
+    }
+
+    /// The key columns in key order; none for a keyless table.
+    pub fn key_columns(&self) -> &[ColumnName] {
+        match &self.key {
+            KeyDeclaration::Columns(columns) => columns,
+            KeyDeclaration::Keyless => &[],
+        }
+    }
+
+    /// Where `column` sits in the key, or `None` if it is no key column.
+    pub fn key_position(&self, column: &ColumnName) -> Option<usize> {
+        self.key_columns()
+            .iter()
+            .position(|candidate| candidate == column)
+    }
+
+    /// The value the row stored under `key` holds in `column`: the matching
+    /// key component for a key column, the row's own value otherwise.
+    pub fn column_value<'a>(
+        &self,
+        key: &'a Key,
+        row: &'a Row,
+        column: &ColumnName,
+    ) -> Option<&'a Value> {
+        match self.key_position(column) {
+            Some(position) => key.0.get(position),
+            None => row.columns.get(column),
+        }
+    }
 }
 
 /// The declared tables of a [`Program`] (D1).
@@ -164,15 +222,12 @@ impl Schema {
     /// schema declaration is additive, not a precondition every table or
     /// column must meet yet.
     pub fn column(&self, table: &TableName, column: &ColumnName) -> Option<&Column> {
-        self.tables
-            .iter()
-            .find(|candidate| &candidate.name == table)
-            .and_then(|table| {
-                table
-                    .columns
-                    .iter()
-                    .find(|candidate| &candidate.name == column)
-            })
+        self.table(table).and_then(|table| table.column(column))
+    }
+
+    /// The declared table `name`, or `None` if the schema declares none.
+    pub fn table(&self, name: &TableName) -> Option<&Table> {
+        self.tables.iter().find(|candidate| &candidate.name == name)
     }
 
     /// The declared index named `name`, or `None` if the schema declares none.
@@ -180,10 +235,6 @@ impl Schema {
         self.indexes
             .iter()
             .find(|candidate| &candidate.name == name)
-    }
-
-    fn has_table(&self, table: &TableName) -> bool {
-        self.tables.iter().any(|candidate| &candidate.name == table)
     }
 
     /// Rejects a schema whose own declarations cannot jointly hold: a
@@ -196,6 +247,15 @@ impl Schema {
     /// A unique constraint, foreign key or check constraint must likewise
     /// name declared tables and columns.
     pub fn validate(&self) -> Result<(), SchemaError> {
+        self.validate_columns()?;
+        self.validate_keys()?;
+        self.validate_unique_constraints()?;
+        self.validate_foreign_keys()?;
+        self.validate_check_constraints()?;
+        self.validate_indexes()
+    }
+
+    fn validate_columns(&self) -> Result<(), SchemaError> {
         for table in &self.tables {
             for column in &table.columns {
                 if let ColumnType::Integer {
@@ -207,20 +267,65 @@ impl Schema {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// A key is a non-empty list of the table's own columns, none twice (D8).
+    fn validate_keys(&self) -> Result<(), SchemaError> {
+        for table in &self.tables {
+            let KeyDeclaration::Columns(key) = &table.key else {
+                continue;
+            };
+            if key.is_empty() {
+                return Err(SchemaError::EmptyKey(table.name.clone()));
+            }
+            let mut seen = HashSet::new();
+            for column in key {
+                let located = KeyColumn {
+                    table: table.name.clone(),
+                    column: column.clone(),
+                };
+                if table.column(column).is_none() {
+                    return Err(SchemaError::UnknownKeyColumn(located));
+                }
+                if !seen.insert(column) {
+                    return Err(SchemaError::RepeatedKeyColumn(located));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_unique_constraints(&self) -> Result<(), SchemaError> {
         for constraint in &self.unique_constraints {
             if self.column(&constraint.table, &constraint.column).is_none() {
                 return Err(SchemaError::UnknownUniqueTarget(constraint.clone()));
             }
         }
+        Ok(())
+    }
+
+    /// A foreign key names declared tables and columns, and its column has
+    /// the kind of the referenced table's one key column (D8).
+    fn validate_foreign_keys(&self) -> Result<(), SchemaError> {
         for foreign_key in &self.foreign_keys {
             let child = self.column(&foreign_key.table, &foreign_key.column);
-            let Some(child) = child.filter(|_| self.has_table(&foreign_key.references)) else {
+            let parent = self.table(&foreign_key.references);
+            let (Some(child), Some(parent)) = (child, parent) else {
                 return Err(SchemaError::UnknownForeignKeyTarget(foreign_key.clone()));
             };
-            if child.kind == ColumnType::Text {
+            let [parent_key] = parent.key_columns() else {
+                return Err(SchemaError::ForeignKeyKeyArityMismatch(foreign_key.clone()));
+            };
+            let parent_key = parent.column(parent_key).expect("validated key column");
+            if !child.kind.is_same_kind_as(&parent_key.kind) {
                 return Err(SchemaError::ForeignKeyTypeMismatch(foreign_key.clone()));
             }
         }
+        Ok(())
+    }
+
+    fn validate_check_constraints(&self) -> Result<(), SchemaError> {
         for constraint in &self.check_constraints {
             let Some(constrained) = self.column(&constraint.table, &constraint.column) else {
                 return Err(SchemaError::UnknownCheckTarget(constraint.clone()));
@@ -229,7 +334,7 @@ impl Schema {
                 return Err(SchemaError::CheckOperandTypeMismatch(constraint.clone()));
             }
         }
-        self.validate_indexes()
+        Ok(())
     }
 
     fn validate_indexes(&self) -> Result<(), SchemaError> {
@@ -238,12 +343,18 @@ impl Schema {
             if index.columns.is_empty() {
                 return Err(SchemaError::IndexWithoutColumns(index.clone()));
             }
-            let all_declared = index
-                .columns
-                .iter()
-                .all(|column| self.column(&index.table, column).is_some());
+            let table = self.table(&index.table);
+            let all_declared = table.is_some_and(|table| {
+                index
+                    .columns
+                    .iter()
+                    .all(|column| table.column(column).is_some())
+            });
             if !all_declared {
                 return Err(SchemaError::UnknownIndexTarget(index.clone()));
+            }
+            if table.is_some_and(|table| table.key == KeyDeclaration::Keyless) {
+                return Err(SchemaError::IndexOnKeylessTable(index.clone()));
             }
             if !names.insert(&index.name) {
                 return Err(SchemaError::DuplicateIndexName(index.name.clone()));
@@ -277,6 +388,13 @@ fn validate_domain(
     Ok(())
 }
 
+/// A column of a table's key, as a [`SchemaError`] names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyColumn {
+    pub table: TableName,
+    pub column: ColumnName,
+}
+
 /// Why a [`Schema`] fails [`Schema::validate`]: one column's own
 /// declarations cannot jointly hold (D3).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -300,9 +418,20 @@ pub enum SchemaError {
     UnknownForeignKeyTarget(ForeignKey),
     /// A check constraint names a table or column the schema does not declare.
     UnknownCheckTarget(CheckConstraint),
-    /// A foreign key sits on a column that is not an integer, but tables are
-    /// keyed by integers, so no value of that column could name a parent.
+    /// A foreign key's column is of another kind (integer or text) than the
+    /// referenced table's key column, so no value of it could name a parent.
     ForeignKeyTypeMismatch(ForeignKey),
+    /// A foreign key references a table whose key is not exactly one column.
+    ForeignKeyKeyArityMismatch(ForeignKey),
+    /// A table declares an empty list of key columns; a table without a key
+    /// declares itself keyless.
+    EmptyKey(TableName),
+    /// A table's key names a column the table does not declare.
+    UnknownKeyColumn(KeyColumn),
+    /// A table's key names the same column twice.
+    RepeatedKeyColumn(KeyColumn),
+    /// An index sits on a keyless table, which no read can reach (D9).
+    IndexOnKeylessTable(Index),
     /// A check constraint compares its column with an operand of the other
     /// type (integer or text), so the comparison would not depend on the data.
     CheckOperandTypeMismatch(CheckConstraint),

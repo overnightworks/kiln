@@ -2,7 +2,7 @@
 //! every slot replaced by the read that bound it, so two accesses compare equal
 //! exactly when they name the same data.
 
-use kiln_ir::{ArithmeticOp, ColumnName, Expr, ParameterName, Slot, Value};
+use kiln_ir::{ArithmeticOp, ColumnName, Expr, ParameterName, Schema, Slot, Value};
 
 use super::facts::{BindingKind, PathFacts};
 use super::node_path::NodePath;
@@ -19,35 +19,16 @@ pub struct ReadRef {
 pub enum Operand {
     Literal(Value),
     Parameter(ParameterName),
-    Column {
-        read: ReadRef,
-        column: ColumnName,
-    },
-    /// The primary key of a row of a range or index read.
-    KeyOf {
-        read: ReadRef,
-    },
+    Column { read: ReadRef, column: ColumnName },
     Arithmetic(ArithmeticOp, Box<Operand>, Box<Operand>),
 }
 
-/// One place an operand reads a read's result: a column, or the row's key.
-pub struct Use {
-    pub read: ReadRef,
-    pub column: Option<ColumnName>,
-}
-
 impl Operand {
-    pub fn uses(&self) -> Vec<Use> {
+    /// The reads whose results the operand reads.
+    pub fn uses(&self) -> Vec<ReadRef> {
         match self {
             Self::Literal(_) | Self::Parameter(_) => Vec::new(),
-            Self::Column { read, column } => vec![Use {
-                read: read.clone(),
-                column: Some(column.clone()),
-            }],
-            Self::KeyOf { read } => vec![Use {
-                read: read.clone(),
-                column: None,
-            }],
+            Self::Column { read, .. } => vec![read.clone()],
             Self::Arithmetic(_, left, right) => {
                 let mut uses = left.uses();
                 uses.extend(right.uses());
@@ -64,8 +45,10 @@ impl Operand {
 }
 
 /// `expression` with its slots resolved against what the path has read so far.
-/// The primary key of a point-read row is the key the read used.
+/// A key column of a point-read row is the operand the read used for it
+/// (`inputs.md` §5, Clarification rule 1).
 pub fn operand_of(
+    schema: &Schema,
     facts: &PathFacts,
     expression: &Expr,
     at: &NodePath,
@@ -73,21 +56,36 @@ pub fn operand_of(
     Ok(match expression {
         Expr::Literal(value) => Operand::Literal(value.clone()),
         Expr::Parameter(parameter) => Operand::Parameter(parameter.clone()),
-        Expr::Projection { slot, column } => Operand::Column {
-            read: facts.read_of(*slot, at)?,
-            column: column.clone(),
-        },
-        Expr::PrimaryKey { slot } => {
+        Expr::Projection { slot, column } => {
             let read = facts.read_of(*slot, at)?;
-            match facts.binding_of(&read).map(|binding| &binding.kind) {
-                Some(BindingKind::PointRead { key, .. }) => key.clone(),
-                _ => Operand::KeyOf { read },
+            match point_read_key_operand(schema, facts, &read, column) {
+                Some(used) => used.clone(),
+                None => Operand::Column {
+                    read,
+                    column: column.clone(),
+                },
             }
         }
         Expr::Arithmetic(operator, left, right) => Operand::Arithmetic(
             *operator,
-            Box::new(operand_of(facts, left, at)?),
-            Box::new(operand_of(facts, right, at)?),
+            Box::new(operand_of(schema, facts, left, at)?),
+            Box::new(operand_of(schema, facts, right, at)?),
         ),
     })
+}
+
+/// What a point read used for its key column `column`, if `read` is one.
+fn point_read_key_operand<'f>(
+    schema: &Schema,
+    facts: &'f PathFacts,
+    read: &ReadRef,
+    column: &ColumnName,
+) -> Option<&'f Operand> {
+    let Some(BindingKind::PointRead { table, key }) =
+        facts.binding_of(read).map(|binding| &binding.kind)
+    else {
+        return None;
+    };
+    let position = schema.table(table)?.key_position(column)?;
+    key.get(position)
 }

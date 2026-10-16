@@ -6,11 +6,11 @@ mod support;
 use kiln_ir::{
     AbortReason, AccessKind, AccessLogEntry, AccessOrigin, AccessTarget, AccessedColumns,
     CheckConstraint, ClampDomain, Column, ColumnType, Comparison, Effect, Execution, Expr,
-    IntegerWidth, Outcome, OverflowReason, Schema, SchemaError, Store, Table, Terminal, Value,
+    IntegerWidth, Outcome, OverflowReason, Schema, SchemaError, Store, Terminal, Value,
 };
 use support::{
-    aborted_reason, call_under_test, column, constraint_entries, insert_row, integer,
-    program_with_schema, run_ok, store_of_rows, table, text, update_row,
+    aborted_reason, call_under_test, column, constraint_entries, insert_row, integer, keyed_by_id,
+    one_part, program_with_schema, run_ok, store_of_rows, table, text, update_row,
 };
 
 fn balance_check(comparison: Comparison, operand: i64) -> CheckConstraint {
@@ -24,13 +24,13 @@ fn balance_check(comparison: Comparison, operand: i64) -> CheckConstraint {
 
 fn accounts_schema(balance: ColumnType, check_constraints: Vec<CheckConstraint>) -> Schema {
     Schema {
-        tables: vec![Table {
-            name: table("accounts"),
-            columns: vec![Column {
+        tables: vec![keyed_by_id(
+            "accounts",
+            vec![Column {
                 name: column("balance"),
                 kind: balance,
             }],
-        }],
+        )],
         check_constraints,
         ..Default::default()
     }
@@ -125,7 +125,7 @@ mod kiln_ir_52 {
                     aborted_reason(&execution),
                     &AbortReason::CheckViolation {
                         constraint,
-                        key: integer(1),
+                        key: one_part(1),
                     },
                     "{comparison:?} {operand} with {written}"
                 );
@@ -150,7 +150,7 @@ mod kiln_ir_52 {
             aborted_reason(&execution),
             &AbortReason::CheckViolation {
                 constraint,
-                key: integer(7),
+                key: one_part(7),
             }
         );
     }
@@ -225,7 +225,7 @@ mod kiln_ir_54 {
             vec![AccessLogEntry {
                 table: table("accounts"),
                 kind: AccessKind::Update,
-                target: AccessTarget::Point(integer(1)),
+                target: AccessTarget::Point(one_part(1)),
                 columns: AccessedColumns::Named(vec![column("balance")]),
                 origin: AccessOrigin::TransactionLogic,
             }]

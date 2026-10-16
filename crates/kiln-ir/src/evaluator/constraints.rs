@@ -3,12 +3,12 @@
 //! order, stopping at the first violation so later constraints log nothing.
 
 use crate::identifiers::TableName;
-use crate::ir::{Schema, Value};
+use crate::ir::{Key, Schema, Table, Value};
 use crate::store::Store;
 
 use super::{
     check, foreign_key, unique, AbortReason, AccessKind, AccessLogEntry, AccessOrigin,
-    AccessTarget, AccessedColumns,
+    AccessTarget, AccessedColumns, ConstraintRef,
 };
 
 /// Checks unique constraints, then foreign keys, then check constraints,
@@ -23,18 +23,45 @@ pub(super) fn first_violation(
         .or_else(|| check::first_violation(schema, final_store, access_log))
 }
 
+/// The declared table a validated constraint names.
+pub(super) fn constrained_table<'a>(schema: &'a Schema, name: &TableName) -> &'a Table {
+    schema
+        .table(name)
+        .unwrap_or_else(|| panic!("a validated constraint names declared table {name:?}"))
+}
+
 /// Logs one constraint-origin point read of `table` at `key`, the only
-/// footprint a check may leave: a lookup by value, never a scan (D5).
-pub(super) fn log_lookup(
+/// footprint a check of a referenced key may leave: a lookup of one key,
+/// never a scan (D5).
+pub(super) fn log_point_read(
     access_log: &mut Vec<AccessLogEntry>,
     table: &TableName,
-    key: &Value,
+    key: Key,
     columns: AccessedColumns,
 ) {
     access_log.push(AccessLogEntry {
         table: table.clone(),
         kind: AccessKind::PointRead,
-        target: AccessTarget::Point(key.clone()),
+        target: AccessTarget::Point(key),
+        columns,
+        origin: AccessOrigin::ConstraintCheck,
+    });
+}
+
+/// Logs one constraint-origin lookup of `table` by `tuple`, naming the
+/// constraint it serves: the only footprint a check by value may leave,
+/// never a scan (D5).
+pub(super) fn log_constraint_lookup(
+    access_log: &mut Vec<AccessLogEntry>,
+    table: &TableName,
+    constraint: ConstraintRef,
+    tuple: Vec<Value>,
+    columns: AccessedColumns,
+) {
+    access_log.push(AccessLogEntry {
+        table: table.clone(),
+        kind: AccessKind::ConstraintLookup,
+        target: AccessTarget::ConstraintLookup { constraint, tuple },
         columns,
         origin: AccessOrigin::ConstraintCheck,
     });

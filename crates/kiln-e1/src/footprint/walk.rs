@@ -108,7 +108,8 @@ impl Walker<'_> {
     ) -> Result<Vec<FeasiblePath>, ClassifyError> {
         let mut data_selected = false;
         for operand in operands {
-            data_selected |= !operand_of(&facts, operand, &terminal)?.uses().is_empty();
+            let operand = operand_of(self.schema, &facts, operand, &terminal)?;
+            data_selected |= !operand.uses().is_empty();
         }
         let arm = |holds: bool| {
             if data_selected {
@@ -160,8 +161,8 @@ impl Walker<'_> {
             } => {
                 let range = RangeRead {
                     over: RangeOver::PrimaryKeys(table),
-                    start: std::slice::from_ref(start),
-                    end: std::slice::from_ref(end),
+                    start,
+                    end,
                     bound,
                 };
                 self.read_range(range, *into, node, facts)
@@ -191,7 +192,7 @@ impl Walker<'_> {
     fn read(
         &self,
         table: &TableName,
-        key: &Expr,
+        key: &[Expr],
         into: Slot,
         node: NodePath,
         facts: &mut PathFacts,
@@ -200,7 +201,7 @@ impl Walker<'_> {
         let key = self.keyed_access(facts, role, table, key, &node)?;
         let kind = BindingKind::PointRead {
             table: table.clone(),
-            key: key.operand,
+            key: key.operands,
         };
         bind(facts, into, kind, node, key.depends_on);
         Ok(())
@@ -214,9 +215,9 @@ impl Walker<'_> {
         facts: &mut PathFacts,
     ) -> Result<(), ClassifyError> {
         let bounds = RangeBounds {
-            start: operands_of(facts, range.start, &node)?,
-            end: operands_of(facts, range.end, &node)?,
-            bound: operand_of(facts, range.bound, &node)?,
+            start: self.operands_of(facts, range.start, &node)?,
+            end: self.operands_of(facts, range.end, &node)?,
+            bound: operand_of(self.schema, facts, range.bound, &node)?,
         };
         let (role, kind, target) = match range.over {
             RangeOver::PrimaryKeys(table) => (
@@ -261,25 +262,37 @@ impl Walker<'_> {
         facts: &mut PathFacts,
         role: AccessRole,
         table: &TableName,
-        key: &Expr,
+        key: &[Expr],
         node: &NodePath,
     ) -> Result<KeyedAccess, ClassifyError> {
-        let operand = operand_of(facts, key, node)?;
-        let depends_on = track_access(facts, self.schema, &role, [&operand], node);
+        let operands = self.operands_of(facts, key, node)?;
+        let depends_on = track_access(facts, self.schema, &role, &operands, node);
         let target = Target::Row {
             table: table.clone(),
-            key: operand.clone(),
+            key: operands.clone(),
         };
         facts.record_access(node, target);
         Ok(KeyedAccess {
-            operand,
+            operands,
             depends_on,
         })
+    }
+
+    fn operands_of(
+        &self,
+        facts: &PathFacts,
+        expressions: &[Expr],
+        at: &NodePath,
+    ) -> Result<Vec<Operand>, ClassifyError> {
+        expressions
+            .iter()
+            .map(|expression| operand_of(self.schema, facts, expression, at))
+            .collect()
     }
 }
 
 struct KeyedAccess {
-    operand: Operand,
+    operands: Vec<Operand>,
     depends_on: Vec<ReadRef>,
 }
 
@@ -296,15 +309,4 @@ fn bind(
         node,
         depends_on,
     });
-}
-
-fn operands_of(
-    facts: &PathFacts,
-    expressions: &[Expr],
-    at: &NodePath,
-) -> Result<Vec<Operand>, ClassifyError> {
-    expressions
-        .iter()
-        .map(|expression| operand_of(facts, expression, at))
-        .collect()
 }

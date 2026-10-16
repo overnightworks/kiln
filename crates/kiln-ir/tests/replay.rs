@@ -5,12 +5,12 @@ mod support;
 
 use kiln_ir::{
     replay, AbortName, AbortReason, Call, Column, ColumnType, Effect, Execution, Expr,
-    IntegerWidth, Outcome, Schema, SchemaError, Store, Table, Terminal, Value,
+    IntegerWidth, Outcome, ProgramError, Schema, SchemaError, Store, Terminal, Value,
 };
 use proptest::prelude::*;
 use support::{
-    call_under_test, column, insert_row, integer, program_with_schema, replayed, store_of_rows,
-    table, typed_parameter,
+    call_under_test, column, insert_row, integer, keyed_by_id, program_with_schema, replayed,
+    store_of_rows, table, typed_parameter,
 };
 
 fn echo_program() -> kiln_ir::Program {
@@ -24,18 +24,18 @@ fn echo_program() -> kiln_ir::Program {
 }
 
 fn insert_by_key_program() -> kiln_ir::Program {
-    let key = Expr::Parameter(kiln_ir::ParameterName("key".to_owned()));
+    let key = vec![Expr::Parameter(kiln_ir::ParameterName("key".to_owned()))];
     let schema = Schema {
-        tables: vec![Table {
-            name: table("items"),
-            columns: vec![Column {
+        tables: vec![keyed_by_id(
+            "items",
+            vec![Column {
                 name: column("n"),
                 kind: ColumnType::Integer {
                     width: IntegerWidth::I8,
                     domain: None,
                 },
             }],
-        }],
+        )],
         ..Default::default()
     };
     program_with_schema(
@@ -153,16 +153,16 @@ mod kiln_ir_60 {
     fn invalid_schema_is_a_typed_error() {
         let reversed = kiln_ir::ClampDomain { min: 5, max: 1 };
         let schema = Schema {
-            tables: vec![Table {
-                name: table("t"),
-                columns: vec![Column {
+            tables: vec![keyed_by_id(
+                "t",
+                vec![Column {
                     name: column("c"),
                     kind: ColumnType::Integer {
                         width: IntegerWidth::I8,
                         domain: Some(reversed),
                     },
                 }],
-            }],
+            )],
             ..Default::default()
         };
         let program = program_with_schema(
@@ -175,7 +175,10 @@ mod kiln_ir_60 {
         for calls in [vec![], vec![call_under_test(vec![])]] {
             let result = replay(&program, &calls, &Store::empty());
 
-            assert!(matches!(result, Err(SchemaError::ReversedDomain { .. })));
+            assert!(matches!(
+                result,
+                Err(ProgramError::Schema(SchemaError::ReversedDomain { .. }))
+            ));
         }
     }
 }

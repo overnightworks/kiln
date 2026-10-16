@@ -13,8 +13,9 @@
 //!
 //! The crate has no I/O: [`run`] is a pure function from a [`Program`],
 //! a [`Call`] and a [`Store`] to an [`Execution`], and [`replay`] chains
-//! it over a call sequence (D4). Both return a typed [`SchemaError`] if
-//! the program's own schema is not internally satisfiable (D3).
+//! it over a call sequence (D4). Both return a typed [`ProgramError`] if the
+//! program is not internally satisfiable: its schema, or a function body that
+//! names a table, a key or a written column the schema does not allow (D3, D8).
 
 mod call;
 mod evaluator;
@@ -26,13 +27,14 @@ mod store;
 pub use call::Call;
 pub use evaluator::{
     run, AbortReason, AccessKind, AccessLogEntry, AccessOrigin, AccessTarget, AccessedColumns,
-    Execution, Outcome, OverflowReason,
+    ConstraintRef, Execution, KeyComponentFault, Outcome, OverflowReason,
 };
 pub use identifiers::{AbortName, ColumnName, FunctionName, IndexName, ParameterName, TableName};
 pub use ir::{
     ArithmeticOp, Block, CheckConstraint, ClampDomain, Column, ColumnType, Comparison, Condition,
-    Effect, Expr, ForeignKey, Function, Index, IntegerWidth, Parameter, ParameterType, Program,
-    Relation, Row, Schema, SchemaError, Slot, Table, Terminal, UniqueConstraint, Value,
+    Effect, Expr, ForeignKey, Function, FunctionFault, Index, IntegerWidth, Key, KeyColumn,
+    KeyDeclaration, Parameter, ParameterType, Program, ProgramError, Relation, Row, Schema,
+    SchemaError, Slot, Table, Terminal, UniqueConstraint, Value,
 };
 pub use replay::replay;
 pub use store::{KeyedRow, Store};

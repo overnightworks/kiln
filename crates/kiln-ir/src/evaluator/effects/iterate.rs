@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::ir::{Effect, Slot};
 use crate::store::Store;
 
-use super::super::{AccessLogEntry, Binding, CallContext, Outcome};
+use super::super::{AccessLogEntry, Binding, BoundRow, CallContext, Outcome};
 use super::apply_effect;
 
 /// Runs `body` once for each row `source` bound, in the order the read
@@ -30,15 +30,19 @@ pub(super) fn apply_iterate(
     bindings: &mut HashMap<Slot, Binding>,
     access_log: &mut Vec<AccessLogEntry>,
 ) -> Option<Outcome> {
-    let rows = match bindings.get(&source) {
-        Some(Binding::Range(rows)) => rows.clone(),
+    let (table, rows) = match bindings.get(&source) {
+        Some(Binding::Range { table, rows }) => (table.clone(), rows.clone()),
         Some(Binding::Row(_)) => {
             panic!("iteration reads slot {source:?} as its range, but a point read bound it")
         }
         None => panic!("iteration reads slot {source:?} before any range read bound it"),
     };
     for current in rows {
-        bindings.insert(row, Binding::Row(Some(current)));
+        let bound = BoundRow {
+            table: table.clone(),
+            keyed: current,
+        };
+        bindings.insert(row, Binding::Row(Some(bound)));
         for effect in body {
             if let Some(outcome) = apply_effect(effect, ctx, store, bindings, access_log) {
                 return Some(outcome);

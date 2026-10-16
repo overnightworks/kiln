@@ -2,6 +2,7 @@ use crate::identifiers::{FunctionName, ParameterName};
 
 use super::block::Block;
 use super::schema::{IntegerWidth, Schema};
+use super::validation::{check_block, ProgramError};
 
 /// A function parameter's declared type: an integer at a mandatory width,
 /// or text. Every parameter declares one of the two — there is no
@@ -46,6 +47,20 @@ pub struct Program {
 }
 
 impl Program {
+    /// Rejects a program whose schema is invalid or whose function bodies
+    /// name a table, a key or a written column the schema does not allow
+    /// (D8, D9). `run` calls this before executing any call.
+    pub fn validate(&self) -> Result<(), ProgramError> {
+        self.schema.validate()?;
+        for function in &self.functions {
+            check_block(&self.schema, &function.body).map_err(|fault| ProgramError::Function {
+                function: function.name.clone(),
+                fault,
+            })?;
+        }
+        Ok(())
+    }
+
     /// The function named `name`.
     ///
     /// Panics if the program declares no such function: a [`Call`](crate::call::Call)

@@ -15,7 +15,7 @@ mod walk;
 
 use std::fmt;
 
-use kiln_ir::{FunctionName, Program, Slot};
+use kiln_ir::{FunctionName, Program, ProgramError, Slot};
 
 pub use cause::UnknownCause;
 pub use evidence::{IndexRead, IndexReadKind};
@@ -35,6 +35,9 @@ pub struct FootprintClassification {
 /// Why a function could not be classified at all.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClassifyError {
+    /// The program is one `kiln-ir` rejects before any call (D8, D9), so its
+    /// keys cannot be read component by component.
+    InvalidProgram(ProgramError),
     UnknownFunction(FunctionName),
     /// A key or bound refers to a slot no earlier read bound.
     UnboundSlot {
@@ -47,6 +50,7 @@ pub enum ClassifyError {
 impl fmt::Display for ClassifyError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidProgram(error) => write!(formatter, "the program is invalid: {error:?}"),
             Self::UnknownFunction(name) => {
                 write!(formatter, "the program declares no function {}", name.0)
             }
@@ -64,6 +68,12 @@ impl fmt::Display for ClassifyError {
 
 impl std::error::Error for ClassifyError {}
 
+impl From<ProgramError> for ClassifyError {
+    fn from(error: ProgramError) -> Self {
+        Self::InvalidProgram(error)
+    }
+}
+
 impl From<ContractViolation> for ClassifyError {
     fn from(violation: ContractViolation) -> Self {
         Self::Evidence(violation)
@@ -74,6 +84,7 @@ pub fn classify_function(
     program: &Program,
     name: &FunctionName,
 ) -> Result<FootprintClassification, ClassifyError> {
+    program.validate()?;
     let function = program
         .functions
         .iter()

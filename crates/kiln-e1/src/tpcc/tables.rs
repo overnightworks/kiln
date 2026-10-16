@@ -2,7 +2,10 @@
 //! to. The specification declares primary keys and foreign keys, and no
 //! secondary index, so the schema declares none (`inputs.md` §5, Q2.1).
 
-use kiln_ir::{Column, ColumnName, ColumnType, ForeignKey, IntegerWidth, Schema, Table, TableName};
+use kiln_ir::{
+    Column, ColumnName, ColumnType, ForeignKey, IntegerWidth, KeyDeclaration, Schema, Table,
+    TableName,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TpccTable {
@@ -344,11 +347,9 @@ impl TpccTable {
     }
 }
 
-/// The schema of Clause 1.3.1 as far as `kiln-ir` states it.
-///
-/// The IR keys a row by one value outside its columns, so a table keyed by one
-/// column leaves that column out, and a composite primary key or foreign key
-/// has no declaration: nothing here encodes several columns into one key.
+/// The schema of Clause 1.3.1 as far as `kiln-ir` states it: every table
+/// declares its primary key (HISTORY has none and is keyless), and a foreign
+/// key of several columns has no declaration yet.
 pub fn tpcc_schema() -> Schema {
     Schema {
         tables: TpccTable::ALL.map(table_of).to_vec(),
@@ -367,13 +368,25 @@ fn table_of(table: TpccTable) -> Table {
         columns: spec
             .columns
             .iter()
-            .filter(|column| spec.primary_key != [column.name])
             .map(|column| Column {
                 name: ColumnName(column.name.to_owned()),
                 kind: column_type(column.domain),
             })
             .collect(),
+        key: key_of(spec),
     }
+}
+
+fn key_of(spec: &TableSpec) -> KeyDeclaration {
+    if spec.primary_key.is_empty() {
+        return KeyDeclaration::Keyless;
+    }
+    KeyDeclaration::Columns(
+        spec.primary_key
+            .iter()
+            .map(|column| ColumnName((*column).to_owned()))
+            .collect(),
+    )
 }
 
 fn foreign_keys_of(table: TpccTable) -> Vec<ForeignKey> {

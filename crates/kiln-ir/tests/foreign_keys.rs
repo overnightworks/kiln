@@ -5,12 +5,13 @@ mod support;
 
 use kiln_ir::{
     AbortReason, AccessKind, AccessLogEntry, AccessOrigin, AccessTarget, AccessedColumns,
-    CheckConstraint, Column, ColumnType, Comparison, Effect, Execution, ForeignKey, IntegerWidth,
-    Outcome, Program, Schema, SchemaError, Store, Table, Terminal, UniqueConstraint,
+    CheckConstraint, Column, ColumnType, Comparison, ConstraintRef, Effect, Execution, ForeignKey,
+    IntegerWidth, Outcome, Program, Schema, SchemaError, Store, Terminal, UniqueConstraint,
 };
 use support::{
     aborted_reason, call_under_test, column, constraint_entries, delete_row, insert_row, integer,
-    program_with_schema, run_ok, store_of_rows, table, text, update_row, RowSpec,
+    keyed_by_id, one_part, program_with_schema, run_ok, store_of_rows, table, text, update_row,
+    RowSpec,
 };
 
 fn integer_column(name: &str) -> Column {
@@ -50,16 +51,16 @@ fn orders_at_least_zero(name: &str) -> CheckConstraint {
 fn shop_schema() -> Schema {
     Schema {
         tables: vec![
-            Table {
-                name: table("customers"),
-                columns: vec![Column {
+            keyed_by_id(
+                "customers",
+                vec![Column {
                     name: column("name"),
                     kind: ColumnType::Text,
                 }],
-            },
-            Table {
-                name: table("orders"),
-                columns: vec![
+            ),
+            keyed_by_id(
+                "orders",
+                vec![
                     integer_column("customer"),
                     Column {
                         name: column("code"),
@@ -68,7 +69,7 @@ fn shop_schema() -> Schema {
                     integer_column("quantity"),
                     integer_column("discount"),
                 ],
-            },
+            ),
         ],
         unique_constraints: vec![orders_code_unique()],
         foreign_keys: vec![orders_customer()],
@@ -116,7 +117,7 @@ fn parent_read(key: i64) -> AccessLogEntry {
     AccessLogEntry {
         table: table("customers"),
         kind: AccessKind::PointRead,
-        target: AccessTarget::Point(integer(key)),
+        target: AccessTarget::Point(one_part(key)),
         columns: AccessedColumns::Named(vec![]),
         origin: AccessOrigin::ConstraintCheck,
     }
@@ -125,8 +126,11 @@ fn parent_read(key: i64) -> AccessLogEntry {
 fn children_lookup(key: i64) -> AccessLogEntry {
     AccessLogEntry {
         table: table("orders"),
-        kind: AccessKind::PointRead,
-        target: AccessTarget::Point(integer(key)),
+        kind: AccessKind::ConstraintLookup,
+        target: AccessTarget::ConstraintLookup {
+            constraint: ConstraintRef::ForeignKey(orders_customer()),
+            tuple: vec![integer(key)],
+        },
         columns: AccessedColumns::Named(vec![column("customer")]),
         origin: AccessOrigin::ConstraintCheck,
     }
@@ -135,8 +139,11 @@ fn children_lookup(key: i64) -> AccessLogEntry {
 fn code_check(code: &str) -> AccessLogEntry {
     AccessLogEntry {
         table: table("orders"),
-        kind: AccessKind::PointRead,
-        target: AccessTarget::Point(text(code)),
+        kind: AccessKind::ConstraintLookup,
+        target: AccessTarget::ConstraintLookup {
+            constraint: ConstraintRef::Unique(orders_code_unique()),
+            tuple: vec![text(code)],
+        },
         columns: AccessedColumns::Named(vec![column("code")]),
         origin: AccessOrigin::ConstraintCheck,
     }
@@ -191,10 +198,7 @@ mod kiln_ir_45 {
 
 fn nodes_program(effects: Vec<Effect>) -> Program {
     let schema = Schema {
-        tables: vec![Table {
-            name: table("nodes"),
-            columns: vec![integer_column("parent")],
-        }],
+        tables: vec![keyed_by_id("nodes", vec![integer_column("parent")])],
         foreign_keys: vec![ForeignKey {
             table: table("nodes"),
             column: column("parent"),
@@ -344,7 +348,7 @@ mod kiln_ir_48 {
             aborted_reason(&execution),
             &AbortReason::ReferencedParentDeleted {
                 foreign_key: orders_customer(),
-                key: integer(1),
+                key: one_part(1),
             }
         );
         assert_eq!(execution.store, store);
@@ -361,7 +365,7 @@ mod kiln_ir_48 {
             aborted_reason(&execution),
             &AbortReason::MissingRow {
                 table: table("customers"),
-                key: integer(9),
+                key: one_part(9),
             }
         );
         assert!(constraint_entries(&execution).is_empty());
@@ -405,7 +409,7 @@ mod kiln_ir_50 {
     use super::*;
 
     #[test]
-    fn checks_log_point_reads_and_lookups_by_key_and_never_scans() {
+    fn checks_log_point_reads_and_constraint_lookups_and_never_scan() {
         let store = store_with_orders(&[1, 2, 3], &[(10, 1)]);
         let cases = [
             (
@@ -538,7 +542,7 @@ mod kiln_ir_55 {
             aborted_reason(&execution),
             &AbortReason::CheckViolation {
                 constraint: orders_at_least_zero("quantity"),
-                key: integer(11),
+                key: one_part(11),
             }
         );
     }

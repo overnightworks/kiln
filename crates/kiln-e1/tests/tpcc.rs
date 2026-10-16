@@ -2,7 +2,7 @@ use kiln_e1::{
     render_units, tpcc_schema, tpcc_units, LoweringRefusal, Profile, Requirement, Subject,
     TpccTable, TpccTransaction,
 };
-use kiln_ir::{ColumnName, ColumnType, IntegerWidth, TableName};
+use kiln_ir::{ColumnName, ColumnType, IntegerWidth, KeyDeclaration, TableName};
 use TpccTable::{Customer, District, History, Item, NewOrder, Order, OrderLine, Stock, Warehouse};
 use TpccTransaction::{Delivery, OrderStatus, Payment, StockLevel};
 
@@ -127,19 +127,46 @@ mod kiln_e1_30 {
     }
 
     #[test]
-    fn a_table_keyed_by_one_column_leaves_that_column_to_the_key() {
+    fn every_table_declares_its_primary_key_in_clause_1_3_1_order_and_history_is_keyless() {
+        let cases: [(&str, &[&str]); 8] = [
+            ("WAREHOUSE", &["W_ID"]),
+            ("DISTRICT", &["D_W_ID", "D_ID"]),
+            ("CUSTOMER", &["C_W_ID", "C_D_ID", "C_ID"]),
+            ("NEW-ORDER", &["NO_W_ID", "NO_D_ID", "NO_O_ID"]),
+            ("ORDER", &["O_W_ID", "O_D_ID", "O_ID"]),
+            (
+                "ORDER-LINE",
+                &["OL_W_ID", "OL_D_ID", "OL_O_ID", "OL_NUMBER"],
+            ),
+            ("ITEM", &["I_ID"]),
+            ("STOCK", &["S_W_ID", "S_I_ID"]),
+        ];
+        let schema = tpcc_schema();
+        for (table_name, key) in cases {
+            let declared = schema.table(&table(table_name)).unwrap();
+            let expected = KeyDeclaration::Columns(key.iter().map(|name| column(name)).collect());
+            assert_eq!(declared.key, expected, "{table_name}");
+        }
+        let history = schema.table(&table("HISTORY")).unwrap();
+        assert_eq!(history.key, KeyDeclaration::Keyless);
+    }
+
+    #[test]
+    fn key_columns_are_among_a_tables_columns_for_their_kind_and_width() {
         let schema = tpcc_schema();
 
-        assert!(schema
-            .column(&table("WAREHOUSE"), &column("W_ID"))
-            .is_none());
-        assert!(schema.column(&table("ITEM"), &column("I_ID")).is_none());
+        for (table_name, column_name) in [
+            ("WAREHOUSE", "W_ID"),
+            ("ITEM", "I_ID"),
+            ("DISTRICT", "D_W_ID"),
+            ("DISTRICT", "D_ID"),
+            ("ORDER-LINE", "OL_NUMBER"),
+        ] {
+            let declared = schema.column(&table(table_name), &column(column_name));
+            assert!(declared.is_some(), "{table_name}.{column_name}");
+        }
         assert!(schema
             .column(&table("WAREHOUSE"), &column("W_TAX"))
-            .is_some());
-        assert!(schema.column(&table("DISTRICT"), &column("D_ID")).is_some());
-        assert!(schema
-            .column(&table("DISTRICT"), &column("D_W_ID"))
             .is_some());
     }
 

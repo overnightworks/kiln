@@ -18,7 +18,8 @@ use std::collections::HashMap;
 use crate::call::Call;
 use crate::identifiers::{AbortName, ColumnName, IndexName, ParameterName, TableName};
 use crate::ir::{
-    CheckConstraint, ForeignKey, Parameter, Program, SchemaError, Slot, UniqueConstraint, Value,
+    CheckConstraint, ForeignKey, Key, Parameter, Program, ProgramError, Slot, UniqueConstraint,
+    Value,
 };
 use crate::store::{KeyedRow, Store};
 
@@ -53,11 +54,19 @@ pub enum AbortReason {
     Declared(AbortName),
     MissingRow {
         table: TableName,
-        key: Value,
+        key: Key,
     },
     DuplicateKey {
         table: TableName,
-        key: Value,
+        key: Key,
+    },
+    /// The component of a key expression at key column `column` of `table`
+    /// is of another kind than the column, or outside its declared width.
+    /// Never clamped, even where the column declares a clamping domain (D8).
+    KeyComponentRejected {
+        table: TableName,
+        column: ColumnName,
+        fault: KeyComponentFault,
     },
     Overflow(OverflowReason),
     /// A range read on `table` matched `matched` rows, more than its
@@ -116,7 +125,7 @@ pub enum AbortReason {
     NonTextValue {
         table: TableName,
         column: ColumnName,
-        key: Value,
+        key: Key,
     },
     /// The transaction's final state holds `value` in `constraint`'s column
     /// on more than one row (D2).
@@ -134,14 +143,21 @@ pub enum AbortReason {
     /// references, while its final state still holds a row naming `key` (D2).
     ReferencedParentDeleted {
         foreign_key: ForeignKey,
-        key: Value,
+        key: Key,
     },
     /// The transaction's final state holds the row at `key` violating
     /// `constraint` (D2).
     CheckViolation {
         constraint: CheckConstraint,
-        key: Value,
+        key: Key,
     },
+}
+
+/// Why a key component cannot name a row (D8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyComponentFault {
+    WrongKind,
+    OutsideWidth,
 }
 
 /// Why checked arithmetic overflowed, or a value fell outside its
@@ -162,7 +178,7 @@ pub enum OverflowReason {
     Width {
         table: TableName,
         column: ColumnName,
-        key: Value,
+        key: Key,
     },
     /// The argument bound to `parameter` fell outside its declared width.
     Argument { parameter: ParameterName },
@@ -183,26 +199,39 @@ pub enum AccessKind {
     PointRead,
     RangeRead,
     IndexRangeRead,
+    ConstraintLookup,
     Insert,
     Update,
     Delete,
 }
 
-/// Which rows an [`AccessLogEntry`] names: one row by key, or every row
-/// whose key falls in `[start, end]` — recorded even when the range
-/// matches no row, since the range itself was still attempted
-/// (`docs/concept.md` §2.2, D5: "range bounds (including empty ranges)").
+/// The constraint a [`AccessKind::ConstraintLookup`] serves (D5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConstraintRef {
+    Unique(UniqueConstraint),
+    ForeignKey(ForeignKey),
+}
+
+/// Which rows an [`AccessLogEntry`] names: one row by key (every
+/// component), or every row whose key falls in `[start, end]` — recorded
+/// even when the range matches no row, since the range itself was still
+/// attempted (`docs/concept.md` §2.2, D5: "range bounds (including empty
+/// ranges)") — or the rows a constraint check looks up by a tuple of values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccessTarget {
-    Point(Value),
+    Point(Key),
     Range {
-        start: Value,
-        end: Value,
+        start: Key,
+        end: Key,
     },
     IndexRange {
         index: IndexName,
         start: Vec<Value>,
         end: Vec<Value>,
+    },
+    ConstraintLookup {
+        constraint: ConstraintRef,
+        tuple: Vec<Value>,
     },
 }
 
@@ -245,22 +274,32 @@ struct CallContext<'a> {
     args: &'a [Value],
 }
 
+/// A keyed row together with the table it belongs to, whose key declaration
+/// tells a projection which column is a component of the key (D8).
+struct BoundRow {
+    table: TableName,
+    keyed: KeyedRow,
+}
+
 /// What a [`Slot`] holds once the effect that bound it has run: a single
 /// keyed row or its absence (`Effect::Read`), or the ordered sequence of
-/// keyed rows a range matched (`Effect::ReadRange`,
+/// keyed rows of one table a range matched (`Effect::ReadRange`,
 /// `Effect::ReadIndexRange`). [`Condition::RowPresent`](crate::ir::Condition::RowPresent) reads
 /// either kind as one branchable fact — "did this read find anything" —
 /// without the rest of `run` needing to know which effect produced it.
 enum Binding {
-    Row(Option<KeyedRow>),
-    Range(Vec<KeyedRow>),
+    Row(Option<BoundRow>),
+    Range {
+        table: TableName,
+        rows: Vec<KeyedRow>,
+    },
 }
 
 impl Binding {
     fn is_present(&self) -> bool {
         match self {
             Binding::Row(row) => row.is_some(),
-            Binding::Range(rows) => !rows.is_empty(),
+            Binding::Range { rows, .. } => !rows.is_empty(),
         }
     }
 }
@@ -268,9 +307,11 @@ impl Binding {
 /// Runs `call` against `program` starting from `store`. Does not mutate
 /// `store`.
 ///
-/// Rejects `program`'s schema with a typed [`SchemaError`] before executing
-/// anything if that schema is not internally satisfiable (D3,
-/// [`Schema::validate`](crate::ir::Schema::validate)).
+/// Rejects `program` with a typed [`ProgramError`] before executing anything
+/// if its schema is not internally satisfiable (D3,
+/// [`Schema::validate`](crate::ir::Schema::validate)) or a function body
+/// names a table, a key or a written column the schema does not allow (D8,
+/// [`Program::validate`]).
 ///
 /// Panics, as out of scope for this boundary, on a static program fault:
 /// a `call` naming a function `program` does not declare, a body referring to
@@ -279,8 +320,8 @@ impl Binding {
 /// the compiler's trusted output, not raw input this boundary validates.
 /// Whether a slot holds a row is data, never a fault: an unbound slot reads
 /// as absent.
-pub fn run(program: &Program, call: &Call, store: &Store) -> Result<Execution, SchemaError> {
-    program.schema.validate()?;
+pub fn run(program: &Program, call: &Call, store: &Store) -> Result<Execution, ProgramError> {
+    program.validate()?;
 
     let function = program.function(&call.function);
     let ctx = CallContext {
