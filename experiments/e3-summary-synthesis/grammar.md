@@ -247,7 +247,7 @@ Width bounds, from `IntegerWidth::range`: `I8` `-128 … 127`; `I16`
 `-32 768 … 32 767`; `I32` `-2 147 483 648 … 2 147 483 647`; `I64`
 `-9 223 372 036 854 775 808 … 9 223 372 036 854 775 807`. Key columns are
 excluded because their `I64` width is a representation convention of
-`kiln-e2`'s single-row tables (`crates/kiln-e2/src/rows.rs`, `key_column`),
+`kiln-e2`'s tables (`crates/kiln-e2/src/rows.rs`, `key_column`),
 so its extremes would alter enumeration without semantic reason.
 
 | Family | Body literals | Check operands | Non-key value and parameter widths |
@@ -433,7 +433,7 @@ first for the six signatures; it decides nothing else.
 
 The enumerator receives the family's `Program` and the family's
 **observation environments**, and nothing else: no mutant, no summary, no
-family name or number. From the `Program` it reads the pool under §1.5;
+family name or number; the family's rows in §1.1 and §1.2 are the ones whose tables the `Program` declares. From the `Program` it reads the pool under §1.5;
 the `Name` set comes only from §1.2's frozen per-family lists. Those lists
 and the signature of §1.1 are part of this freeze, not inputs. The
 observation environments are frozen:

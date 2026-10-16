@@ -554,6 +554,7 @@ not scored.
   attempt, so they void no result: frozen name sets (§1.2), typed key terms
   and the category source (§1.1, §1.3, §3.1), hole production lists (§1.3),
   pool bounds (§1.5), uniform size counting (§1.7, §2.4), rule M as hygiene
-  (§1.6). Fix batch 1 records R1 at §1.2, §2.3 and §3.1 (name authority),
-  R2 at §1.5 (pool eligibility), and R3 at §2.4 (dispatcher `transform`
-  size limitation).
+  (§1.6). The frozen name tables are the only name source (§1.1, §1.2,
+  §1.3, §2.3, §3.1); key columns are excluded from the literal pool (§1.5);
+  dispatcher `transform` exceeds the search limit, so dispatcher's route to
+  admission is `rotate` (§2.4).
