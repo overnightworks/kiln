@@ -175,19 +175,23 @@ this meaning, one slice at a time.
   typed abort reason sits at index 1 and does not erase or block the
   first call's committed transfer.
 - **D5 Access log.** Every attempted access — a point read, a range read,
-  an insert, an update, or a delete — is logged with its table, its key or
-  range bounds, the columns it touched, and its origin (the transaction's
-  own logic, or a constraint check). A constraint check logs only the
-  accesses it logically needs — a uniqueness check is a point read on the
-  unique key, never a table scan — and an aborted call keeps every access
-  it attempted. An indexed range read is its own kind of range read,
+  an insert, an update, or a delete — is logged with its table, its key
+  (every component) or its range (prefix and interval as written, D8), the
+  columns it touched, and its origin (the transaction's own logic, or a
+  constraint check). A constraint check logs only the accesses it logically
+  needs, never a table scan: a check that a referenced primary key exists
+  is a point read of that key, and a check that looks up a unique tuple, or
+  the rows still naming a deleted key, is a constraint lookup naming the
+  constraint and the tuple. An aborted call keeps every access it
+  attempted. An indexed range read is its own kind of range read,
   distinct from a primary-key range read: it logs one entry naming the
   index and both bounds, and every row reached from its result is accessed
   by an ordinary point read. A call that stops at the index and one that
   follows it to base rows therefore leave different evidence.
   *Example.* `sign_up(email)` inserting a duplicate email logs the insert
-  attempt and the uniqueness check's point read on that email, both kept
-  in the log even though the call aborts.
+  attempt and the uniqueness check's constraint lookup of that email under
+  `unique(accounts.email)`, both kept in the log even though the call
+  aborts.
 - **D6 Observable semantics.** A read sees the transaction's own earlier
   writes. An empty range reads as an empty sequence. Exceeding a bounded
   iteration's declared bound aborts the transaction. Inserting an already
@@ -246,18 +250,20 @@ this meaning, one slice at a time.
   table's columns, one to one and kind for kind, onto the referenced table's
   whole primary key; a row lacking any of those columns references nothing,
   and since keys never change, only a delete removes a referenced key (D2).
-  A unique constraint names an ordered list of columns and binds only rows
-  holding all of them. A foreign key references a primary key only: a
-  reference to a unique tuple has no caller yet, its source construct is
-  refused (E1 Q4, `experiments/e1-classification-coverage/inputs.md` §5),
-  and whatever adds one must also abort an update that removes a referenced
-  value. A unique constraint enforces and is never an index: finding a row
-  by a unique tuple reads a declared index or scans (D9). The access log
-  (D5) names a key by all its components and a range by its prefix and
-  interval as written. A constraint check that looks up a primary key logs a
-  point read of it; one that looks up a unique tuple, or the rows still
-  naming a deleted key, logs a constraint lookup naming the constraint and
-  the tuple — never a scan.
+  It is checked for every row the call inserted or wrote any of those
+  columns on, against the key formed from that row's final values of all of
+  them: updating only `a` of `(a, b)` checks the parent at the new `a` and
+  the row's final `b` — the stored value, or the last value this call wrote
+  to it. Reading the retained `b` is part of the update's own access to
+  that row, not a further logged access. A unique constraint names an
+  ordered list of columns and binds only rows holding all of them. A
+  foreign key references a primary key only: a reference to a unique tuple
+  has no caller yet, its source construct is refused (E1 Q4,
+  `experiments/e1-classification-coverage/inputs.md` §5), and whatever adds
+  one must also abort an update that removes a referenced value. A unique
+  constraint enforces and is never an index: finding a row by a unique
+  tuple reads a declared index or scans (D9), and checking it is a
+  constraint lookup (D5).
   *Example.* `order_line` is keyed by `(w, d, o, n)`. The range with
   prefix `(1, 3, 3001)` and no interval holds every line of order 3001 of
   district 3, and the log shows that prefix, not a bound such as
@@ -267,28 +273,34 @@ this meaning, one slice at a time.
   adds a kind.
   - *Append* (a write) adds a row to a keyless table and keeps duplicates.
     The row's identity is internal: no column and no key, so no
-    expression projects it and no read, update or delete names it. A
-    per-table store counter gives one past the highest identity the table
-    holds (the first, when it holds none), so replay is deterministic; an
+    expression projects it. A keyless table is reached only by appends and
+    by constraint checks: a read, range, scan, secondary index, update or
+    delete naming it is rejected before any call runs, so the order of its
+    rows is never observable. A per-table store counter gives one past the
+    highest identity the table holds (the first, when it holds none), so
+    replay is deterministic; an
     aborted call's appends consume nothing (D6), and a counter past `i64`
     aborts with a typed reason. The log records one append naming the
     table and its columns, without the identity, and the row's constraints
     are checked like any written row's (D2).
-  - *Scan* (a read) binds the rows of a table, or of a primary-key prefix,
-    that satisfy a condition over their columns, in key order. It logs one
-    scan naming the table, prefix and condition, distinct from every range
-    read, so a scan never passes for a range. A scan or a range read may
+  - *Scan* (a read) binds the rows of a keyed table, or of a primary-key
+    prefix, that satisfy a condition over their columns, in key order. It
+    logs one scan naming the table, prefix and condition, distinct from
+    every range read, so a scan never passes for a range. A scan or a range read may
     bind only its first or last k rows in its order; it then needs no
     row-count bound and logs the whole scan or range it consulted.
   - *Local sequences.* A range, index or scan read binds a sequence of rows.
     Filtering by a condition, mapping to values or records, sorting by
-    columns (ties by key), distinct values, counting, folding with checked
-    arithmetic (D3), and selecting the first, last or middle (1-based
-    position ⌈n/2⌉) element compute over a sequence: they read nothing, log
-    nothing and keep no durable state. A selection from an empty sequence is
-    absent, branchable like an absent row. Bounded iteration runs over any
-    bound sequence, and its body may yield one value per pass, giving a new
-    sequence.
+    columns, distinct values, counting, folding with checked arithmetic
+    (D3), and selecting the first, last or middle (1-based position ⌈n/2⌉)
+    element compute over a sequence. Sorting is stable and distinct keeps
+    first occurrences, so ties and survivors keep the sequence's own order —
+    key order for a primary-key range or scan, index order for an index
+    range, pass order for a yielded sequence — and no order is invented.
+    These operations read nothing, log nothing and keep no durable state.
+    A selection from an empty sequence is absent, branchable like an absent
+    row. Bounded iteration runs over any bound sequence, and its body may
+    yield one value per pass, giving a new sequence.
   - *Values.* A conditional value evaluates its condition and only the
     chosen expression. Multiplication is checked like addition (D3). An
     exact decimal is an integer at a declared scale; multiplying adds the

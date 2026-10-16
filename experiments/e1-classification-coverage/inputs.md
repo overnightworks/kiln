@@ -1051,6 +1051,56 @@ denominator, so both L and U are always reported.
 a Pass is untouched. Realised in the `kiln-e1 verdict` command's
 application half in #2 slice 6.
 
+**Amendment 16.10.2026: which targets versus whether (Q1).** *Changes:*
+when a data-selected branch makes a function Unknown. It amends Q1.3 as
+the classifier applies it — `specs/kiln-e1.spec.md` KILN-E1-19 and
+KILN-E1-29, and the data-selection check of `crates/kiln-e1/src/footprint`
+— which today make any two paths reaching different targets Unknown. Ruled
+by the head on #64 before any TPC-C result exists: the only classified
+output refuses every unit (`data/README.md`). *Grounding:* Static
+classifies "the complete set of rows, ranges, or keys the function can
+touch, over every feasible branch": "can touch" is an upper bound, so a read
+that only decides whether part of that set is touched leaves the set a pure
+function of the arguments. One-hop counts a read "whose result determines a
+further access", and Q3.2 already excludes a read that only affects control
+flow "without changing any access target"; a read that decides which
+targets are touched does determine them, through no identifiable index or
+foreign key. Q1.3 and Q3.2 do not by themselves entail the inclusion rule
+below, hence an amendment.
+
+1. A read, or a comparison over a read result, whose outcome decides
+   **which** targets are accessed makes the function Unknown, naming it:
+   two feasible paths that agree on every argument decision (KILN-E1-28)
+   and on every other selector both test, differ only in its outcome, and
+   reach target sets neither of which contains the other.
+2. A selector that only decides **whether** an access happens is no
+   resolution and makes nothing Unknown: where those two paths' target sets
+   are ordered by inclusion, the footprint is the larger set, and each path
+   still classifies on its own (Q1.1; Q3.1's most demanding feasible
+   path).
+3. Preserved: the comparison is per pair of paths, never over the union of
+   an arm's targets, so independent selectors whose arms swap targets stay
+   Unknown; paths taking different argument arms are never compared; and
+   the larger set never erases a path's own navigation — a resolving read on
+   either path still counts under Q3 (Q1.4), and the selector's own read
+   belongs to the footprint like any read (Q1.3).
+
+*Example.* `read account(a); if balance < amount abort; update account(a);
+insert ledger(a, n)` reaches {account a} or {account a, ledger (a, n)}:
+ordered by inclusion, the balance read decides whether, and the function
+stays static, where the landed rule made it Unknown. `read flag(f); if
+flag.v = 1 update a(x) else update b(y)` reaches {flag f, a x} or {flag f,
+b y}: neither contains the other, so it is Unknown naming the comparison.
+(`read X; if absent abort; update X` reaches {X} on both paths and was
+static already.)
+
+*Bias:* upward: a function the landed rule made Unknown for a
+whether-selector can become Static or One-hop. Rule 3 bounds it, and the
+incomparability test keeps every which-selector Unknown. *TPC-C:*
+New-Order's invalid-item abort (`tpcc-fidelity.md` N14) decides whether
+the remaining lines are processed, not which targets they reach. The
+classifier follows in its own #61 slice.
+
 **Clarification 16.10.2026: keys, constraint accesses and the OLTP forms.**
 *Changes:* how Q1-Q4 apply to compound keys and to the forms of
 `docs/concept.md` §2.2 D8-D9, from the plan review of #61 (#64).
@@ -1070,12 +1120,17 @@ category. The fidelity expectations for TPC-C are owned by
    a point-read row is the operand that read used for it, and an equality
    prefix component of a primary-key prefix range's row is that prefix
    operand. Values merely observed equal are never aliases.
-2. *Lookups.* A read, update or delete key with read-derived components is
-   one resolution by read R only when a declared foreign key from R's table
-   maps its source columns, in order, onto the accessed table's whole key,
-   and each component projects the matching source column of R's row or
-   equals it by an alias. Matching only the read-derived components is not
-   enough; any other read-derived or computed lookup component is Unknown.
+2. *Lookups.* A read, update or delete key is judged by the first of these
+   that applies, and a key that qualifies at one step is never judged by a
+   later one: (a) every component static: static; (b) same-table
+   containment (rule 4): covered, no resolution; (c) a declared index
+   range's rows resolved into base rows of its table (rule 4, Q2.3): one
+   resolution by that index read; (d) whole foreign key: one resolution by
+   read R when a declared foreign key from R's table maps its source
+   columns, in order, onto the accessed table's whole key, and each
+   component projects the matching source column of R's row or equals it by
+   an alias; (e) otherwise Unknown — matching only the read-derived
+   components is not enough, and a computed component never matches.
    Example: ORDER read at `(w, d, o)`, then CUSTOMER at
    `(w, d, ORDER.O_C_ID)`, matches `(O_W_ID, O_D_ID, O_C_ID)` with the first
    two by alias: one resolution by the ORDER read. STOCK at
@@ -1083,29 +1138,68 @@ category. The fidelity expectations for TPC-C are owned by
    is not provably `OL_SUPPLY_W_ID`.
 3. *Counting.* Resolutions are distinct logical reads (Q3.1, Q3.3): any
    number of components, keys or constraint targets fed by one read add one.
-4. *Preserved.* Static argument and literal keys; a same-table key whose
-   every component projects the matching key column of a primary-key range
-   row stays covered by that range; index ranges and their resolution into
-   base rows (Q2.2-Q2.4); Q3.5's read-derived insert keys, now any
-   component; a primary-key range whose prefix or interval comes from a
-   read stays Unknown, even when its prefix equals a foreign key's target
-   key — reverse foreign-key navigation is not decided here.
-5. *Constraint accesses.* The accesses a declared constraint makes (D2, D5)
-   belong to the function's footprint. Their targets come from the written
-   values or the deleted key; a read whose result reaches one is a resolving
-   read through that declared constraint, counted under rule 3.
+4. *Preserved.* Static argument and literal keys; same-table containment:
+   a key of a primary-key range's table whose every component projects the
+   matching key column of a row that range bound — directly, or after
+   filtering, sorting or selection (rule 7) — stays covered by that range,
+   with no resolution; index ranges and their resolution into base rows
+   (Q2.2-Q2.4); Q3.5's read-derived insert keys, now any component; a
+   primary-key range whose prefix or interval comes from a read stays
+   Unknown, even when its prefix equals a foreign key's target key —
+   reverse foreign-key navigation is not decided here.
+5. *Constraint accesses.* The accesses a declared constraint's check makes
+   (D2, D5) belong to the function's footprint. Each target component takes
+   its provenance from the row the check judges (D8): a column the write
+   sets, an inserted key's components included, from the value written; a
+   retained key column from the write's key; a
+   retained non-key column from the last write of it at a provably equal
+   key earlier on the path, else from the stored row, read by the write's
+   own access to it.
+   (a) A foreign key's parent point read is static when every component is.
+   A read-derived component makes it one resolution through that declared
+   foreign key — the only relationship it uses — by the read the component
+   projects: an earlier read, or for a retained stored value the write's
+   own access; rule 3 counts distinct reads. A computed component is
+   Unknown, as in rule 2. Example: inserting ORDER-LINE with
+   `OL_O_ID = DISTRICT.D_NEXT_O_ID` resolves its ORDER check by the DISTRICT
+   read; updating only `a` of a foreign key `(a, b)` from an argument,
+   where `b` is a stored non-key column, is one resolution by the update's
+   access to that row.
+   (b) A unique-tuple lookup is static when every component is; a
+   read-derived or computed component makes it Unknown, since a unique
+   constraint is no index (Q2.1) and One-hop admits only an index or a
+   foreign key.
+   (c) A parent-deletion lookup takes the deleted key's provenance: a static
+   or range-contained key (rule 4) leaves it static; any other read-derived
+   or computed component is Unknown, the reverse navigation rule 4 leaves
+   undecided.
 6. *Appends.* An append is static: its one access is a fresh row of its
    table, which no key of any function can name (D9), so the logged append
    (table, no identity) lies inside the inferred footprint "a fresh row of
    T". The counter-chosen identity is never an argument-derived key; the
    append's constraint accesses follow rule 5.
 7. *Scans and sequences.* A scan is Unknown (Q2.5) even when restricted to
-   an argument prefix or bound, and so is every value derived from it.
+   an argument prefix or condition, and so is every value derived from it.
    Filtering, mapping, sorting, distinct, counting, folding and selection
-   over a sequence are computation (Q3.6): over an argument-bounded
-   primary-key or declared-index range they keep that read's provenance, so
-   a selected key is one resolution. A first- or last-limited read is
-   judged as the whole range or scan it consulted.
+   read nothing (Q3.6). Over a sequence bound by an argument-bounded
+   primary-key or declared-index range:
+   (a) Filtering, sorting, distinct rows and selecting an element keep each
+   surviving element the row that range bound, so an access through its
+   columns is judged by rule 2 as if taken from that row: same-table
+   containment stays covered with no resolution, index-to-base stays one
+   resolution by the index read, and a whole foreign key is one resolution
+   by the range read. Selection never turns a covered access into a
+   resolution, nor adds one to an index-to-base resolution. Q3.6's minimum
+   and maximum are selections — a sort, or the first or last row of the
+   range — and follow (a).
+   (b) Mapping and distinct values keep each value's provenance: a field
+   that projects a column stays that projection.
+   (c) Counting, folding, arithmetic and conditional values are computed
+   (rule 1) even when every input projects the same column of one read:
+   they inherit neither containment nor foreign-key identity, so a key
+   built from them is Unknown.
+   (d) A first- or last-limited read is judged as the whole range or scan
+   it consulted.
 8. *Faithfulness conditions* (Q4.1). Exact decimals are integers at a
    pinned scale per attribute, rounded only where and when the source
    rounds, and the lowering shows that no legal input overflows `i64` where
@@ -1136,14 +1230,29 @@ category. The fidelity expectations for TPC-C are owned by
     approximates one (a scan as a range, a guessed bound) to reach either
     outcome, and names the missing capability in every refusal.
 
-*Bias:* rules 2, 5 and 7 and the declared-only rules lower coverage; the
-aliases of rule 1, whole-key matching in rule 2 and rule 6 raise it,
-bounded by the read's own meaning and the containment audit. *TPC-C:* rule
-2 decides Delivery's ORDER and CUSTOMER keys and Stock-Level's STOCK keys;
-rule 4 leaves the read-bounded ORDER-LINE ranges of Order-Status, Delivery
-and Stock-Level Unknown, the conservative reading; rule 7 decides the
-by-name customer selection of Payment and Order-Status and Order-Status's
-last-order selection; rules 3 and 5 count New-Order's DISTRICT read once
-for every key and foreign-key target it feeds. Apart from that read and
-Payment's by-name customer (rule 7), no TPC-C write takes a foreign-key
-value from a read, so rule 5 moves no other TPC-C step.
+*Bias, per rule:* 1 raises coverage through its aliases, bounded by the
+read's own meaning (a value merely observed equal is no alias). 2 restates
+KILN-E1-21/-22 for one-column keys; for composite keys, whole-key matching
+admits a resolution the landed classifier has no rule for (up), and
+refusing a partial match or a computed component lowers it. 3 restates
+Q3.1 and Q3.3. 4 preserves the landed rules; keeping reverse foreign-key
+navigation Unknown lowers coverage. 5 lowers it in every part: (a) adds
+accesses the landed classifier leaves out, so a function writing a foreign
+key from a read, or partially, is at least One-hop, admitted only through
+the declared foreign key the frozen text names; (b) and (c) keep
+unique-tuple and reverse lookups Unknown. 6 raises it, bounded by the
+containment audit of the logged append. 7: (a), (b) and (d) only carry
+rules 2 and 4 through computation; scans and (c) lower it. 8 and 9 lower it
+(a lowering that cannot meet them refuses; host work hides no resolution).
+10 moves no category. *TPC-C:* rule 2 decides Delivery's ORDER and CUSTOMER
+keys and Stock-Level's STOCK keys; rule 4 leaves the read-bounded
+ORDER-LINE ranges of Order-Status, Delivery and Stock-Level Unknown, the
+conservative reading; rule 7 decides the by-name customer selection of
+Payment and Order-Status and Order-Status's last-order selection (all
+scans, `tpcc-fidelity.md` E4) and Delivery's first NEW-ORDER row (a
+limited range whose delete stays contained); rules 3 and 5(a) count
+New-Order's DISTRICT read once for every key and foreign-key target it
+feeds. No TPC-C update writes a foreign-key column, no TPC-C table has a
+unique constraint besides its key, and no table references NEW-ORDER, the
+only table TPC-C deletes from, so apart from that read and Payment's
+by-name HISTORY append (rule 7) rule 5 moves no TPC-C step.
