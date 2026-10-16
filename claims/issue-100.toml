@@ -1,0 +1,7 @@
+claim_id = "71b0be29c5e14e7284754c9833169a74"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "23c825cf360a1ffd2312abbfd1d860547fe04496"
+branch = "claude/issue-100-e3-part-b-clarifications"
+scope = ["experiments/e3-summary-synthesis/grammar.md", "experiments/e3-summary-synthesis/protocol.md"]
+opened_commit = "8bc6940f0d97d43ea004b25c2b18a046a5a6b499"
