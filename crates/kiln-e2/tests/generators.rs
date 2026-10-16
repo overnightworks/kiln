@@ -554,9 +554,22 @@ mod kiln_e2_26 {
 
     // The literals below were produced by the builder's independent Python
     // reference of the frozen draws and outcome tables, not by the Rust code.
+    // Together the three families' rows cover every abort reason the
+    // generators can reach: quota invalid_quantity, quota_exhausted and
+    // quota_full; inventory invalid_quantity and invalid_threshold; accounts
+    // invalid_amount, insufficient_funds, account_frozen, not_frozen,
+    // already_frozen and account_not_found. same_account is unreachable
+    // because the generator never draws equal transfer endpoints.
     #[test]
     fn small_quota_batches_replay_to_the_reference_outcomes_in_order() {
-        let rows: [(u32, u32, i64, i64, Expected); 2] = [
+        let rows: [(u32, u32, i64, i64, Expected); 3] = [
+            (
+                4,
+                18756,
+                985,
+                986,
+                &[Ok(15), Err("invalid_quantity"), Err("quota_full"), Ok(14)],
+            ),
             (
                 16,
                 3,
@@ -618,7 +631,14 @@ mod kiln_e2_26 {
 
     #[test]
     fn small_inventory_batches_replay_to_the_reference_outcomes_in_order() {
-        let rows: [(u32, u32, i64, i64, Expected); 2] = [
+        let rows: [(u32, u32, i64, i64, Expected); 3] = [
+            (
+                4,
+                451,
+                15,
+                91,
+                &[Err("invalid_threshold"), Ok(15), Ok(10), Ok(99)],
+            ),
             (
                 16,
                 3,
@@ -681,7 +701,19 @@ mod kiln_e2_26 {
     #[test]
     fn small_account_batches_replay_to_the_reference_outcomes_in_order() {
         type Row = (u32, u32, Snapshot, Snapshot, Expected);
-        let rows: [Row; 2] = [
+        let rows: [Row; 3] = [
+            (
+                4,
+                16220,
+                ([24249, 30753, 877, 30818], [0, 0, 1, 0]),
+                ([24249, 30753, 877, 30818], [0, 0, 1, 0]),
+                &[
+                    Err("account_not_found"),
+                    Err("already_frozen"),
+                    Err("account_frozen"),
+                    Err("not_frozen"),
+                ],
+            ),
             (
                 16,
                 3,
