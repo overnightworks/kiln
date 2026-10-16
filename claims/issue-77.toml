@@ -1,7 +1,0 @@
-claim_id = "0333721f4d0f48cd927a31ba760b0dfb"
-agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
-role = "builder"
-base = "1671bd06f98ce0bd676401932a2ac90de180a7e0"
-branch = "claude/issue-77-e3-freeze-families"
-scope = ["experiments/e3-summary-synthesis"]
-opened_commit = "86eb0b1451df527bf6574683ab41317f0d1b7b1c"
