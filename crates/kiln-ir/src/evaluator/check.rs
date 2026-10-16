@@ -18,7 +18,7 @@ pub(super) fn first_violation(
 ) -> Option<AbortReason> {
     for constraint in &schema.check_constraints {
         let table = constrained_table(schema, &constraint.table);
-        for key in keys_written_on(access_log, table, &constraint.column) {
+        for key in keys_written_on(access_log, table, std::slice::from_ref(&constraint.column)) {
             let value = final_store
                 .row(&table.name, &key)
                 .and_then(|row| table.column_value(&key, row, &constraint.column));

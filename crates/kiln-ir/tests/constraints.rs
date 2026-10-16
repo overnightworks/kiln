@@ -24,7 +24,7 @@ fn literal(value: Value) -> Expr {
 fn accounts_email_unique() -> UniqueConstraint {
     UniqueConstraint {
         table: table("accounts"),
-        column: column("email"),
+        columns: vec![column("email")],
     }
 }
 
@@ -176,7 +176,7 @@ mod kiln_ir_39 {
     fn unique_constraint_must_name_a_declared_table_and_column() {
         let declared = accounts_email_unique();
         let undeclared_column = UniqueConstraint {
-            column: column("nickname"),
+            columns: vec![column("nickname")],
             ..declared.clone()
         };
         let undeclared_table = UniqueConstraint {
@@ -249,7 +249,7 @@ mod kiln_ir_41 {
                 Outcome::Aborted {
                     reason: AbortReason::UniqueViolation {
                         constraint: accounts_email_unique(),
-                        value: text("a@x"),
+                        tuple: vec![text("a@x")],
                     }
                 }
             );

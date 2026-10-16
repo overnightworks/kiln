@@ -51,6 +51,14 @@ pub const ARCHIVE: &str = "lines_archive";
 /// [`LINE_KEY`]: a row of it names a line without being one.
 pub const LINE_REFS: &str = "line_refs";
 
+/// A table keyed by [`KEY_COLUMN`] whose rows name a line of [`LINES`] by a
+/// declared foreign key over the columns of [`LINE_KEY`].
+pub const SHIPMENTS: &str = "shipments";
+
+/// A table keyed by `(w_id, item_id)`, which a line names by its
+/// `(customer_id, item_id)` through a declared foreign key.
+pub const INVENTORY: &str = "inventory";
+
 /// The key of [`LINES`] in declared order.
 pub const LINE_KEY: [&str; 3] = ["w_id", "d_id", "o_id"];
 
@@ -248,9 +256,12 @@ fn keyed_table(name: &str, key: &[&str], other_columns: &[&str]) -> Table {
 /// [`KEY_COLUMN`] but [`LINES`] and [`ARCHIVE`], which have the three-column
 /// [`LINE_KEY`] and are indexed by item.
 pub fn schema() -> Schema {
-    let foreign_key = |from: &str, column: &str, to: &str| ForeignKey {
+    let foreign_key = |from: &str, columns: &[&str], to: &str| ForeignKey {
         table: table(from),
-        column: ColumnName(column.to_owned()),
+        columns: columns
+            .iter()
+            .map(|column| ColumnName((*column).to_owned()))
+            .collect(),
         references: table(to),
     };
     let index = |name: &str, on: &str, columns: &[&str]| Index {
@@ -282,12 +293,17 @@ pub fn schema() -> Schema {
             single_key(LINE_REFS, &LINE_KEY),
             keyed_table(LINES, &LINE_KEY, &["customer_id", "item_id"]),
             keyed_table(ARCHIVE, &LINE_KEY, &["item_id"]),
+            keyed_table(SHIPMENTS, &[KEY_COLUMN], &LINE_KEY),
+            keyed_table(INVENTORY, &["w_id", "item_id"], &[]),
         ],
         foreign_keys: vec![
-            foreign_key("orders", "customer_id", "customers"),
-            foreign_key("orders", "product_id", "products"),
-            foreign_key("customers", "region_id", "regions"),
-            foreign_key(LINES, "customer_id", "customers"),
+            foreign_key("orders", &["customer_id"], "customers"),
+            foreign_key("orders", &["product_id"], "products"),
+            foreign_key("customers", &["region_id"], "regions"),
+            foreign_key(LINES, &["customer_id"], "customers"),
+            foreign_key(LINES, &["w_id", "d_id", "customer_id"], ARCHIVE),
+            foreign_key(LINES, &["customer_id", "item_id"], INVENTORY),
+            foreign_key(SHIPMENTS, &LINE_KEY, LINES),
         ],
         indexes: vec![
             index("orders_by_customer", "orders", &["customer_id"]),

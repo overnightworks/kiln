@@ -46,14 +46,14 @@ mod kiln_ir_83 {
     fn dst_unique() -> UniqueConstraint {
         UniqueConstraint {
             table: table("edges"),
-            column: column("dst"),
+            columns: vec![column("dst")],
         }
     }
 
     fn src_references_nodes() -> ForeignKey {
         ForeignKey {
             table: table("edges"),
-            column: column("src"),
+            columns: vec![column("src")],
             references: table("nodes"),
         }
     }
@@ -103,14 +103,14 @@ mod kiln_ir_83 {
             aborted_reason(&duplicate),
             &AbortReason::UniqueViolation {
                 constraint: dst_unique(),
-                value: integer(5)
+                tuple: vec![integer(5)],
             }
         );
         assert_eq!(
             aborted_reason(&dangling),
             &AbortReason::DanglingReference {
                 foreign_key: src_references_nodes(),
-                value: integer(9)
+                referenced: Key(vec![integer(9)]),
             }
         );
         assert_eq!(
@@ -176,7 +176,7 @@ mod kiln_ir_45 {
         Schema {
             foreign_keys: vec![ForeignKey {
                 table: table("lines"),
-                column: column("qty"),
+                columns: vec![column("qty")],
                 references: table(parent),
             }],
             ..world_schema()
@@ -206,7 +206,7 @@ mod kiln_ir_57 {
     fn a_foreign_key_column_must_have_the_kind_of_the_referenced_key_column() {
         let foreign_key = |from: &str, to: &str| ForeignKey {
             table: table("labels"),
-            column: column(from),
+            columns: vec![column(from)],
             references: table(to),
         };
         let schema_with = |foreign_key: &ForeignKey| Schema {
