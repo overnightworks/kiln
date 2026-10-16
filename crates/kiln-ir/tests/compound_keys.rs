@@ -83,7 +83,7 @@ mod kiln_ir_76 {
         let schema = Schema {
             unique_constraints: vec![UniqueConstraint {
                 table: table("events"),
-                column: column("what"),
+                columns: vec![column("what")],
             }],
             ..world_schema()
         };

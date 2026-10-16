@@ -48,7 +48,7 @@ impl fmt::Display for LoweringRefusal {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "refused in full: the IR cannot express {} steps",
+            "refused in full: this lowering is blocked at {} steps that are not redone onto the IR yet or that the IR cannot express yet",
             self.blockers.len()
         )?;
         for blocker in &self.blockers {

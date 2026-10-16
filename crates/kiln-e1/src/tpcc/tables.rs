@@ -327,7 +327,7 @@ impl TpccTable {
         self.spec().name
     }
 
-    /// The foreign keys of several columns, which the schema cannot declare.
+    /// The foreign keys of several columns.
     pub fn composite_foreign_keys(self) -> Vec<String> {
         self.spec()
             .foreign_keys
@@ -348,8 +348,8 @@ impl TpccTable {
 }
 
 /// The schema of Clause 1.3.1 as far as `kiln-ir` states it: every table
-/// declares its primary key (HISTORY has none and is keyless), and a foreign
-/// key of several columns has no declaration yet.
+/// declares its primary key (HISTORY has none and is keyless) and every
+/// foreign key. The clause declares no unique constraint besides the keys.
 pub fn tpcc_schema() -> Schema {
     Schema {
         tables: TpccTable::ALL.map(table_of).to_vec(),
@@ -394,13 +394,14 @@ fn foreign_keys_of(table: TpccTable) -> Vec<ForeignKey> {
         .spec()
         .foreign_keys
         .iter()
-        .filter_map(|foreign_key| match foreign_key.columns {
-            [column] => Some(ForeignKey {
-                table: table.ir_name(),
-                column: ColumnName((*column).to_owned()),
-                references: foreign_key.references.ir_name(),
-            }),
-            _ => None,
+        .map(|foreign_key| ForeignKey {
+            table: table.ir_name(),
+            columns: foreign_key
+                .columns
+                .iter()
+                .map(|column| ColumnName((*column).to_owned()))
+                .collect(),
+            references: foreign_key.references.ir_name(),
         })
         .collect()
 }

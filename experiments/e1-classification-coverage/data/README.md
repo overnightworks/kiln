@@ -1,9 +1,12 @@
 # TPC-C classified units
 
-**Unaudited refusal scaffolding.** These files reflect the current limits of the IR
-(each transaction is refused in full) and are unsuitable for measurement. Do not pass
-them to `kiln-e1 verdict`: a share computed from them is not a result. They are to be
-regenerated after the IR extensions and the audits of #2 slice 6.
+**Unaudited refusal scaffolding, historical output.** These files were written by the
+commit `d1b727c902e55e62c2aef29d4a67dbf7057cb78f` and record the refusal reasons of that time
+(each transaction is refused in full). They are not current: the IR has since gained
+compound keys and composite foreign keys and unique constraints, and the live `kiln-e1 tpcc`
+output now differs. They are unsuitable for measurement. Do not pass them to
+`kiln-e1 verdict`: a share computed from them is not a result. The re-lowering slice of #2
+regenerates them after the IR extensions of #61 and the audits of #2 slice 6.
 
 Written by `kiln-e1 tpcc` from the hand-lowering in `crates/kiln-e1/src/tpcc`, under
 the rules of `inputs.md` §5. Each line is one classified unit: its category (or

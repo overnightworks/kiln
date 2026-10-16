@@ -128,14 +128,8 @@ pub fn operand_of(
         }
         Expr::Projection { slot, column } => {
             let read = facts.read_of(*slot, at)?;
-            match point_read_key_operand(schema, facts, &read, column) {
-                Some(used) => used.clone(),
-                None => Operand::Column {
-                    row: facts.row_origin_of(*slot, at)?,
-                    read,
-                    column: column.clone(),
-                },
-            }
+            let row = facts.row_origin_of(*slot, at)?;
+            column_operand(schema, facts, read, row, column)
         }
         Expr::Arithmetic(operator, left, right) => Operand::Arithmetic(
             *operator,
@@ -143,6 +137,26 @@ pub fn operand_of(
             Box::new(operand_of(schema, facts, right, at)?),
         ),
     })
+}
+
+/// `column` of the row `row`, which `read` produced: for a key column of a
+/// point-read row, the operand the read used for it (`inputs.md` §5,
+/// Clarification rule 1).
+pub fn column_operand(
+    schema: &Schema,
+    facts: &PathFacts,
+    read: ReadRef,
+    row: RowOrigin,
+    column: &ColumnName,
+) -> Operand {
+    match point_read_key_operand(schema, facts, &read, column) {
+        Some(used) => used.clone(),
+        None => Operand::Column {
+            read,
+            row,
+            column: column.clone(),
+        },
+    }
 }
 
 /// What a point read used for its key column `column`, if `read` is one.

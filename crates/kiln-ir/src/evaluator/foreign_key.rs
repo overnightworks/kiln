@@ -21,9 +21,10 @@ pub(super) fn first_violation(
     })
 }
 
-/// Each child row written on the key's column logs one point read on the
-/// referenced key, touching no column; a row deleted by the end, or lacking
-/// the column, names nothing.
+/// Each child row written on any of the key's columns logs one point read on
+/// the referenced key formed from its final values of all of them, touching no
+/// column; a row deleted by the end, or lacking any of the columns, names
+/// nothing.
 fn dangling_reference(
     schema: &Schema,
     foreign_key: &ForeignKey,
@@ -31,15 +32,15 @@ fn dangling_reference(
     access_log: &mut Vec<AccessLogEntry>,
 ) -> Option<AbortReason> {
     let child = constrained_table(schema, &foreign_key.table);
-    let written_keys = keys_written_on(access_log, child, &foreign_key.column);
+    let written_keys = keys_written_on(access_log, child, &foreign_key.columns);
     for key in written_keys {
         let Some(referenced) = final_store
             .row(&child.name, &key)
-            .and_then(|row| child.column_value(&key, row, &foreign_key.column))
+            .and_then(|row| child.tuple_of(&key, row, &foreign_key.columns))
         else {
             continue;
         };
-        let referenced_key = Key(vec![referenced.clone()]);
+        let referenced_key = Key(referenced);
         log_point_read(
             access_log,
             &foreign_key.references,
@@ -52,7 +53,7 @@ fn dangling_reference(
         {
             return Some(AbortReason::DanglingReference {
                 foreign_key: foreign_key.clone(),
-                value: referenced.clone(),
+                referenced: referenced_key,
             });
         }
     }
@@ -78,12 +79,9 @@ fn referenced_parent_deleted(
             &child.name,
             ConstraintRef::ForeignKey(foreign_key.clone()),
             key.0.clone(),
-            AccessedColumns::Named(vec![foreign_key.column.clone()]),
+            AccessedColumns::Named(foreign_key.columns.clone()),
         );
-        let [referenced] = key.0.as_slice() else {
-            panic!("a validated foreign key references a one-column key");
-        };
-        if final_store.any_row_holds(child, &foreign_key.column, referenced) {
+        if final_store.any_row_holds(child, &foreign_key.columns, &key.0) {
             return Some(AbortReason::ReferencedParentDeleted {
                 foreign_key: foreign_key.clone(),
                 key,

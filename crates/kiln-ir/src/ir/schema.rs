@@ -88,22 +88,24 @@ pub enum KeyComponentFault {
     OutsideWidth,
 }
 
-/// A unique constraint (D1): no two rows of `table` may hold the same value
-/// in `column` in a transaction's final state (D2).
+/// A unique constraint (D1, D8): no two rows of `table` may hold the same
+/// tuple of values in `columns` in a transaction's final state (D2). A row
+/// lacking any of the columns is bound by nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UniqueConstraint {
     pub table: TableName,
-    pub column: ColumnName,
+    pub columns: Vec<ColumnName>,
 }
 
-/// A foreign key (D1): every row of `table` that holds a value in `column`
-/// must, in a transaction's final state, name the key of a row of
-/// `references`, and a row of `references` may not be deleted while such a
-/// row still names its key (D2).
+/// A foreign key (D1, D8): every row of `table` that holds a value in every
+/// one of `columns` must, in a transaction's final state, name the key of a
+/// row of `references` by that tuple, and a row of `references` may not be
+/// deleted while such a row still names its key (D2). The columns map one to
+/// one, in order, onto the referenced table's whole primary key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForeignKey {
     pub table: TableName,
-    pub column: ColumnName,
+    pub columns: Vec<ColumnName>,
     pub references: TableName,
 }
 
@@ -230,6 +232,15 @@ impl Table {
             None => row.columns.get(column),
         }
     }
+
+    /// The values the row stored under `key` holds in `columns`, in order, or
+    /// `None` if it lacks any of them.
+    pub fn tuple_of(&self, key: &Key, row: &Row, columns: &[ColumnName]) -> Option<Vec<Value>> {
+        columns
+            .iter()
+            .map(|column| self.column_value(key, row, column).cloned())
+            .collect()
+    }
 }
 
 /// The declared tables of a [`Program`] (D1).
@@ -325,33 +336,52 @@ impl Schema {
         Ok(())
     }
 
+    /// A unique constraint names at least one column, all declared (D8).
     fn validate_unique_constraints(&self) -> Result<(), SchemaError> {
         for constraint in &self.unique_constraints {
-            if self.column(&constraint.table, &constraint.column).is_none() {
+            if constraint.columns.is_empty() {
+                return Err(SchemaError::UniqueWithoutColumns(constraint.clone()));
+            }
+            if self
+                .columns_of(&constraint.table, &constraint.columns)
+                .is_none()
+            {
                 return Err(SchemaError::UnknownUniqueTarget(constraint.clone()));
             }
         }
         Ok(())
     }
 
-    /// A foreign key names declared tables and columns, and its column has
-    /// the kind of the referenced table's one key column (D8).
+    /// A foreign key names declared tables and columns, and its columns match
+    /// the referenced table's primary key in number and, position by position,
+    /// in kind (D8).
     fn validate_foreign_keys(&self) -> Result<(), SchemaError> {
         for foreign_key in &self.foreign_keys {
-            let child = self.column(&foreign_key.table, &foreign_key.column);
+            let child = self.columns_of(&foreign_key.table, &foreign_key.columns);
             let parent = self.table(&foreign_key.references);
             let (Some(child), Some(parent)) = (child, parent) else {
                 return Err(SchemaError::UnknownForeignKeyTarget(foreign_key.clone()));
             };
-            let [parent_key] = parent.key_columns() else {
+            let parent_key = parent.key_columns();
+            if child.is_empty() || child.len() != parent_key.len() {
                 return Err(SchemaError::ForeignKeyKeyArityMismatch(foreign_key.clone()));
-            };
-            let parent_key = parent.column(parent_key).expect("validated key column");
-            if !child.kind.is_same_kind_as(&parent_key.kind) {
+            }
+            let kinds_match = child.iter().zip(parent_key).all(|(child, parent_key)| {
+                let parent_key = parent.column(parent_key).expect("validated key column");
+                child.kind.is_same_kind_as(&parent_key.kind)
+            });
+            if !kinds_match {
                 return Err(SchemaError::ForeignKeyTypeMismatch(foreign_key.clone()));
             }
         }
         Ok(())
+    }
+
+    /// The declared `columns` of `table`, in order, or `None` if the table or
+    /// any of them is not declared.
+    fn columns_of(&self, table: &TableName, columns: &[ColumnName]) -> Option<Vec<&Column>> {
+        let table = self.table(table)?;
+        columns.iter().map(|column| table.column(column)).collect()
     }
 
     fn validate_check_constraints(&self) -> Result<(), SchemaError> {
@@ -442,15 +472,19 @@ pub enum SchemaError {
     },
     /// A unique constraint names a table or column the schema does not declare.
     UnknownUniqueTarget(UniqueConstraint),
+    /// A unique constraint names no column, so it would bind every row alike.
+    UniqueWithoutColumns(UniqueConstraint),
     /// A foreign key names a table or column, or references a table, the
     /// schema does not declare.
     UnknownForeignKeyTarget(ForeignKey),
     /// A check constraint names a table or column the schema does not declare.
     UnknownCheckTarget(CheckConstraint),
-    /// A foreign key's column is of another kind (integer or text) than the
-    /// referenced table's key column, so no value of it could name a parent.
+    /// One of a foreign key's columns is of another kind (integer or text)
+    /// than the referenced table's key column at its position, so no value of
+    /// it could name a parent.
     ForeignKeyTypeMismatch(ForeignKey),
-    /// A foreign key references a table whose key is not exactly one column.
+    /// A foreign key names no column, or as many as the referenced table's
+    /// primary key has components in number other than that.
     ForeignKeyKeyArityMismatch(ForeignKey),
     /// A table declares an empty list of key columns; a table without a key
     /// declares itself keyless.
