@@ -1,0 +1,7 @@
+claim_id = "bebab80409c44f369e0cfb1ba383ecb5"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "23c825cf360a1ffd2312abbfd1d860547fe04496"
+branch = "claude/issue-99-e3-kiln-e3-quota-validation"
+scope = ["Cargo.lock", "crates/kiln-e3", "specs/kiln-e3.spec.md"]
+opened_commit = "ce23a6623374dc483a602a935d1bfe726e1ab0dd"
