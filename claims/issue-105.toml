@@ -1,0 +1,8 @@
+claim_id = "90c7b00a7a604f4189e436729d457ae6"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "d5dcbae5cc0b209a93899acf2ce433aa2f42c9db"
+branch = "claude/issue-105-e4-cpuset-isolation"
+scope = ["experiments/e4-sqlite-cost-anatomy"]
+opened_commit = "1fe5cf33f8b64e8a8899a59e8654671c7a0b3736"
+whole_reason = "one experiment's protocol amendment, night script and its test, all under its own directory"
