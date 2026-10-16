@@ -17,8 +17,8 @@ use kiln_ir::{
 };
 use proptest::prelude::*;
 use support::{
-    call_under_test, column, columns_of_values, committed_response, literal_key, one_part,
-    parameter, run_ok, single_function_program, table, text_parameter, typed_parameter,
+    call_under_test, column, columns_of_values, committed_response, literal_interval, literal_key,
+    one_part, parameter, run_ok, single_function_program, table, text_parameter, typed_parameter,
 };
 
 fn branch_on_slot_present(slot: Slot) -> Terminal {
@@ -51,8 +51,8 @@ fn logged_keys(execution: &Execution, table_name: &str, kind: AccessKind) -> Vec
 fn range_read(table_name: &str, start: i64, end: i64, bound: i64, into: Slot) -> Effect {
     Effect::ReadRange {
         table: table(table_name),
-        start: literal_key(start),
-        end: literal_key(end),
+        prefix: vec![],
+        interval: literal_interval(start, end),
         bound: Expr::Literal(Value::Integer(bound)),
         into,
     }
@@ -157,8 +157,8 @@ mod kiln_ir_11 {
                 vec![],
                 vec![Effect::ReadRange {
                     table: table("t"),
-                    start: literal_key(i64::MIN),
-                    end: literal_key(i64::MAX),
+                    prefix: vec![],
+                    interval: literal_interval(i64::MIN, i64::MAX),
                     bound: Expr::Literal(Value::Integer(1)),
                     into: Slot(0),
                 }],
@@ -200,8 +200,8 @@ mod kiln_ir_12 {
                     },
                     Effect::ReadRange {
                         table: table("matched"),
-                        start: literal_key(0),
-                        end: literal_key(matched_count - 1),
+                        prefix: vec![],
+                        interval: literal_interval(0, matched_count - 1),
                         bound: Expr::Literal(Value::Integer(bound)),
                         into: Slot(0),
                     },
@@ -266,8 +266,8 @@ mod kiln_ir_36 {
                 vec![],
                 vec![Effect::ReadRange {
                     table: table("t"),
-                    start: literal_key(0),
-                    end: literal_key(10),
+                    prefix: vec![],
+                    interval: literal_interval(0, 10),
                     bound: Expr::Literal(Value::Integer(10)),
                     into: Slot(0),
                 }],
@@ -283,8 +283,8 @@ mod kiln_ir_36 {
             assert_eq!(
                 entry.target,
                 AccessTarget::Range {
-                    start: one_part(0),
-                    end: one_part(10),
+                    prefix: vec![],
+                    interval: Some((Value::Integer(0), Value::Integer(10))),
                 }
             );
             assert_eq!(entry.columns, AccessedColumns::EntireRow);
@@ -442,8 +442,8 @@ mod kiln_ir_16 {
             vec![],
             vec![Effect::ReadRange {
                 table: table("t"),
-                start: literal_key(0),
-                end: literal_key(10),
+                prefix: vec![],
+                interval: literal_interval(0, 10),
                 bound: Expr::Literal(Value::Text("not a number".to_owned())),
                 into: Slot(0),
             }],
@@ -476,8 +476,8 @@ mod kiln_ir_15 {
             vec![],
             vec![Effect::ReadRange {
                 table: table("t"),
-                start: literal_key(0),
-                end: literal_key(10),
+                prefix: vec![],
+                interval: literal_interval(0, 10),
                 bound: Expr::Literal(Value::Integer(10)),
                 into: Slot(0),
             }],
@@ -562,8 +562,8 @@ mod kiln_ir_14 {
             vec![
                 Effect::ReadRange {
                     table: table("orders"),
-                    start: literal_key(1),
-                    end: literal_key(3),
+                    prefix: vec![],
+                    interval: literal_interval(1, 3),
                     bound: Expr::Literal(Value::Integer(10)),
                     into: Slot(0),
                 },

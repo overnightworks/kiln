@@ -207,20 +207,20 @@ mod kiln_ir_09 {
     use super::*;
 
     #[test]
-    fn a_range_between_compound_keys_is_lexicographic_not_componentwise() {
+    fn a_range_returns_its_matches_in_key_order_across_components() {
         let all = [
-            (1, 2, 4, 0),
+            (1, 3, 1, 0),
             (1, 9, 0, 0),
             (2, 0, 0, 0),
             (1, 2, 5, 0),
-            (1, 3, 1, 0),
+            (1, 2, 4, 0),
             (2, 0, 1, 0),
             (0, 9, 9, 0),
         ];
         let store = lines_store(&all);
         let execution = run_world(
             vec![
-                read_lines_range((1, 2, 5), (2, 0, 0), Slot(0)),
+                read_lines_range(&[1], Some((2, 3)), Slot(0)),
                 copy_keys_into_seen(Slot(0)),
             ],
             &store,
@@ -228,12 +228,7 @@ mod kiln_ir_09 {
 
         assert_eq!(
             keys_in_seen(&execution),
-            vec![
-                line_key(1, 2, 5),
-                line_key(1, 3, 1),
-                line_key(1, 9, 0),
-                line_key(2, 0, 0)
-            ]
+            vec![line_key(1, 2, 4), line_key(1, 2, 5), line_key(1, 3, 1)]
         );
     }
 }
@@ -247,7 +242,7 @@ mod kiln_ir_35 {
         let execution = run_world(
             vec![
                 read_line(1, 2, 3, Slot(0)),
-                read_lines_range((1, 2, 3), (1, 2, 9), Slot(1)),
+                read_lines_range(&[1, 2], Some((3, 9)), Slot(1)),
                 insert_line(5, 6, 7, 1),
             ],
             &store,
@@ -275,8 +270,8 @@ mod kiln_ir_35 {
                 (
                     AccessKind::RangeRead,
                     AccessTarget::Range {
-                        start: line_key(1, 2, 3),
-                        end: line_key(1, 2, 9)
+                        prefix: vec![integer(1), integer(2)],
+                        interval: Some((integer(3), integer(9)))
                     },
                     AccessedColumns::EntireRow
                 ),
@@ -329,7 +324,7 @@ mod kiln_ir_78 {
         let reads = [
             (
                 "primary range",
-                read_lines_range((0, 0, 0), (9, 9, 9), Slot(0)),
+                read_lines_range(&[], Some((0, 9)), Slot(0)),
                 vec![(1, 1, 1), (1, 2, 2), (2, 2, 1), (3, 1, 1)],
             ),
             (

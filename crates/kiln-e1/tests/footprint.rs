@@ -20,6 +20,9 @@ mod iterations;
 #[path = "footprint/keys.rs"]
 mod keys;
 
+#[path = "footprint/prefix_ranges.rs"]
+mod prefix_ranges;
+
 #[path = "footprint/values.rs"]
 mod values;
 

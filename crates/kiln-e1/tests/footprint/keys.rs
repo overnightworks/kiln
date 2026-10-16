@@ -137,13 +137,8 @@ mod kiln_e1_22 {
 mod kiln_e1_37 {
     use super::*;
 
-    fn lines_of_one_order() -> Effect {
-        read_range_at(
-            LINES,
-            line_at("w", "d", literal(0)),
-            line_at("w", "d", literal(9)),
-            0,
-        )
+    fn lines_of_one_warehouse() -> Effect {
+        read_prefix_range(LINES, vec![param("w")], Some((literal(0), literal(9))), 0)
     }
 
     fn lines_of_one_item() -> Effect {
@@ -162,7 +157,7 @@ mod kiln_e1_37 {
 
     #[test]
     fn a_key_projected_whole_from_a_row_of_a_range_over_its_table_is_covered_with_no_resolution() {
-        let body = body_of(lines_of_one_order(), line_key_of(1));
+        let body = body_of(lines_of_one_warehouse(), line_key_of(1));
         assert_eq!(category_of(body.clone()), STATIC);
         assert_eq!(
             evidence_of(body),
@@ -194,24 +189,20 @@ mod kiln_e1_37 {
     #[test]
     fn a_key_not_projected_whole_in_order_from_one_row_is_unknown_naming_the_table() {
         let row = |column: &str| column_of(1, column);
-        let other_range = read_range_at(
-            LINES,
-            line_at("w", "d", literal(0)),
-            line_at("w", "d", literal(9)),
-            2,
-        );
+        let other_range =
+            read_prefix_range(LINES, vec![param("w")], Some((literal(0), literal(9))), 2);
         let swapped = vec![row("d_id"), row("w_id"), row("o_id")];
-        let one_static = vec![param("w"), row("d_id"), row("o_id")];
+        let one_static = vec![row("w_id"), param("d"), row("o_id")];
         let two_rows = vec![row("w_id"), row("d_id"), column_of(3, "o_id")];
         let nested = |key| {
             returns(vec![
-                lines_of_one_order(),
+                lines_of_one_warehouse(),
                 other_range.clone(),
                 iterate(0, 1, vec![iterate(2, 3, vec![update_at(LINES, key, &[])])]),
             ])
         };
         for key in [swapped, one_static] {
-            assert_unknown(body_of(lines_of_one_order(), key), key_not_identified());
+            assert_unknown(body_of(lines_of_one_warehouse(), key), key_not_identified());
         }
         assert_unknown(nested(two_rows), key_not_identified());
     }
@@ -220,10 +211,10 @@ mod kiln_e1_37 {
     fn a_key_mixing_two_iteration_rows_of_the_same_range_is_unknown_for_primary_and_index_ranges() {
         let mixed_key = vec![
             column_of(1, "w_id"),
-            column_of(2, "d_id"),
+            column_of(1, "d_id"),
             column_of(2, "o_id"),
         ];
-        for range in [lines_of_one_order(), lines_of_one_item()] {
+        for range in [lines_of_one_warehouse(), lines_of_one_item()] {
             let body = returns(vec![
                 range,
                 iterate(
@@ -244,11 +235,11 @@ mod kiln_e1_37 {
     fn a_key_mixing_the_rows_of_two_iterations_that_reuse_one_row_slot_is_unknown() {
         let outer_read_into_slot_3 = read_at(LINES, line_key_of(1), 3);
         let mixed_key = vec![
-            column_of(3, "w_id"),
-            column_of(1, "d_id"),
+            column_of(1, "w_id"),
+            column_of(3, "d_id"),
             column_of(1, "o_id"),
         ];
-        for range in [lines_of_one_order(), lines_of_one_item()] {
+        for range in [lines_of_one_warehouse(), lines_of_one_item()] {
             let body = returns(vec![
                 range,
                 iterate(
@@ -267,7 +258,7 @@ mod kiln_e1_37 {
     #[test]
     fn a_row_slot_bound_again_by_a_later_read_names_that_read_s_row_not_the_range_s() {
         let body = returns(vec![
-            lines_of_one_order(),
+            lines_of_one_warehouse(),
             iterate(0, 1, vec![]),
             read(LINE_REFS, param("id"), 1),
             read_at(LINES, line_key_of(1), 2),
@@ -285,7 +276,7 @@ mod kiln_e1_37 {
             )])
         };
         let expected = [
-            (lines_of_one_order(), STATIC),
+            (lines_of_one_warehouse(), STATIC),
             (lines_of_one_item(), ONE_HOP),
         ];
         for (range, category) in expected {
@@ -302,10 +293,10 @@ mod kiln_e1_37 {
     #[test]
     fn a_key_projected_from_a_range_over_another_table_with_the_same_key_columns_is_unknown() {
         let archive_ranges = [
-            read_range_at(
+            read_prefix_range(
                 ARCHIVE,
-                line_at("w", "d", literal(0)),
-                line_at("w", "d", literal(9)),
+                vec![param("w"), param("d")],
+                Some((literal(0), literal(9))),
                 0,
             ),
             read_index(
@@ -347,20 +338,15 @@ mod kiln_e1_19 {
 
     const SELECTOR: &str = "f/body/effects[1]";
 
-    fn lines_of_one_order() -> Effect {
-        read_range_at(
-            LINES,
-            line_at("w", "d", literal(0)),
-            line_at("w", "d", literal(9)),
-            0,
-        )
+    fn lines_of_one_warehouse() -> Effect {
+        read_prefix_range(LINES, vec![param("w")], Some((literal(0), literal(9))), 0)
     }
 
     /// A branch on a data read whose arms run over the rows of one range read
     /// before it.
     fn arms_over_one_range(present: Vec<Effect>, absent: Vec<Effect>) -> kiln_ir::Block {
         branch_on_presence(
-            vec![lines_of_one_order(), read("accounts", param("id"), 5)],
+            vec![lines_of_one_warehouse(), read("accounts", param("id"), 5)],
             5,
             returns(present),
             returns(absent),
@@ -603,6 +589,17 @@ mod kiln_e1_40 {
             evidence_of(body),
             ["f/body/effects[0]", "f/body/effects[1]"]
         );
+    }
+
+    #[test]
+    fn a_key_column_of_a_row_read_at_a_read_derived_key_is_that_key_s_operand() {
+        let body = returns(vec![
+            read_order(),
+            read_customer_of_order(1),
+            read("customers", key_of(1), 2),
+        ]);
+
+        assert_eq!(category_of(body), ONE_HOP);
     }
 
     #[test]

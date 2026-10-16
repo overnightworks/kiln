@@ -6,8 +6,9 @@ mod support;
 
 use kiln_ir::{
     AbortName, AbortReason, ArithmeticOp, Block, Call, CheckConstraint, Column, ColumnType,
-    Comparison, Condition, Effect, Execution, Expr, Function, FunctionName, IntegerWidth, Outcome,
-    ParameterName, Program, Schema, Slot, Store, Terminal, UniqueConstraint, Value,
+    Comparison, Condition, Effect, Execution, Expr, Function, FunctionName, IntegerWidth,
+    KeyInterval, Outcome, ParameterName, Program, Schema, Slot, Store, Terminal, UniqueConstraint,
+    Value,
 };
 use support::{
     column, columns_of, integer, keyed_by_id, one_part, replayed, store_of_rows, table, text,
@@ -250,8 +251,11 @@ mod kiln_ir_63 {
     fn others_in(start: Expr, end: Expr, into: Slot) -> Effect {
         Effect::ReadRange {
             table: table("on_call"),
-            start: vec![start],
-            end: vec![end],
+            prefix: vec![],
+            interval: Some(KeyInterval {
+                from: start,
+                to: end,
+            }),
             bound: Expr::Literal(integer(100)),
             into,
         }
