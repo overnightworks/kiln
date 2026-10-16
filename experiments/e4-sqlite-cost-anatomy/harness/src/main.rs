@@ -11,7 +11,8 @@ use std::process::ExitCode;
 
 use kiln_e4_harness::builds::BuildReport;
 use kiln_e4_harness::cli::{self, PilotArgs};
-use kiln_e4_harness::measure_cell::{MeasureCellRequest, serve_measure_cell};
+use kiln_e4_harness::measure_cell::serve_measure_cell;
+use kiln_e4_harness::measure_protocol::MeasureCellRequest;
 use kiln_e4_harness::preflight::{self, CheckResult};
 use kiln_e4_harness::{admission, affinity, interference, machine, manifest, monitor, pilot_run};
 

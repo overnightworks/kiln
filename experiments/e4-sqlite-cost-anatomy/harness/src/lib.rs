@@ -25,10 +25,13 @@ pub mod interference;
 pub mod machine;
 pub mod manifest;
 pub mod measure_cell;
+pub mod measure_error;
+pub mod measure_protocol;
 pub mod monitor;
 pub mod pilot;
 pub mod pilot_run;
 pub mod preflight;
+pub mod repetition_checks;
 pub mod restore;
 #[cfg(test)]
 pub(crate) mod test_support;

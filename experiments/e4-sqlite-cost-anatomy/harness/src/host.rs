@@ -18,7 +18,7 @@ use std::time::Duration;
 use crate::builds::Build;
 use crate::driver::OperationPlan;
 use crate::interference::{self, TimedSample, monotonic_ns};
-use crate::measure_cell::{self, MeasureCellRequest};
+use crate::measure_protocol::{self, MeasureCellRequest};
 use crate::restore;
 use crate::workloads::{Cell, Size};
 
@@ -34,7 +34,8 @@ pub struct HalfRequest {
 }
 
 /// One measured half's outcome: the child's mean wall time, the
-/// `CLOCK_MONOTONIC` instants its measured window opened and closed, and
+/// `CLOCK_MONOTONIC` instants its measured window opened (the parent's
+/// `go`) and closed (the child's own stamp after its last operation), and
 /// every monitor sample taken around it — the first before the window
 /// opened, the last after it closed.
 #[derive(Debug, Clone, PartialEq)]
@@ -143,10 +144,11 @@ impl MeasurementHost for ProcessHost {
         monitor.next_sample()?;
         let started_ns = monotonic_ns();
         child.go()?;
-        let mean_wall_ns = child.finish()?;
-        let finished_ns = monotonic_ns();
-
+        // The child stamps the end of its last operation and only then
+        // cleans up, so what it does after the stamp is not monitored.
+        let finished_ns = child.wait_until_done()?;
         let samples = monitor.finish_after(finished_ns)?;
+        let mean_wall_ns = child.finish()?;
         Ok(HalfRun {
             mean_wall_ns,
             started_ns,
@@ -305,7 +307,7 @@ impl MeasureChild {
     fn wait_until_ready(&mut self) -> io::Result<()> {
         let mut line = String::new();
         self.stdout.read_line(&mut line)?;
-        if line.trim() == measure_cell::READY_LINE {
+        if line.trim() == measure_protocol::READY_LINE {
             Ok(())
         } else {
             Err(self.failure(&format!("did not say ready, wrote {line:?}")))
@@ -317,8 +319,20 @@ impl MeasureChild {
             .stdin
             .as_mut()
             .ok_or_else(|| io::Error::other("the child's stdin was not piped"))?;
-        writeln!(stdin, "{}", measure_cell::GO_LINE)?;
+        writeln!(stdin, "{}", measure_protocol::GO_LINE)?;
         stdin.flush()
+    }
+
+    /// Reads lines until the child's `done` line and returns the instant
+    /// it carries: the end of the child's last operation.
+    fn wait_until_done(&mut self) -> io::Result<u64> {
+        let mut line = String::new();
+        if self.stdout.read_line(&mut line)? == 0 {
+            let status = self.child.wait()?;
+            return Err(self.failure(&format!("exited with {status} before finishing")));
+        }
+        measure_protocol::parse_done_ns(&line)
+            .ok_or_else(|| self.failure(&format!("wrote no done line, wrote {line:?}")))
     }
 
     /// Reads the child's result and waits for it to exit.
@@ -329,7 +343,7 @@ impl MeasureChild {
         if !status.success() {
             return Err(self.failure(&format!("exited with {status}")));
         }
-        measure_cell::parse_mean_wall_ns(&rest)
+        measure_protocol::parse_mean_wall_ns(&rest)
             .ok_or_else(|| self.failure(&format!("wrote no mean_wall_ns line, wrote {rest:?}")))
     }
 

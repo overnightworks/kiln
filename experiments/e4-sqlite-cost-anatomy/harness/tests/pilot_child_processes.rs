@@ -23,7 +23,7 @@ use kiln_e4_harness::driver::OperationPlan;
 use kiln_e4_harness::host::{HalfRequest, HalfRun, MeasurementHost, ProcessHost, Snapshots};
 use kiln_e4_harness::interference::TimedSample;
 use kiln_e4_harness::machine;
-use kiln_e4_harness::measure_cell::MeasureCellRequest;
+use kiln_e4_harness::measure_protocol::MeasureCellRequest;
 use kiln_e4_harness::pilot_run::run_pilot_comparisons;
 use kiln_e4_harness::restore::prepare_pristine;
 use kiln_e4_harness::workloads::{Cell, Size, Synchronous, Workload};
@@ -273,6 +273,56 @@ mod kiln_e4_07 {
 
         assert!(message.contains("exited with"), "{message}");
         assert_eq!(processes_started_with(&["monitor-stream", "52"]), 0);
+    }
+
+    #[test]
+    fn a_half_ends_its_window_at_the_childs_done_stamp_not_when_the_child_exits() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let slow_to_clean_up = stand_in(
+            dir.path(),
+            "slow-to-clean-up",
+            "echo ready\nread go\necho 'done monotonic_ns=7'\nsleep 1\necho mean_wall_ns=5",
+        );
+        let fixture = fixture_with(&slow_to_clean_up, small_snapshot());
+
+        let run = fixture
+            .host
+            .run_half(&half_request(
+                Workload::PointUpdate,
+                Build::Passthrough,
+                TINY_PLAN,
+            ))
+            .expect("a child that follows the protocol is measured");
+
+        assert_eq!(run.finished_ns, 7);
+        assert_eq!(run.mean_wall_ns, 5.0);
+        assert!(
+            run.samples.last().expect("a sample after the window").at_ns > 7,
+            "the monitor still samples once past the stamp"
+        );
+    }
+
+    #[test]
+    fn a_child_that_reports_a_mean_without_a_done_stamp_fails_the_half() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let no_stamp = stand_in(
+            dir.path(),
+            "no-stamp",
+            "echo ready\nread go\necho mean_wall_ns=5",
+        );
+        let fixture = fixture_with(&no_stamp, small_snapshot());
+
+        let message = fixture
+            .host
+            .run_half(&half_request(
+                Workload::PointUpdate,
+                Build::Passthrough,
+                TINY_PLAN,
+            ))
+            .expect_err("a window with no end stamp cannot be closed")
+            .to_string();
+
+        assert!(message.contains("wrote no done line"), "{message}");
     }
 
     #[test]

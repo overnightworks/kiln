@@ -8,14 +8,16 @@
 //!
 //! The child announces `ready` once the snapshot is restored and every
 //! statement prepared, then waits for `go`: the parent starts its monitor
-//! in between, so the monitored window is the warm-up and the timed
-//! operations and nothing else (§9). [`measure_in_process`] and
+//! in between. Right after the last operation it writes a `done` line
+//! stamped with the monotonic clock, before its correctness checks and
+//! before the working copy is dropped and removed: the parent closes the
+//! monitored window at that stamp, so the window is the warm-up and the
+//! timed operations and nothing else (§9). [`measure_in_process`] and
 //! [`serve_measure_cell`] are tested in-process; the `measure-cell`
 //! subcommand in `main.rs` only wires them to stdin, stdout and the pin.
 
-use std::fmt;
+use std::cell::RefCell;
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
 use std::time::Duration;
 
 use rand_chacha::ChaCha8Rng;
@@ -24,10 +26,16 @@ use rusqlite::{Connection, OpenFlags};
 
 use crate::driver::OperationPlan;
 use crate::generators::{self, InsertParams};
+use crate::interference::monotonic_ns;
+use crate::measure_error::MeasureError;
+use crate::measure_protocol::{
+    DONE_PREFIX, GO_LINE, MEAN_WALL_PREFIX, MeasureCellRequest, READY_LINE,
+};
+use crate::repetition_checks::RepetitionChecks;
 use crate::restore;
-use crate::vfs::{self, TimingError};
+use crate::vfs;
 use crate::workloads::{
-    self, InsertOutcome, InsertStatements, PointReadStatements, PointUpdateStatements, Synchronous,
+    self, InsertOutcome, InsertStatements, PointReadStatements, PointUpdateStatements,
     TransactionStatements, TransferStatements, Workload,
 };
 
@@ -38,6 +46,9 @@ use crate::workloads::{
 pub struct MeasuredCell {
     pub operations_measured: usize,
     pub mean_wall_ns: f64,
+    /// Workload D's guard outcomes (protocol §2: "the harness counts how
+    /// often it blocked a transfer"), warm-up included; zero elsewhere.
+    pub blocked_transfers: u64,
 }
 
 /// Protocol §8.1/§8.2: one attempt's total operation count is warm-up
@@ -64,138 +75,6 @@ pub fn mean_wall_nanos(total_wall: Duration, operations: usize) -> f64 {
     total_wall.as_nanos() as f64 / operations as f64
 }
 
-/// Everything one measurement child needs, and nothing it must derive:
-/// the workload and setting, the row count of the snapshot it restores
-/// (its size, protocol §3), the warm-up and timed counts, the seed of the
-/// attempt's input trace (§2.1), the pristine snapshot to restore, and a
-/// directory to keep its working copy in.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MeasureCellRequest {
-    pub workload: Workload,
-    pub synchronous: Synchronous,
-    pub row_count: u64,
-    pub plan: OperationPlan,
-    pub seed: u64,
-    pub pristine_dir: PathBuf,
-    pub scratch_dir: PathBuf,
-}
-
-impl MeasureCellRequest {
-    /// The `measure-cell` subcommand's arguments.
-    pub fn to_args(&self) -> Vec<String> {
-        vec![
-            self.workload.label().to_string(),
-            self.synchronous.label().to_string(),
-            self.row_count.to_string(),
-            self.plan.warmup.to_string(),
-            self.plan.timed.to_string(),
-            self.seed.to_string(),
-            self.pristine_dir.display().to_string(),
-            self.scratch_dir.display().to_string(),
-        ]
-    }
-
-    /// Reads [`to_args`](Self::to_args)'s arguments back; the error names
-    /// what was wrong.
-    pub fn parse(args: &[String]) -> Result<Self, String> {
-        let [
-            workload,
-            synchronous,
-            row_count,
-            warmup,
-            timed,
-            seed,
-            pristine_dir,
-            scratch_dir,
-        ] = args
-        else {
-            return Err(format!("expected 8 arguments, got {}", args.len()));
-        };
-        let number = |name: &str, value: &str| {
-            value
-                .parse::<u64>()
-                .map_err(|_| format!("{name} must be a non-negative integer, got {value:?}"))
-        };
-        Ok(MeasureCellRequest {
-            workload: Workload::parse(workload)
-                .ok_or_else(|| format!("unknown workload {workload:?}"))?,
-            synchronous: Synchronous::parse(synchronous)
-                .ok_or_else(|| format!("unknown synchronous setting {synchronous:?}"))?,
-            row_count: number("row count", row_count)?,
-            plan: OperationPlan {
-                warmup: number("warm-up", warmup)? as usize,
-                timed: number("operations", timed)? as usize,
-            },
-            seed: number("seed", seed)?,
-            pristine_dir: PathBuf::from(pristine_dir),
-            scratch_dir: PathBuf::from(scratch_dir),
-        })
-    }
-}
-
-/// Why a measurement child could not measure.
-#[derive(Debug)]
-pub enum MeasureError {
-    Sqlite(rusqlite::Error),
-    Io(io::Error),
-    ShimInstall(String),
-    /// The restored snapshot does not hold the rows the cell's size
-    /// promises (protocol §3).
-    SnapshotRows {
-        expected: u64,
-        found: Option<u64>,
-    },
-    /// One sanitized message for every inconsistent timing (protocol §13:
-    /// the pilot's output "never contains `xsync_time`, `xwrite_time`,
-    /// `remainder`, or any ratio from them" — not even on a failure path).
-    InconsistentTiming,
-}
-
-/// What an inconsistent measurement reports instead of its numbers.
-const INCONSISTENT_TIMING_MESSAGE: &str = "timing measurement was internally inconsistent (protocol §5/§13); rerun to collect a fresh sample";
-
-impl fmt::Display for MeasureError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MeasureError::Sqlite(err) => write!(f, "{err}"),
-            MeasureError::Io(err) => write!(f, "{err}"),
-            MeasureError::ShimInstall(reason) => {
-                write!(f, "installing the shim VFS failed: {reason}")
-            }
-            MeasureError::SnapshotRows { expected, found } => write!(
-                f,
-                "the restored snapshot should hold {expected} rows (highest id), found {found:?}"
-            ),
-            MeasureError::InconsistentTiming => f.write_str(INCONSISTENT_TIMING_MESSAGE),
-        }
-    }
-}
-
-impl std::error::Error for MeasureError {}
-
-impl From<rusqlite::Error> for MeasureError {
-    fn from(err: rusqlite::Error) -> Self {
-        MeasureError::Sqlite(err)
-    }
-}
-
-impl From<io::Error> for MeasureError {
-    fn from(err: io::Error) -> Self {
-        MeasureError::Io(err)
-    }
-}
-
-impl From<TimingError<rusqlite::Error>> for MeasureError {
-    fn from(err: TimingError<rusqlite::Error>) -> Self {
-        match err {
-            // An ordinary SQLite error from the operation itself — never a
-            // numeric timing split, so it is safe to report verbatim.
-            TimingError::Operation(inner) => MeasureError::Sqlite(inner),
-            TimingError::Measurement(_) => MeasureError::InconsistentTiming,
-        }
-    }
-}
-
 /// Times one operation and returns the wall time that counts toward the
 /// mean: zero while the operation is still in the warm-up (§8.2).
 fn time_counted_operation<T>(
@@ -212,6 +91,22 @@ fn time_counted_operation<T>(
         Duration::ZERO
     };
     Ok((value, counted))
+}
+
+/// What running every operation of a workload produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WorkloadRun {
+    timed_wall: Duration,
+    blocked_transfers: u64,
+}
+
+impl WorkloadRun {
+    fn without_blocked_transfers(timed_wall: Duration) -> Self {
+        WorkloadRun {
+            timed_wall,
+            blocked_transfers: 0,
+        }
+    }
 }
 
 /// Runs a pre-drawn trace, one transaction per entry, and sums the timed
@@ -272,7 +167,7 @@ fn run_workload(
     txn: &mut TransactionStatements<'_>,
     request: &MeasureCellRequest,
     start: impl FnOnce() -> io::Result<()>,
-) -> Result<Duration, MeasureError> {
+) -> Result<WorkloadRun, MeasureError> {
     let plan = request.plan;
     let total = total_operation_count(plan.warmup, plan.timed);
     let (seed, rows) = (request.seed, request.row_count);
@@ -283,6 +178,7 @@ fn run_workload(
             run_trace(txn, plan, &trace, start, |txn, params| {
                 workloads::execute_point_read(txn, &mut stmts, params).map(|_| ())
             })
+            .map(WorkloadRun::without_blocked_transfers)
         }
         Workload::PointUpdate => {
             let mut stmts = PointUpdateStatements::prepare(conn)?;
@@ -290,13 +186,23 @@ fn run_workload(
             run_trace(txn, plan, &trace, start, |txn, params| {
                 workloads::execute_point_update(txn, &mut stmts, params)
             })
+            .map(WorkloadRun::without_blocked_transfers)
         }
-        Workload::Insert => run_inserts(conn, txn, request, start),
+        Workload::Insert => {
+            run_inserts(conn, txn, request, start).map(WorkloadRun::without_blocked_transfers)
+        }
         Workload::Transfer => {
             let mut stmts = TransferStatements::prepare(conn)?;
             let trace = generators::transfer_trace(seed, rows, total);
-            run_trace(txn, plan, &trace, start, |txn, params| {
-                workloads::execute_transfer(txn, &mut stmts, params).map(|_| ())
+            let mut blocked_transfers = 0;
+            let timed_wall = run_trace(txn, plan, &trace, start, |txn, params| {
+                let blocked = workloads::execute_transfer(txn, &mut stmts, params)?;
+                blocked_transfers += u64::from(blocked);
+                Ok(())
+            })?;
+            Ok(WorkloadRun {
+                timed_wall,
+                blocked_transfers,
             })
         }
     }
@@ -326,10 +232,15 @@ fn check_snapshot_rows(conn: &Connection, row_count: u64) -> Result<(), MeasureE
 /// operations of the request's workload through the shim VFS, and reduces
 /// the timed operations' wall times to their mean. `start` runs once the
 /// snapshot is restored and everything prepared, immediately before the
-/// first operation. The working copy is removed on return.
+/// first operation. `finished` runs with the monotonic instant right
+/// after the last operation, before the repetition's correctness checks
+/// (§2.1) and before the connection is dropped and the working copy
+/// removed, which happens on return — none of that is part of the
+/// monitored window.
 pub fn measure_in_process(
     request: &MeasureCellRequest,
     start: impl FnOnce() -> io::Result<()>,
+    finished: impl FnOnce(u64) -> io::Result<()>,
 ) -> Result<MeasuredCell, MeasureError> {
     vfs::install().map_err(MeasureError::ShimInstall)?;
 
@@ -345,64 +256,72 @@ pub fn measure_in_process(
     )?;
     workloads::configure_connection(&conn, request.synchronous)?;
     check_snapshot_rows(&conn, request.row_count)?;
+    let checks = RepetitionChecks::before(
+        &conn,
+        request.workload,
+        request.row_count,
+        total_operation_count(request.plan.warmup, request.plan.timed),
+    )?;
 
     let mut txn = TransactionStatements::prepare(&conn)?;
-    let total_wall = run_workload(&conn, &mut txn, request, start)?;
+    let run = run_workload(&conn, &mut txn, request, start)?;
+    finished(monotonic_ns())?;
+    checks.verify(&conn)?;
     Ok(MeasuredCell {
         operations_measured: request.plan.timed,
-        mean_wall_ns: mean_wall_nanos(total_wall, request.plan.timed),
+        mean_wall_ns: mean_wall_nanos(run.timed_wall, request.plan.timed),
+        blocked_transfers: run.blocked_transfers,
     })
 }
 
 /// The `measure-cell` child's whole conversation (the parent's side is
 /// [`crate::host`]): writes `ready` once prepared, waits for a `go` line,
-/// measures, and writes `mean_wall_ns=<value>` — the one number safe for
-/// another process to read back (protocol §13). Anything but `go`, or no
-/// line at all, ends the child without measuring.
+/// measures, writes `done monotonic_ns=<instant>` right after the last
+/// operation, and finally `mean_wall_ns=<value>` — the one number safe
+/// for another process to read back (protocol §13). Anything but `go`, or
+/// no line at all, ends the child without measuring.
 pub fn serve_measure_cell(
     request: &MeasureCellRequest,
     mut input: impl BufRead,
-    mut output: impl Write,
+    output: impl Write,
 ) -> Result<(), MeasureError> {
-    let measured = measure_in_process(request, || {
-        writeln!(output, "{READY_LINE}")?;
-        output.flush()?;
-        let mut line = String::new();
-        input.read_line(&mut line)?;
-        if line.trim() == GO_LINE {
-            Ok(())
-        } else {
-            Err(io::Error::other(format!(
-                "expected {GO_LINE:?} from the parent, got {line:?}"
-            )))
-        }
-    })?;
+    let output = RefCell::new(output);
+    let measured = measure_in_process(
+        request,
+        || {
+            let mut output = output.borrow_mut();
+            writeln!(output, "{READY_LINE}")?;
+            output.flush()?;
+            let mut line = String::new();
+            input.read_line(&mut line)?;
+            if line.trim() == GO_LINE {
+                Ok(())
+            } else {
+                Err(io::Error::other(format!(
+                    "expected {GO_LINE:?} from the parent, got {line:?}"
+                )))
+            }
+        },
+        |finished_ns| {
+            let mut output = output.borrow_mut();
+            writeln!(output, "{DONE_PREFIX}{finished_ns}")?;
+            output.flush()
+        },
+    )?;
+    let mut output = output.into_inner();
     writeln!(output, "{MEAN_WALL_PREFIX}{}", measured.mean_wall_ns)?;
     output.flush()?;
     Ok(())
 }
 
-/// What the child writes once its snapshot is restored and its
-/// statements prepared.
-pub const READY_LINE: &str = "ready";
-/// What the parent writes to let the child start measuring.
-pub const GO_LINE: &str = "go";
-/// Prefix of the child's one result line.
-pub const MEAN_WALL_PREFIX: &str = "mean_wall_ns=";
-
-/// Parses the child's result line out of its stdout — pure, so a
-/// malformed or missing line is tested without spawning anything.
-pub fn parse_mean_wall_ns(stdout: &str) -> Option<f64> {
-    stdout
-        .lines()
-        .find_map(|line| line.strip_prefix(MEAN_WALL_PREFIX))
-        .and_then(|value| value.trim().parse::<f64>().ok())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::measure_protocol::{parse_done_ns, parse_mean_wall_ns};
+    use crate::repetition_checks::CheckViolation;
+    use crate::workloads::Synchronous;
     use std::fs;
+    use std::path::PathBuf;
 
     const SNAPSHOT_ROWS: u64 = 50;
     const TINY_PLAN: OperationPlan = OperationPlan {
@@ -451,6 +370,10 @@ mod tests {
         Ok(())
     }
 
+    fn nobody_waiting_for_the_end(_finished_ns: u64) -> io::Result<()> {
+        Ok(())
+    }
+
     mod kiln_e4_05 {
         use super::*;
 
@@ -484,8 +407,12 @@ mod tests {
             let _guard = crate::test_support::lock_vfs_counters();
             let snapshot = snapshot();
             for workload in Workload::ALL {
-                let measured = measure_in_process(&snapshot.request(workload), nothing_to_wait_for)
-                    .expect("measuring a small restored cell must succeed");
+                let measured = measure_in_process(
+                    &snapshot.request(workload),
+                    nothing_to_wait_for,
+                    nobody_waiting_for_the_end,
+                )
+                .expect("measuring a small restored cell must succeed");
                 assert_eq!(measured.operations_measured, TINY_PLAN.timed);
                 assert!(
                     measured.mean_wall_ns > 0.0,
@@ -535,10 +462,14 @@ mod tests {
             let snapshot = snapshot();
             let scratch_entries_at_start = std::cell::Cell::new(0);
 
-            measure_in_process(&snapshot.request(Workload::PointUpdate), || {
-                scratch_entries_at_start.set(fs::read_dir(&snapshot.scratch_dir)?.count());
-                Ok(())
-            })
+            measure_in_process(
+                &snapshot.request(Workload::PointUpdate),
+                || {
+                    scratch_entries_at_start.set(fs::read_dir(&snapshot.scratch_dir)?.count());
+                    Ok(())
+                },
+                nobody_waiting_for_the_end,
+            )
             .expect("measure");
 
             assert_eq!(
@@ -553,11 +484,55 @@ mod tests {
             let _guard = crate::test_support::lock_vfs_counters();
             let snapshot = snapshot();
 
-            let result = measure_in_process(&snapshot.request(Workload::PointRead), || {
-                Err(io::Error::other("parent hung up"))
-            });
+            let result = measure_in_process(
+                &snapshot.request(Workload::PointRead),
+                || Err(io::Error::other("parent hung up")),
+                nobody_waiting_for_the_end,
+            );
 
             assert!(matches!(result, Err(MeasureError::Io(_))));
+        }
+
+        #[test]
+        fn the_end_signal_comes_after_the_last_operation_and_before_any_cleanup() {
+            let _guard = crate::test_support::lock_vfs_counters();
+            let snapshot = snapshot();
+            let working_copies_at_end = std::cell::Cell::new(0);
+            let signalled_ns = std::cell::Cell::new(0);
+            let before_ns = monotonic_ns();
+
+            measure_in_process(
+                &snapshot.request(Workload::Insert),
+                nothing_to_wait_for,
+                |finished_ns| {
+                    working_copies_at_end.set(fs::read_dir(&snapshot.scratch_dir)?.count());
+                    signalled_ns.set(finished_ns);
+                    Ok(())
+                },
+            )
+            .expect("measure");
+
+            assert_eq!(
+                working_copies_at_end.get(),
+                1,
+                "the working copy still exists when the window closes"
+            );
+            assert!((before_ns..=monotonic_ns()).contains(&signalled_ns.get()));
+        }
+
+        #[test]
+        fn the_child_says_ready_then_done_then_its_mean() {
+            let _guard = crate::test_support::lock_vfs_counters();
+            let snapshot = snapshot();
+
+            let (result, output) = serve(&snapshot, "go\n");
+
+            result.expect("a child told to go measures");
+            let lines: Vec<&str> = output.lines().collect();
+            assert_eq!(lines.len(), 3, "{output:?}");
+            assert_eq!(lines[0], READY_LINE);
+            assert!(parse_done_ns(lines[1]).is_some(), "{output:?}");
+            assert!(parse_mean_wall_ns(lines[2]).is_some(), "{output:?}");
         }
 
         fn serve(snapshot: &Snapshot, input: &str) -> (Result<(), MeasureError>, String) {
@@ -580,6 +555,7 @@ mod tests {
             result.expect("a child told to go measures");
             let mut lines = output.lines();
             assert_eq!(lines.next(), Some("ready"));
+            assert!(parse_done_ns(lines.next().unwrap()).is_some());
             assert!(parse_mean_wall_ns(lines.next().unwrap()).unwrap() > 0.0);
             assert_eq!(lines.next(), None);
         }
@@ -598,6 +574,96 @@ mod tests {
         }
     }
 
+    mod kiln_e4_26 {
+        use super::*;
+
+        /// Changes the working copy through a second connection while the
+        /// first is idle, the moment the window closes.
+        fn corrupt_working_copy_at_the_end(snapshot: &Snapshot, statement: &str) -> io::Result<()> {
+            let working_dir = fs::read_dir(&snapshot.scratch_dir)?.next().expect("copy")?;
+            let conn = Connection::open(working_dir.path().join("accounts.db"))
+                .map_err(io::Error::other)?;
+            conn.execute(statement, []).map_err(io::Error::other)?;
+            Ok(())
+        }
+
+        #[test]
+        fn a_repetition_that_breaks_a_correctness_check_is_an_execution_failure() {
+            let _guard = crate::test_support::lock_vfs_counters();
+            let snapshot = snapshot();
+            let extra_row = "INSERT INTO accounts (id, email, balance) VALUES (9999, 'extra', 0)";
+            let negative = "UPDATE accounts SET balance = -1 WHERE id = 1";
+            let moved_money = "UPDATE accounts SET balance = balance + 1 WHERE id = 1";
+            let total = (TINY_PLAN.warmup + TINY_PLAN.timed) as u64;
+
+            for (workload, corruption, expected) in [
+                (
+                    Workload::PointUpdate,
+                    negative,
+                    CheckViolation::NegativeBalance,
+                ),
+                (
+                    Workload::Transfer,
+                    negative,
+                    CheckViolation::NegativeBalance,
+                ),
+                (
+                    Workload::Transfer,
+                    moved_money,
+                    CheckViolation::BalanceSumChanged {
+                        before: SNAPSHOT_ROWS as i64 * 1_000_000,
+                        after: SNAPSHOT_ROWS as i64 * 1_000_000 + 1,
+                    },
+                ),
+                (
+                    Workload::Insert,
+                    extra_row,
+                    CheckViolation::RowCountGrowth {
+                        expected: SNAPSHOT_ROWS + total,
+                        found: SNAPSHOT_ROWS + total + 1,
+                    },
+                ),
+            ] {
+                let result =
+                    measure_in_process(&snapshot.request(workload), nothing_to_wait_for, |_| {
+                        corrupt_working_copy_at_the_end(&snapshot, corruption)
+                    });
+
+                assert!(
+                    matches!(&result, Err(MeasureError::CheckViolation(found)) if *found == expected),
+                    "{workload:?}: {result:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_clean_repetition_blocks_no_transfer_and_a_drained_one_counts_every_block() {
+            let _guard = crate::test_support::lock_vfs_counters();
+            let snapshot = snapshot();
+            let total = (TINY_PLAN.warmup + TINY_PLAN.timed) as u64;
+
+            let clean = measure_in_process(
+                &snapshot.request(Workload::Transfer),
+                nothing_to_wait_for,
+                nobody_waiting_for_the_end,
+            )
+            .expect("measure");
+            let pristine = Connection::open(snapshot.pristine_dir.join("main.db")).unwrap();
+            pristine
+                .execute_batch("UPDATE accounts SET balance = 0; PRAGMA wal_checkpoint(TRUNCATE);")
+                .unwrap();
+            let drained = measure_in_process(
+                &snapshot.request(Workload::Transfer),
+                nothing_to_wait_for,
+                nobody_waiting_for_the_end,
+            )
+            .expect("measure");
+
+            assert_eq!(clean.blocked_transfers, 0);
+            assert_eq!(drained.blocked_transfers, total);
+        }
+    }
+
     mod kiln_e4_23 {
         use super::*;
 
@@ -608,8 +674,12 @@ mod tests {
             let before = snapshot.pristine_bytes();
 
             for workload in [Workload::PointUpdate, Workload::Insert, Workload::Transfer] {
-                measure_in_process(&snapshot.request(workload), nothing_to_wait_for)
-                    .expect("measure");
+                measure_in_process(
+                    &snapshot.request(workload),
+                    nothing_to_wait_for,
+                    nobody_waiting_for_the_end,
+                )
+                .expect("measure");
                 assert_eq!(
                     snapshot.pristine_bytes(),
                     before,
@@ -623,8 +693,12 @@ mod tests {
             let _guard = crate::test_support::lock_vfs_counters();
             let snapshot = snapshot();
 
-            measure_in_process(&snapshot.request(Workload::Insert), nothing_to_wait_for)
-                .expect("measure");
+            measure_in_process(
+                &snapshot.request(Workload::Insert),
+                nothing_to_wait_for,
+                nobody_waiting_for_the_end,
+            )
+            .expect("measure");
 
             assert_eq!(fs::read_dir(&snapshot.scratch_dir).unwrap().count(), 0);
         }
@@ -636,7 +710,8 @@ mod tests {
             let mut request = snapshot.request(Workload::PointUpdate);
             request.pristine_dir = snapshot.scratch_dir.join("no-such-snapshot");
 
-            let result = measure_in_process(&request, nothing_to_wait_for);
+            let result =
+                measure_in_process(&request, nothing_to_wait_for, nobody_waiting_for_the_end);
 
             assert!(matches!(result, Err(MeasureError::Io(_))));
         }
@@ -648,7 +723,8 @@ mod tests {
             let mut request = snapshot.request(Workload::PointUpdate);
             request.row_count = SNAPSHOT_ROWS + 1;
 
-            let result = measure_in_process(&request, nothing_to_wait_for);
+            let result =
+                measure_in_process(&request, nothing_to_wait_for, nobody_waiting_for_the_end);
 
             assert!(matches!(
                 result,
@@ -656,94 +732,6 @@ mod tests {
                     expected: 51,
                     found: Some(50)
                 })
-            ));
-        }
-    }
-
-    mod kiln_e4_08 {
-        use super::*;
-
-        fn request() -> MeasureCellRequest {
-            MeasureCellRequest {
-                workload: Workload::Transfer,
-                synchronous: Synchronous::Normal,
-                row_count: 10_000_000,
-                plan: OperationPlan {
-                    warmup: 200,
-                    timed: 2000,
-                },
-                seed: 12_345,
-                pristine_dir: PathBuf::from("/data/medium/pristine"),
-                scratch_dir: PathBuf::from("/data/scratch"),
-            }
-        }
-
-        #[test]
-        fn a_request_round_trips_through_its_arguments() {
-            assert_eq!(
-                MeasureCellRequest::parse(&request().to_args()),
-                Ok(request())
-            );
-        }
-
-        #[test]
-        fn a_request_with_a_missing_or_malformed_argument_is_rejected() {
-            let mut missing = request().to_args();
-            missing.pop();
-            assert!(MeasureCellRequest::parse(&missing).is_err());
-            for (position, bad) in [(0, "range-scan"), (1, "off"), (2, "many"), (5, "-1")] {
-                let mut args = request().to_args();
-                args[position] = bad.to_string();
-                assert!(MeasureCellRequest::parse(&args).is_err(), "{bad}");
-            }
-        }
-
-        #[test]
-        fn parse_mean_wall_ns_reads_the_measure_cell_contract() {
-            assert_eq!(parse_mean_wall_ns("mean_wall_ns=1234.5\n"), Some(1234.5));
-            assert_eq!(parse_mean_wall_ns("ready\nmean_wall_ns=7\n"), Some(7.0));
-        }
-
-        #[test]
-        fn parse_mean_wall_ns_is_none_for_output_missing_the_line() {
-            assert_eq!(parse_mean_wall_ns("something else entirely\n"), None);
-            assert_eq!(parse_mean_wall_ns("mean_wall_ns=fast\n"), None);
-        }
-    }
-
-    mod kiln_e4_15 {
-        use super::*;
-
-        #[test]
-        fn an_inconsistent_measurement_never_renders_its_numbers() {
-            let inconsistent = vfs::InconsistentTiming {
-                wall: Duration::from_nanos(10),
-                xsync: Duration::from_nanos(8),
-                xwrite: Duration::from_nanos(5),
-            };
-            let err: MeasureError =
-                TimingError::<rusqlite::Error>::Measurement(inconsistent).into();
-            let rendered = err.to_string();
-            assert_eq!(
-                rendered, INCONSISTENT_TIMING_MESSAGE,
-                "a measurement error must render as the one sanitized message, never \
-                 InconsistentTiming's own Display (protocol §13)"
-            );
-            for forbidden in ["xsync", "xwrite", "10ns", "8ns", "5ns"] {
-                assert!(
-                    !rendered.contains(forbidden),
-                    "a sanitized measurement error must never leak {forbidden:?} (protocol §13); got {rendered:?}"
-                );
-            }
-        }
-
-        #[test]
-        fn an_operation_error_is_reported_as_the_sqlite_error_it_is() {
-            let err: MeasureError =
-                TimingError::Operation(rusqlite::Error::QueryReturnedNoRows).into();
-            assert!(matches!(
-                err,
-                MeasureError::Sqlite(rusqlite::Error::QueryReturnedNoRows)
             ));
         }
     }
