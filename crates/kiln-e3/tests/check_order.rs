@@ -1,6 +1,6 @@
 mod support;
 
-use kiln_e3::{Expected, Malformed, Sort, Step, Term};
+use kiln_e3::{ComponentShape, Expected, Malformed, Sort, Step, Term};
 use support::*;
 
 fn unknown_parameter() -> Term {
@@ -108,6 +108,86 @@ mod kiln_e3_04 {
                 path: respond_of(1, &[0, 1]),
                 expected: Expected::Sort(Sort::Int),
                 found: Sort::Bool
+            }
+        );
+    }
+
+    #[test]
+    fn reports_an_undeclared_parameter_before_per_key_over_an_unkeyed_component() {
+        let form = with_form(|form| {
+            form.components[0].shape = ComponentShape::PerKey;
+            form.functions[0].respond = Some(unknown_parameter());
+        });
+
+        assert_eq!(
+            rejection(&kiln_e3::Family::quota(), &form),
+            Malformed::UnknownParameter {
+                path: respond_of(0, &[]),
+                name: "amount".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn reports_an_undeclared_parameter_before_a_missing_combine() {
+        let form = with_form(|form| {
+            form.components[0].combine = None;
+            form.functions[0].respond = Some(commit(unknown_parameter()));
+        });
+
+        assert_eq!(
+            rejection(&kiln_e3::Family::quota(), &form),
+            Malformed::UnknownParameter {
+                path: respond_of(0, &[0]),
+                name: "amount".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn reports_a_type_error_before_a_missing_combine() {
+        let form = with_form(|form| {
+            form.components[0].combine = None;
+            form.functions[0].respond = Some(ill_typed());
+        });
+
+        assert_eq!(
+            rejection(&kiln_e3::Family::quota(), &form),
+            Malformed::TypeMismatch {
+                path: respond_of(0, &[0, 1]),
+                expected: Expected::Sort(Sort::Int),
+                found: Sort::Bool
+            }
+        );
+    }
+
+    #[test]
+    fn reports_an_undeclared_parameter_before_a_wrong_atom_count() {
+        let form = with_form(|form| {
+            form.functions[0].atom.clear();
+            form.functions[0].respond = Some(unknown_parameter());
+        });
+
+        assert_eq!(
+            rejection(&kiln_e3::Family::quota(), &form),
+            Malformed::UnknownParameter {
+                path: respond_of(0, &[]),
+                name: "amount".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn reports_per_key_over_an_unkeyed_component_before_a_missing_combine() {
+        let form = with_form(|form| {
+            form.components[0].shape = ComponentShape::PerKey;
+            form.components[0].combine = None;
+        });
+
+        assert_eq!(
+            rejection(&kiln_e3::Family::quota(), &form),
+            Malformed::PerKeyOnUnkeyedComponent {
+                path: path(&[Step::Component(0)])
             }
         );
     }

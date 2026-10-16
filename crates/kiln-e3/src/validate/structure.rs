@@ -4,7 +4,8 @@ use crate::malformed::{Malformed, Path, Step};
 use crate::sort::Sort;
 use crate::term::Term;
 
-/// A checker form whose parts are all present: the terms validation walks.
+/// The terms validation walks, whichever parts the form is missing: a
+/// missing part is check 3's finding, so it must not stop checks 1 and 2.
 pub(super) struct Layout<'a> {
     pub components: Vec<ComponentLayout<'a>>,
     pub functions: Vec<FunctionLayout<'a>>,
@@ -13,9 +14,11 @@ pub(super) struct Layout<'a> {
 pub(super) struct ComponentLayout<'a> {
     pub fields: &'a [Field],
     pub shape: ComponentShape,
-    pub applied: AppliedInput,
-    pub combine: &'a Term,
-    pub apply: &'a Term,
+    /// An `Err` is check 2's shape defect, reported when the walk reaches
+    /// this component.
+    pub applied: Result<AppliedInput, Malformed>,
+    pub combine: Option<&'a Term>,
+    pub apply: Option<&'a Term>,
 }
 
 /// What `x` is in a component's apply (grammar §1.3, "the apply input is
@@ -48,21 +51,19 @@ impl AppliedInput {
 }
 
 pub(super) struct FunctionLayout<'a> {
-    pub parameters: &'a [kiln_ir::Parameter],
-    pub valid: &'a Term,
+    pub valid: Option<&'a Term>,
     pub atoms: &'a [Term],
-    pub respond: &'a Term,
+    pub respond: Option<&'a Term>,
 }
 
 fn at(steps: &[Step]) -> Path {
     Path(steps.to_vec())
 }
 
-/// Check 1 of protocol §3.1 for the parts of the form itself.
-pub(super) fn declared<'a>(
-    family: &'a Family,
-    form: &'a CheckerForm,
-) -> Result<Layout<'a>, Malformed> {
+/// The part of check 1 about the form itself, after its terms' names were
+/// found declared. Protocol §3.1 is silent on counts; a count against the
+/// signature or the `Program` is a declaration fact, so it belongs here.
+pub(super) fn declared(family: &Family, form: &CheckerForm) -> Result<(), Malformed> {
     let signature = family.signature();
     if form.components.len() != signature.components.len() {
         return Err(Malformed::ComponentCountMismatch {
@@ -79,85 +80,49 @@ pub(super) fn declared<'a>(
             found: form.functions.len(),
         });
     }
-    Ok(Layout {
-        components: component_layouts(family, form)?,
-        functions: function_layouts(family, form)?,
-    })
+    for (index, component) in form.components.iter().enumerate() {
+        check_field_sorts(family, &component.carrier_fields, Step::Component(index))?;
+    }
+    for (index, function) in form.functions.iter().enumerate() {
+        if function.atom.len() != signature.components.len() {
+            return Err(Malformed::AtomCountMismatch {
+                path: at(&[Step::Function(index)]),
+                expected: signature.components.len(),
+                found: function.atom.len(),
+            });
+        }
+    }
+    Ok(())
 }
 
-fn component_layouts<'a>(
-    family: &'a Family,
-    form: &'a CheckerForm,
-) -> Result<Vec<ComponentLayout<'a>>, Malformed> {
-    form.components
+/// The terms of a form that passed `declared`.
+pub(super) fn layout<'a>(family: &Family, form: &'a CheckerForm) -> Layout<'a> {
+    let components = form
+        .components
         .iter()
         .zip(&family.signature().components)
         .enumerate()
-        .map(|(index, (component, state))| {
-            let here = Step::Component(index);
-            check_field_sorts(family, &component.carrier_fields, here)?;
-            let applied = AppliedInput::of(&state.kind, component.shape, at(&[here]))?;
-            let combine = component
-                .combine
-                .as_ref()
-                .ok_or_else(|| Malformed::MissingCombine {
-                    path: at(&[here, Step::Combine]),
-                })?;
-            let apply = component
-                .apply
-                .as_ref()
-                .ok_or_else(|| Malformed::MissingApply {
-                    path: at(&[here, Step::Apply]),
-                })?;
-            Ok(ComponentLayout {
-                fields: &component.carrier_fields,
-                shape: component.shape,
-                applied,
-                combine,
-                apply,
-            })
+        .map(|(index, (component, state))| ComponentLayout {
+            fields: &component.carrier_fields,
+            shape: component.shape,
+            applied: AppliedInput::of(&state.kind, component.shape, at(&[Step::Component(index)])),
+            combine: component.combine.as_ref(),
+            apply: component.apply.as_ref(),
         })
-        .collect()
-}
-
-fn function_layouts<'a>(
-    family: &'a Family,
-    form: &'a CheckerForm,
-) -> Result<Vec<FunctionLayout<'a>>, Malformed> {
-    let component_count = family.signature().components.len();
-    form.functions
+        .collect();
+    let functions = form
+        .functions
         .iter()
-        .zip(&family.program().functions)
-        .enumerate()
-        .map(|(index, (function, declared))| {
-            let here = Step::Function(index);
-            if function.atom.len() != component_count {
-                return Err(Malformed::AtomCountMismatch {
-                    path: at(&[here]),
-                    expected: component_count,
-                    found: function.atom.len(),
-                });
-            }
-            let valid = function
-                .valid
-                .as_ref()
-                .ok_or_else(|| Malformed::MissingValid {
-                    path: at(&[here, Step::Valid]),
-                })?;
-            let respond = function
-                .respond
-                .as_ref()
-                .ok_or_else(|| Malformed::MissingRespond {
-                    path: at(&[here, Step::Respond]),
-                })?;
-            Ok(FunctionLayout {
-                parameters: &declared.parameters,
-                valid,
-                atoms: &function.atom,
-                respond,
-            })
+        .map(|function| FunctionLayout {
+            valid: function.valid.as_ref(),
+            atoms: &function.atom,
+            respond: function.respond.as_ref(),
         })
-        .collect()
+        .collect();
+    Layout {
+        components,
+        functions,
+    }
 }
 
 fn check_field_sorts(

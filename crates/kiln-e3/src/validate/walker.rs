@@ -32,8 +32,8 @@ enum Place<'a> {
 }
 
 /// Checks 2 and 3 of protocol §3.1 over every term of the layout, with check
-/// 2's first defect winning over check 3's: a count that is not total is
-/// kept aside while the walk goes on looking for a type error.
+/// 2's first defect winning over check 3's: a defect of check 3 (a missing
+/// part, a count that is not total) is kept aside while the walk goes on looking for a type error.
 pub(super) fn well_typed_and_total<'a>(family: &'a Family, layout: &'a Layout<'a>) -> Checked<()> {
     let mut walker = Walker::new(family);
     for (index, component) in layout.components.iter().enumerate() {
@@ -67,27 +67,39 @@ impl<'a> Walker<'a> {
     }
 
     fn component(&mut self, component: &'a ComponentLayout<'a>) -> Checked<()> {
+        let applied = component.applied.as_ref().map_err(Clone::clone)?;
         self.place = Place::Combine {
             fields: component.fields,
         };
-        self.at(Step::Combine, |walker| {
-            walker.carrier(component.combine, component.fields)
-        })?;
+        self.part(
+            Step::Combine,
+            component.combine,
+            |path| Malformed::MissingCombine { path },
+            |walker, combine| walker.carrier(combine, component.fields),
+        )?;
         self.place = Place::Apply {
             fields: component.fields,
-            applied: &component.applied,
+            applied,
         };
-        self.at(Step::Apply, |walker| {
-            let found = walker.infer(component.apply)?;
-            walker.require(&Expected::Sort(component.applied.result_sort()), found)
-        })
+        self.part(
+            Step::Apply,
+            component.apply,
+            |path| Malformed::MissingApply { path },
+            |walker, apply| {
+                let found = walker.infer(apply)?;
+                walker.require(&Expected::Sort(applied.result_sort()), found)
+            },
+        )
     }
 
     fn function(&mut self, function: &FunctionLayout<'a>, layout: &Layout<'a>) -> Checked<()> {
         self.place = Place::Function(FunctionTerm::Valid);
-        self.at(Step::Valid, |walker| {
-            walker.expect_here(function.valid, &Sort::Bool)
-        })?;
+        self.part(
+            Step::Valid,
+            function.valid,
+            |path| Malformed::MissingValid { path },
+            |walker, valid| walker.expect_here(valid, &Sort::Bool),
+        )?;
         for (index, (atom, component)) in function.atoms.iter().zip(&layout.components).enumerate()
         {
             self.place = Place::Function(FunctionTerm::Atom);
@@ -97,8 +109,29 @@ impl<'a> Walker<'a> {
             })?;
         }
         self.place = Place::Function(FunctionTerm::Respond);
-        self.at(Step::Respond, |walker| {
-            walker.expect_here(function.respond, &Sort::Outcome)
+        self.part(
+            Step::Respond,
+            function.respond,
+            |path| Malformed::MissingRespond { path },
+            |walker, respond| walker.expect_here(respond, &Sort::Outcome),
+        )
+    }
+
+    /// Walks a part that is there; one that is missing is check 3's defect.
+    fn part(
+        &mut self,
+        step: Step,
+        term: Option<&Term>,
+        missing: impl FnOnce(Path) -> Malformed,
+        walk: impl FnOnce(&mut Self, &Term) -> Checked<()>,
+    ) -> Checked<()> {
+        self.at(step, |walker| match term {
+            Some(term) => walk(walker, term),
+            None => {
+                let path = walker.here();
+                walker.defer(missing(path));
+                Ok(())
+            }
         })
     }
 

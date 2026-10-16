@@ -1,26 +1,32 @@
 use kiln_ir::Parameter;
 
-use super::structure::Layout;
 use crate::family::Family;
+use crate::form::CheckerForm;
 use crate::malformed::{Malformed, Path, Step};
 use crate::term::Term;
 
 /// Check 1 of protocol §3.1 for the terms: every parameter, state component,
-/// `Name`, category and category value a term mentions is declared. It looks
-/// at no types, so a type error elsewhere cannot hide an undeclared reference.
-pub(super) fn declared(family: &Family, layout: &Layout<'_>) -> Result<(), Malformed> {
-    for (index, component) in layout.components.iter().enumerate() {
+/// `Name`, category and category value a term mentions is declared. It walks
+/// every term the form has, complete or not, and looks at no types, so
+/// neither a type error nor a missing part elsewhere hides an undeclared
+/// reference.
+pub(super) fn declared(family: &Family, form: &CheckerForm) -> Result<(), Malformed> {
+    for (index, component) in form.components.iter().enumerate() {
         let mut references = References::new(family, &[], Step::Component(index));
-        references.rooted(Step::Combine, component.combine)?;
-        references.rooted(Step::Apply, component.apply)?;
+        references.optionally(Step::Combine, component.combine.as_ref())?;
+        references.optionally(Step::Apply, component.apply.as_ref())?;
     }
-    for (index, function) in layout.functions.iter().enumerate() {
-        let mut references = References::new(family, function.parameters, Step::Function(index));
-        references.rooted(Step::Valid, function.valid)?;
-        for (atom_index, atom) in function.atoms.iter().enumerate() {
+    let program_functions = &family.program().functions;
+    for (index, function) in form.functions.iter().enumerate() {
+        let parameters = program_functions
+            .get(index)
+            .map_or(&[][..], |declared| &declared.parameters);
+        let mut references = References::new(family, parameters, Step::Function(index));
+        references.optionally(Step::Valid, function.valid.as_ref())?;
+        for (atom_index, atom) in function.atom.iter().enumerate() {
             references.rooted(Step::Atom(atom_index), atom)?;
         }
-        references.rooted(Step::Respond, function.respond)?;
+        references.optionally(Step::Respond, function.respond.as_ref())?;
     }
     Ok(())
 }
@@ -38,6 +44,10 @@ impl<'a> References<'a> {
             parameters,
             path: vec![root],
         }
+    }
+
+    fn optionally(&mut self, step: Step, term: Option<&Term>) -> Result<(), Malformed> {
+        term.map_or(Ok(()), |term| self.rooted(step, term))
     }
 
     fn rooted(&mut self, step: Step, term: &Term) -> Result<(), Malformed> {
