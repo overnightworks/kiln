@@ -1,0 +1,8 @@
+claim_id = "2e39d70778254c1f80fbbfddee9f6efb"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "cd4f9a982bbf627eeff9e63d3c990a15247f18f4"
+branch = "claude/issue-90-e2-quota-summary"
+scope = ["crates/kiln-e2", "specs/kiln-e2.spec.md"]
+opened_commit = "a7357eb97b2359390c40c93accab622cd3f2ee7d"
+whole_reason = "one experiment crate gains its first summary algebra, the sequential scan and the operation counter; every file is under crates/kiln-e2"
