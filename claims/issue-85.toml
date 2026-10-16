@@ -1,8 +1,0 @@
-claim_id = "6a834b75963f4318b581dd9330b8c9c9"
-agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
-role = "builder"
-base = "c4c5319af0d1f7600c1fee27c74130bc6178c1fe"
-branch = "claude/issue-85-s4a-multiply-conditional"
-scope = ["crates/kiln-e1/src/footprint/carried.rs", "crates/kiln-e1/src/footprint/operand.rs", "crates/kiln-e1/src/footprint/walk.rs", "crates/kiln-e1/tests", "crates/kiln-ir/src/evaluator/effects/terminal.rs", "crates/kiln-ir/src/evaluator/resolve.rs", "crates/kiln-ir/src/ir/expression.rs", "crates/kiln-ir/src/ir/key_kinds.rs", "crates/kiln-ir/tests", "specs/kiln-e1.spec.md", "specs/kiln-ir.spec.md"]
-opened_commit = "3e3670e2fedaa827214095a35e84bf69fc98e7e9"
-whole_reason = "two expression forms span the IR, its evaluator, its key-kind validation and the classifier's operand and slot analyses, each a few lines"
