@@ -12,6 +12,8 @@
 //! disabled per unused helper.
 #![allow(dead_code)]
 
+pub mod world;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use kiln_ir::{
