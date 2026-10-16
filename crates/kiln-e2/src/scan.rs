@@ -10,19 +10,21 @@ pub fn scan<S: Summary>(initial: S::State, calls: &[S::Call]) -> Run<S::Abort, S
     let outcomes = calls
         .iter()
         .map(|&call| {
-            let pre_state = state_after(prefix, initial);
+            let pre_state = state_after(prefix.as_ref(), initial);
             let atomic = S::atomic(call);
-            prefix =
-                Some(prefix.map_or(atomic, |earlier| earlier.combine(&atomic, &mut Uncounted)));
+            prefix = Some(match prefix.take() {
+                Some(earlier) => earlier.combine(&atomic, &mut Uncounted),
+                None => atomic,
+            });
             S::response(call, pre_state)
         })
         .collect();
     Run {
         outcomes,
-        final_state: state_after(prefix, initial),
+        final_state: state_after(prefix.as_ref(), initial),
     }
 }
 
-fn state_after<S: Summary>(prefix: Option<S>, initial: S::State) -> S::State {
+fn state_after<S: Summary>(prefix: Option<&S>, initial: S::State) -> S::State {
     prefix.map_or(initial, |summary| summary.apply(initial, &mut Uncounted))
 }

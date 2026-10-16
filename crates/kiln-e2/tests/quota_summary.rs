@@ -221,4 +221,95 @@ mod kiln_e2_34 {
             assert_eq!(figures.largest_combine_operations, expected_combine);
         }
     }
+
+    /// A summary whose combine cost depends on its operands, so the fold's
+    /// grouping and the largest-combine report are observable. A call is its
+    /// weight; combining two summaries costs the difference of their total
+    /// weights, applying one costs its call count, and its size is its call count.
+    mod weighted {
+        use kiln_e2::cost::{measure, Cost};
+        use kiln_e2::run::CallOutcome;
+        use kiln_e2::summary::{OperationCounter, Summary};
+
+        struct Weighted {
+            total_weight: u32,
+            calls: usize,
+        }
+
+        impl Summary for Weighted {
+            type Call = u32;
+            type State = ();
+            type Abort = ();
+
+            fn atomic(weight: u32) -> Self {
+                Self {
+                    total_weight: weight,
+                    calls: 1,
+                }
+            }
+
+            fn combine<C: OperationCounter>(&self, later: &Self, counter: &mut C) -> Self {
+                (0..self.total_weight.abs_diff(later.total_weight)).for_each(|_| counter.count());
+                Self {
+                    total_weight: self.total_weight + later.total_weight,
+                    calls: self.calls + later.calls,
+                }
+            }
+
+            fn apply<C: OperationCounter>(&self, state: (), counter: &mut C) {
+                (0..self.calls).for_each(|_| counter.count());
+                state
+            }
+
+            fn response(weight: u32, _pre_state: ()) -> CallOutcome<()> {
+                CallOutcome::committed(i64::from(weight))
+            }
+
+            fn size_in_bytes(&self) -> usize {
+                self.calls
+            }
+        }
+
+        fn cost_of(weights: &[u32]) -> Cost {
+            measure::<Weighted>((), weights).expect("a batch with calls")
+        }
+
+        /// Balanced combine costs per case: [5,5,10,0] gives 0,10,0 (a sequential
+        /// fold gives a largest of 20; the first or last combine reports 0),
+        /// [10,0,5,5] gives 10,0,0 (a last-combine report gives 0), [4,1,1] gives
+        /// 3,4 (grouping from the right gives 0,2).
+        #[test]
+        fn the_largest_combine_of_the_balanced_pairwise_fold_is_reported() {
+            let cases: [(&[u32], u64); 4] = [
+                (&[5, 5, 10, 0], 10),
+                (&[10, 0, 5, 5], 10),
+                (&[4, 1, 1], 4),
+                (&[1, 2, 3, 4, 5], 5),
+            ];
+            for (weights, expected) in cases {
+                assert_eq!(
+                    cost_of(weights).largest_combine_operations,
+                    Some(expected),
+                    "{weights:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn an_odd_trailing_summary_is_carried_into_the_final_summary() {
+            for size in [3_u32, 5, 7] {
+                let weights: Vec<u32> = (1..=size).collect();
+                let cost = cost_of(&weights);
+                assert_eq!(cost.bytes, size as usize, "{size}");
+                assert_eq!(cost.apply_operations, u64::from(size), "{size}");
+            }
+        }
+
+        #[test]
+        fn a_single_call_has_no_combine() {
+            let cost = cost_of(&[9]);
+            assert_eq!(cost.largest_combine_operations, None);
+            assert_eq!(cost.bytes, 1);
+        }
+    }
 }

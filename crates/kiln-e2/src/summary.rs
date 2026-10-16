@@ -36,7 +36,7 @@ impl OperationCounter for OperationCount {
     }
 }
 
-pub trait Summary: Copy {
+pub trait Summary: Sized {
     type Call: Copy;
     type State: Copy;
     type Abort;

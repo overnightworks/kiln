@@ -17,20 +17,17 @@ pub fn measure<S: Summary>(initial: S::State, calls: &[S::Call]) -> Option<Cost>
     let mut level: Vec<S> = calls.iter().map(|&call| S::atomic(call)).collect();
     let mut largest_combine_operations = None;
     while level.len() > 1 {
-        level = level
-            .chunks(2)
-            .map(|chunk| match chunk {
-                [earlier, later] => {
-                    let mut counter = OperationCount::default();
-                    let combined = earlier.combine(later, &mut counter);
-                    largest_combine_operations =
-                        largest_combine_operations.max(Some(counter.total()));
-                    combined
-                }
-                [odd_one_out] => *odd_one_out,
-                _ => unreachable!("chunks of two are never empty or longer"),
-            })
-            .collect();
+        let mut earlier_summaries = level.into_iter();
+        level = Vec::new();
+        while let Some(earlier) = earlier_summaries.next() {
+            let Some(later) = earlier_summaries.next() else {
+                level.push(earlier);
+                break;
+            };
+            let mut counter = OperationCount::default();
+            level.push(earlier.combine(&later, &mut counter));
+            largest_combine_operations = largest_combine_operations.max(Some(counter.total()));
+        }
     }
     let batch_summary = level.pop()?;
     let mut counter = OperationCount::default();
