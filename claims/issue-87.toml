@@ -1,0 +1,8 @@
+claim_id = "5fabb7e01e6a42dc8a17e594a9bd7436"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "c4c5319af0d1f7600c1fee27c74130bc6178c1fe"
+branch = "claude/issue-87-e2-serial-fold"
+scope = ["crates/kiln-e2"]
+opened_commit = "3688a5b94ac39e64f8fef20a77c39542764506d6"
+whole_reason = "one experiment crate gains its baseline folds and comparator; every file is under crates/kiln-e2"
