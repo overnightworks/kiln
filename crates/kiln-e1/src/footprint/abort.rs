@@ -58,7 +58,8 @@ impl Evaluation<'_> {
     /// Whether resolving `resolved` in order certainly aborts. Every cause
     /// counts alike, whichever arm holds it: a projection of a slot holding
     /// no row, and a key component of a kind its key column cannot take
-    /// (`KILN-IR-82`). The evaluator reaches nothing after a certain abort.
+    /// (`KILN-IR-82`). Nothing after a certain abort is logged; an index
+    /// range resolves both bounds first, but resolving logs nothing.
     pub fn aborts<'e>(
         &self,
         resolved: impl IntoIterator<Item = Resolved<'e>>,
