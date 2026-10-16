@@ -20,6 +20,7 @@
 mod block;
 mod effect;
 mod expression;
+mod key_kinds;
 mod program;
 mod schema;
 mod validation;
@@ -31,7 +32,7 @@ pub use expression::{ArithmeticOp, Condition, Expr, Relation, Slot};
 pub use program::{Function, Parameter, ParameterType, Program};
 pub use schema::{
     CheckConstraint, ClampDomain, Column, ColumnType, Comparison, ForeignKey, Index, IntegerWidth,
-    KeyColumn, KeyDeclaration, Schema, SchemaError, Table, UniqueConstraint,
+    KeyColumn, KeyComponentFault, KeyDeclaration, Schema, SchemaError, Table, UniqueConstraint,
 };
 pub use validation::{FunctionFault, ProgramError};
 pub use value::{Key, Row, Value};

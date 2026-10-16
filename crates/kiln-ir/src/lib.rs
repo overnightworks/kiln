@@ -27,14 +27,15 @@ mod store;
 pub use call::Call;
 pub use evaluator::{
     run, AbortReason, AccessKind, AccessLogEntry, AccessOrigin, AccessTarget, AccessedColumns,
-    ConstraintRef, Execution, KeyComponentFault, Outcome, OverflowReason,
+    ConstraintRef, Execution, Outcome, OverflowReason,
 };
 pub use identifiers::{AbortName, ColumnName, FunctionName, IndexName, ParameterName, TableName};
 pub use ir::{
     slots_released_by_iteration, ArithmeticOp, Block, CheckConstraint, ClampDomain, Column,
     ColumnType, Comparison, Condition, Effect, Expr, ForeignKey, Function, FunctionFault, Index,
-    IntegerWidth, Key, KeyColumn, KeyDeclaration, Parameter, ParameterType, Program, ProgramError,
-    Relation, Row, Schema, SchemaError, Slot, Table, Terminal, UniqueConstraint, Value,
+    IntegerWidth, Key, KeyColumn, KeyComponentFault, KeyDeclaration, Parameter, ParameterType,
+    Program, ProgramError, Relation, Row, Schema, SchemaError, Slot, Table, Terminal,
+    UniqueConstraint, Value,
 };
 pub use replay::replay;
 pub use store::{KeyedRow, Store};

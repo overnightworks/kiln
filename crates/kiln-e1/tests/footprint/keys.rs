@@ -1,5 +1,7 @@
 use kiln_e1::{classify_function, Classification, ClassifyError, IndexReadKind, UnknownCause};
-use kiln_ir::{Effect, Expr, FunctionFault, FunctionName, ProgramError};
+use kiln_ir::{
+    ColumnName, Effect, Expr, FunctionFault, FunctionName, KeyComponentFault, ProgramError, Value,
+};
 
 use super::programs::*;
 
@@ -420,6 +422,35 @@ mod kiln_e1_19 {
             UnknownCause::DataSelectedTargets {
                 selector: SELECTOR.to_owned(),
             },
+        );
+    }
+}
+
+mod kiln_e1_27 {
+    use super::*;
+
+    #[test]
+    fn a_program_with_a_key_component_of_the_wrong_kind_is_reported_not_classified() {
+        let k = || literal(1);
+        let text_key = || Expr::Literal(Value::Text("text".to_owned()));
+        let present = returns(vec![
+            read("a", k(), 1),
+            read("audit", text_key(), 2),
+            read("b", k(), 3),
+        ]);
+        let absent = returns(vec![read("b", k(), 3)]);
+        let body = branch_on_presence(vec![read("accounts", k(), 0)], 0, present, absent);
+        let function = FunctionName(FUNCTION.to_owned());
+        assert_eq!(
+            classify_function(&program(body), &function),
+            Err(ClassifyError::InvalidProgram(ProgramError::Function {
+                function: function.clone(),
+                fault: FunctionFault::KeyComponent {
+                    table: table("audit"),
+                    column: ColumnName(KEY_COLUMN.to_owned()),
+                    fault: KeyComponentFault::WrongKind,
+                },
+            }))
         );
     }
 }

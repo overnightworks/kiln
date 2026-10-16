@@ -4,10 +4,13 @@ mod support;
 
 use kiln_ir::{
     AbortReason, Block, Call, Effect, Expr, FunctionFault, Key, KeyComponentFault, ProgramError,
-    Slot, Store, Terminal, Value,
+    Slot, Store, Terminal,
 };
 use support::world::*;
-use support::{aborted_reason, column, columns_of, integer, table, text};
+use support::{
+    aborted_reason, call_under_test, column, columns_of, integer, parameter, program_with_schema,
+    run_ok, table, text, text_parameter, typed_parameter,
+};
 
 mod kiln_ir_79 {
     use super::*;
@@ -236,17 +239,28 @@ mod kiln_ir_81 {
 
 mod kiln_ir_82 {
     use super::*;
+    use kiln_ir::{ArithmeticOp, ColumnName, IntegerWidth, Parameter};
 
-    fn key_expr_of(parts: Vec<Value>) -> Vec<Expr> {
-        parts.into_iter().map(Expr::Literal).collect()
-    }
-
-    fn effects_keyed_by(table_name: &str, key: Vec<Expr>) -> Vec<Effect> {
+    /// The effects that carry a key, each with `bad` as the component at
+    /// `position` of the key it names and valid components elsewhere.
+    fn effects_with_component(table_name: &str, position: usize, bad: Expr) -> Vec<Effect> {
+        let mut key = match table_name {
+            "lines" => line_key_expr(1, 1, 1),
+            _ => vec![Expr::Literal(text("x"))],
+        };
+        key[position] = bad;
+        let valid = if table_name == "lines" {
+            line_key_expr(1, 1, 1)
+        } else {
+            vec![Expr::Literal(text("x"))]
+        };
+        let into = Slot(0);
+        let bound = literal(1);
         vec![
             Effect::Read {
                 table: table(table_name),
                 key: key.clone(),
-                into: Slot(0),
+                into,
             },
             Effect::Insert {
                 table: table(table_name),
@@ -265,53 +279,183 @@ mod kiln_ir_82 {
             Effect::ReadRange {
                 table: table(table_name),
                 start: key.clone(),
+                end: valid.clone(),
+                bound: bound.clone(),
+                into,
+            },
+            Effect::ReadRange {
+                table: table(table_name),
+                start: valid,
                 end: key,
-                bound: literal(1),
-                into: Slot(0),
+                bound,
+                into,
             },
         ]
     }
 
+    fn param(name: &str) -> Expr {
+        Expr::Parameter(parameter(name))
+    }
+
+    fn sum() -> Expr {
+        Expr::Arithmetic(
+            ArithmeticOp::Add,
+            Box::new(literal(1)),
+            Box::new(literal(1)),
+        )
+    }
+
+    /// Reads a `lines` row and a `labels` row into slots 8 and 9, so that
+    /// their columns can be projected into a key.
+    fn rows_to_project_from() -> Vec<Effect> {
+        vec![
+            read_line(1, 1, 1, Slot(8)),
+            Effect::Read {
+                table: table("labels"),
+                key: vec![Expr::Literal(text("x"))],
+                into: Slot(9),
+            },
+        ]
+    }
+
+    fn parameters() -> Vec<Parameter> {
+        vec![
+            typed_parameter("count", IntegerWidth::I64),
+            text_parameter("name"),
+        ]
+    }
+
+    /// `Some(column)` when the program is rejected for that key column.
+    fn rejected_key_column(
+        table_name: &str,
+        position: usize,
+        component: Expr,
+    ) -> Option<(ColumnName, KeyComponentFault)> {
+        for effect in effects_with_component(table_name, position, component) {
+            let mut effects = rows_to_project_from();
+            effects.push(effect);
+            let program =
+                program_with_schema(world_schema(), parameters(), effects, returning_zero());
+            match program.validate() {
+                Err(ProgramError::Function {
+                    fault: FunctionFault::KeyComponent { column, fault, .. },
+                    ..
+                }) => {
+                    return Some((column, fault));
+                }
+                Ok(()) => {}
+                other => panic!("{other:?}"),
+            }
+        }
+        None
+    }
+
     #[test]
-    fn a_component_of_the_wrong_kind_or_outside_its_width_aborts_naming_table_and_column() {
+    fn a_component_that_can_never_fit_its_column_is_rejected_before_any_call_runs() {
+        use KeyComponentFault::{OutsideWidth, WrongKind};
         let cases = [
+            ("lines", 1, Expr::Literal(text("d")), "d", WrongKind),
+            ("lines", 1, literal(128), "d", OutsideWidth),
             (
                 "lines",
-                vec![integer(1), integer(128), integer(0)],
-                "d",
-                KeyComponentFault::OutsideWidth,
-            ),
-            (
-                "lines",
-                vec![integer(i64::from(i32::MIN) - 1), integer(0), integer(0)],
+                0,
+                literal(i64::from(i32::MIN) - 1),
                 "w",
-                KeyComponentFault::OutsideWidth,
+                OutsideWidth,
             ),
-            (
-                "lines",
-                vec![integer(1), integer(1), text("o")],
-                "o",
-                KeyComponentFault::WrongKind,
-            ),
-            (
-                "labels",
-                vec![integer(1)],
-                "code",
-                KeyComponentFault::WrongKind,
-            ),
+            ("labels", 0, literal(1), "code", WrongKind),
+            ("lines", 2, param("name"), "o", WrongKind),
+            ("labels", 0, param("count"), "code", WrongKind),
+            ("labels", 0, sum(), "code", WrongKind),
+            ("lines", 1, project(Slot(9), "note"), "d", WrongKind),
+            ("labels", 0, project(Slot(8), "qty"), "code", WrongKind),
+        ];
+
+        for (table_name, position, component, column_name, fault) in cases {
+            assert_eq!(
+                rejected_key_column(table_name, position, component.clone()),
+                Some((column(column_name), fault)),
+                "{table_name} {component:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_component_that_may_fit_its_column_is_accepted() {
+        let cases = [
+            ("lines", 1, literal(127)),
+            ("labels", 0, Expr::Literal(text("y"))),
+            ("lines", 1, param("count")),
+            ("lines", 1, sum()),
+            ("lines", 1, project(Slot(8), "qty")),
+            ("labels", 0, project(Slot(9), "note")),
+            ("labels", 0, param("name")),
+        ];
+
+        for (table_name, position, component) in cases {
+            assert_eq!(
+                rejected_key_column(table_name, position, component.clone()),
+                None,
+                "{table_name} {component:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_projection_from_a_slot_two_tables_bind_is_left_to_the_run() {
+        let ambiguous_slot = vec![
+            Effect::Read {
+                table: table("labels"),
+                key: vec![Expr::Literal(text("x"))],
+                into: Slot(0),
+            },
+            read_line(1, 1, 1, Slot(0)),
+            Effect::Delete {
+                table: table("labels"),
+                key: vec![project(Slot(0), "d")],
+            },
+        ];
+        let program = world_program(ambiguous_slot, returning_zero());
+        let store = lines_store(&[(1, 1, 1, 1)]);
+
+        let execution = run_ok(&program, &call_under_test(vec![]), &store);
+
+        assert_eq!(
+            aborted_reason(&execution),
+            &AbortReason::KeyComponentRejected {
+                table: table("labels"),
+                column: column("code"),
+                fault: KeyComponentFault::WrongKind
+            }
+        );
+    }
+
+    #[test]
+    fn a_component_outside_its_width_known_only_at_run_time_aborts_naming_table_and_column() {
+        let cases = [
+            ("lines", 1, 128, "d"),
+            ("lines", 0, i64::from(i32::MIN) - 1, "w"),
         ];
         let store = lines_store(&[(1, 1, 1, 1)]);
 
-        for (table_name, key, column_name, fault) in cases {
-            for effect in effects_keyed_by(table_name, key_expr_of(key.clone())) {
-                let execution = run_world(vec![effect.clone()], &store);
+        for (table_name, position, argument, column_name) in cases {
+            for effect in effects_with_component(table_name, position, param("count")) {
+                let program = program_with_schema(
+                    world_schema(),
+                    parameters(),
+                    vec![effect.clone()],
+                    returning_zero(),
+                );
+                let call = call_under_test(vec![integer(argument), text("n")]);
+
+                let execution = run_ok(&program, &call, &store);
 
                 assert_eq!(
                     aborted_reason(&execution),
                     &AbortReason::KeyComponentRejected {
                         table: table(table_name),
                         column: column(column_name),
-                        fault
+                        fault: KeyComponentFault::OutsideWidth
                     },
                     "{effect:?}"
                 );
@@ -322,14 +466,23 @@ mod kiln_ir_82 {
 
     #[test]
     fn a_key_column_with_a_clamping_domain_never_clamps_its_component() {
-        let insert = |bucket: i64| Effect::Insert {
+        let insert = Effect::Insert {
             table: table("buckets"),
-            key: vec![literal(bucket)],
+            key: vec![param("count")],
             columns: Default::default(),
         };
+        let program =
+            program_with_schema(world_schema(), parameters(), vec![insert], returning_zero());
+        let run_with = |bucket: i64| {
+            run_ok(
+                &program,
+                &call_under_test(vec![integer(bucket), text("n")]),
+                &Store::empty(),
+            )
+        };
 
-        let inside_width = run_world(vec![insert(50)], &Store::empty());
-        let outside_width = run_world(vec![insert(i64::from(i32::MAX) + 1)], &Store::empty());
+        let inside_width = run_with(50);
+        let outside_width = run_with(i64::from(i32::MAX) + 1);
 
         assert!(inside_width
             .store

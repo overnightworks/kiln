@@ -18,8 +18,8 @@ use std::collections::HashMap;
 use crate::call::Call;
 use crate::identifiers::{AbortName, ColumnName, IndexName, ParameterName, TableName};
 use crate::ir::{
-    CheckConstraint, ForeignKey, Key, Parameter, Program, ProgramError, Slot, UniqueConstraint,
-    Value,
+    CheckConstraint, ForeignKey, Key, KeyComponentFault, Parameter, Program, ProgramError, Slot,
+    UniqueConstraint, Value,
 };
 use crate::store::{KeyedRow, Store};
 
@@ -151,13 +151,6 @@ pub enum AbortReason {
         constraint: CheckConstraint,
         key: Key,
     },
-}
-
-/// Why a key component cannot name a row (D8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyComponentFault {
-    WrongKind,
-    OutsideWidth,
 }
 
 /// Why checked arithmetic overflowed, or a value fell outside its

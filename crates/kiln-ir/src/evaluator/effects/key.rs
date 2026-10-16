@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use crate::identifiers::TableName;
-use crate::ir::{Column, ColumnType, Expr, Key, Slot, Value};
+use crate::ir::{Expr, Key, Slot};
 
-use super::super::{AbortReason, Binding, CallContext, KeyComponentFault, Outcome};
+use super::super::{AbortReason, Binding, CallContext, Outcome};
 use super::resolve_or_abort;
 
 /// Resolves a key expression of `table` to the key it names, checking each
@@ -29,7 +29,7 @@ pub(super) fn resolve_key(
         let column = declared
             .column(name)
             .expect("a validated key names declared columns");
-        if let Some(fault) = component_fault(column, &value) {
+        if let Some(fault) = column.key_component_fault(&value) {
             return Err(Outcome::Aborted {
                 reason: AbortReason::KeyComponentRejected {
                     table: table.clone(),
@@ -41,15 +41,4 @@ pub(super) fn resolve_key(
         components.push(value);
     }
     Ok(Key(components))
-}
-
-fn component_fault(column: &Column, value: &Value) -> Option<KeyComponentFault> {
-    match (column.kind, value) {
-        (ColumnType::Integer { width, .. }, Value::Integer(component)) => {
-            let (min, max) = width.range();
-            (!(min..=max).contains(component)).then_some(KeyComponentFault::OutsideWidth)
-        }
-        (ColumnType::Text, Value::Text(_)) => None,
-        _ => Some(KeyComponentFault::WrongKind),
-    }
 }

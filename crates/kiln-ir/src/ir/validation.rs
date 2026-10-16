@@ -9,7 +9,8 @@ use crate::identifiers::{ColumnName, FunctionName, TableName};
 use super::block::{Block, Terminal};
 use super::effect::Effect;
 use super::expression::Expr;
-use super::schema::{Schema, SchemaError, Table};
+use super::key_kinds::FunctionScope;
+use super::schema::{KeyComponentFault, SchemaError, Table};
 
 /// Why a [`Program`] is rejected before any call runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,11 +47,19 @@ pub enum FunctionFault {
         table: TableName,
         column: ColumnName,
     },
+    /// A key component that no call can make fit its key column: a literal
+    /// of another kind or outside the column's width, or an expression whose
+    /// static kind differs from the column's (D8).
+    KeyComponent {
+        table: TableName,
+        column: ColumnName,
+        fault: KeyComponentFault,
+    },
 }
 
-pub(super) fn check_block(schema: &Schema, block: &Block) -> Result<(), FunctionFault> {
+pub(super) fn check_block(scope: &FunctionScope, block: &Block) -> Result<(), FunctionFault> {
     for effect in &block.effects {
-        check_effect(schema, effect)?;
+        check_effect(scope, effect)?;
     }
     match &block.terminal {
         Terminal::Return(_) | Terminal::Abort(_) => Ok(()),
@@ -59,16 +68,16 @@ pub(super) fn check_block(schema: &Schema, block: &Block) -> Result<(), Function
             when_absent,
             ..
         } => {
-            check_block(schema, when_present)?;
-            check_block(schema, when_absent)
+            check_block(scope, when_present)?;
+            check_block(scope, when_absent)
         }
     }
 }
 
-fn check_effect(schema: &Schema, effect: &Effect) -> Result<(), FunctionFault> {
+fn check_effect(scope: &FunctionScope, effect: &Effect) -> Result<(), FunctionFault> {
     match effect {
         Effect::Read { table, key, .. } | Effect::Delete { table, key } => {
-            check_key(schema, table, key).map(drop)
+            check_key(scope, table, key).map(drop)
         }
         Effect::Insert {
             table,
@@ -80,23 +89,26 @@ fn check_effect(schema: &Schema, effect: &Effect) -> Result<(), FunctionFault> {
             key,
             columns,
         } => {
-            let declared = check_key(schema, table, key)?;
+            let declared = check_key(scope, table, key)?;
             check_written_columns(declared, columns)
         }
         Effect::ReadRange {
             table, start, end, ..
         } => {
-            check_key(schema, table, start)?;
-            check_key(schema, table, end).map(drop)
+            check_key(scope, table, start)?;
+            check_key(scope, table, end).map(drop)
         }
         Effect::ReadIndexRange { .. } => Ok(()),
         Effect::Iterate { body, .. } => body
             .iter()
-            .try_for_each(|effect| check_effect(schema, effect)),
+            .try_for_each(|effect| check_effect(scope, effect)),
     }
 }
 
-fn keyed_table<'a>(schema: &'a Schema, name: &TableName) -> Result<&'a Table, FunctionFault> {
+fn keyed_table<'a>(
+    schema: &'a super::schema::Schema,
+    name: &TableName,
+) -> Result<&'a Table, FunctionFault> {
     let table = schema
         .table(name)
         .ok_or_else(|| FunctionFault::UndeclaredTable(name.clone()))?;
@@ -106,13 +118,14 @@ fn keyed_table<'a>(schema: &'a Schema, name: &TableName) -> Result<&'a Table, Fu
     Ok(table)
 }
 
-/// The declared, keyed `table` when `key` has one expression per key column.
+/// The declared, keyed `table` when `key` has one expression per key column,
+/// each of a kind and value its key column accepts.
 fn check_key<'a>(
-    schema: &'a Schema,
+    scope: &FunctionScope<'a>,
     table: &TableName,
     key: &[Expr],
 ) -> Result<&'a Table, FunctionFault> {
-    let declared = keyed_table(schema, table)?;
+    let declared = keyed_table(scope.schema, table)?;
     let expected = declared.key_columns().len();
     if key.len() != expected {
         return Err(FunctionFault::KeyArity {
@@ -121,6 +134,7 @@ fn check_key<'a>(
             given: key.len(),
         });
     }
+    scope.check_key_kinds(declared, key)?;
     Ok(declared)
 }
 

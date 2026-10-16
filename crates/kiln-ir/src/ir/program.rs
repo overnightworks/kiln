@@ -1,6 +1,7 @@
 use crate::identifiers::{FunctionName, ParameterName};
 
 use super::block::Block;
+use super::key_kinds::FunctionScope;
 use super::schema::{IntegerWidth, Schema};
 use super::validation::{check_block, ProgramError};
 
@@ -53,7 +54,8 @@ impl Program {
     pub fn validate(&self) -> Result<(), ProgramError> {
         self.schema.validate()?;
         for function in &self.functions {
-            check_block(&self.schema, &function.body).map_err(|fault| ProgramError::Function {
+            let scope = FunctionScope::new(&self.schema, function);
+            check_block(&scope, &function.body).map_err(|fault| ProgramError::Function {
                 function: function.name.clone(),
                 fault,
             })?;

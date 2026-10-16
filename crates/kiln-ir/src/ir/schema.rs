@@ -59,6 +59,28 @@ pub struct Column {
     pub kind: ColumnType,
 }
 
+impl Column {
+    /// Why `value` cannot be this column's component of a key: another kind
+    /// than the column's, or an integer outside its declared width (D8).
+    pub fn key_component_fault(&self, value: &Value) -> Option<KeyComponentFault> {
+        match (self.kind, value) {
+            (ColumnType::Integer { width, .. }, Value::Integer(component)) => {
+                let (min, max) = width.range();
+                (!(min..=max).contains(component)).then_some(KeyComponentFault::OutsideWidth)
+            }
+            (ColumnType::Text, Value::Text(_)) => None,
+            _ => Some(KeyComponentFault::WrongKind),
+        }
+    }
+}
+
+/// Why a key component cannot name a row (D8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyComponentFault {
+    WrongKind,
+    OutsideWidth,
+}
+
 /// A unique constraint (D1): no two rows of `table` may hold the same value
 /// in `column` in a transaction's final state (D2).
 #[derive(Debug, Clone, PartialEq, Eq)]
