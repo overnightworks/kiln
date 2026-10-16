@@ -45,9 +45,12 @@ parameter list.
 **Outcomes.** A call's outcome is a `kiln_ir::Outcome`: `Committed {
 response: Value::Integer(n) }` or `Aborted { reason }`. A declared failure is
 `AbortReason::Declared(name)`, written `abort name`. Two families also reach
-a structural failure, written out in full where it occurs:
-`AbortReason::Overflow(OverflowReason::Width { .. })` (wallet, §7) and
-`AbortReason::CheckViolation { .. }` (only inside a mutant, §5.5). An aborted
+a structural failure, and a third reaches one only outside its measured
+batches, each written out in full where it occurs:
+`AbortReason::Overflow(OverflowReason::Width { .. })` (wallet, §7),
+`AbortReason::CheckViolation { .. }` (only inside a mutant, §5.5) and
+`AbortReason::Overflow(OverflowReason::Arithmetic)` (sequence, §4.2, only
+after about `9.2 · 10^18` calls). An aborted
 call changes no state and does not stop later calls (D4, D6).
 
 **Check order.** Each function tests its failures in the order its body lists
@@ -77,12 +80,26 @@ abort").
   |A|^3 + |A|^4)`, the number of (initial store, batch) pairs. States reached
   from `X` during a batch may lie outside `X`; `replay` judges them exactly.
 
-Every family's checking domain is finite, so on that domain alone every
-family has a constant-size exact table of its transformer. E3's expected
-misses (§7, §8) and the bound class are therefore meaningful only if no
-candidate may denote a transformer by enumerating it over the checking domain.
-This freeze relies on that requirement; the candidate language that enforces
-it is S2's (§10, question 1).
+**Tabulation versus finite state** (head ruling on #77, 16.10.2026). Every
+family's checking domain is finite, so on that domain alone every family has
+a constant-size exact table of its transformer. E3's expected misses (§7,
+§8) and the bound class are therefore meaningful only under this rule:
+
+- A candidate **may** enumerate a state space that the family's frozen
+  semantics itself declares finite and fixed, independent of any checking
+  domain. The order lifecycle's four statuses (§6) and the dispatcher's five
+  cursor positions (§5) are such spaces, so a transformation table over
+  `{0, 1, 2, 3}` is a legitimate, natural representation of an order-lifecycle
+  summary, and a table over `{0, …, 4}` one of a dispatcher summary.
+- A candidate **may not** enumerate values that only the checking domain
+  bounds while the family's semantics leaves them unbounded or bounds them
+  only by a column width: balances (§7), quotas (§3), owners (§8) and
+  sequence values (§4). Withholding checking-domain values as inputs is not
+  enough; encoding the same lookup through literals, branches or a domain
+  derived from the schema is enumeration too.
+
+This document states the distinction; S2's grammar enforces it (§10,
+question 1).
 
 **Mutants.** Each family's list is the preregistered set of invalid
 candidates against which E3's "zero false acceptances" condition is judged
@@ -125,11 +142,11 @@ it is reported, never dropped silently.
 | § | Family | Guard behaviour | Expected algebraic character | Expected against the bound class |
 |---|---|---|---|---|
 | 3 | Quota allocation (E2, by reference) | two-sided data-dependent saturation that shortens the grant, plus aborts at exactly empty and exactly full | clipped translation (E2 §2.4) | admitted (E2's hand summary is fixed-size) |
-| 4 | Sequence with restart | no data-dependent guard: only an argument range test | translate-or-overwrite: each batch shifts the value or overwrites it and then shifts it; non-commutative, not invertible | admitted |
+| 4 | Sequence with restart | no data-dependent guard on the declared domain (§4.2): only an argument range test | translate-or-overwrite on the declared domain: each batch shifts the value or overwrites it and then shifts it; non-commutative, not invertible | admitted |
 | 5 | Round-robin dispatcher | data-dependent wrap branch that chooses the written value and never aborts | cyclic group of order 5: commutative, invertible | admitted |
 | 6 | Order lifecycle | equality tests on an enumerated status, each selecting a named abort; no arithmetic | transformation monoid of a 4-element set: non-commutative, non-invertible, finite | admitted |
 | 7 | Strict wallet | all-or-nothing threshold comparing the stored balance with an argument, plus a width-overflow abort at the top | piecewise translation whose breakpoints come from the arguments and grow in number with batch length | **expected miss** |
-| 8 | Lease table | row presence on an argument-chosen key, and equality of a stored value with an argument; inserts and deletes rows | per-key maps on `{free} ∪ owners` that pin each released owner value as an exception | **expected miss** (proved, §8.5) |
+| 8 | Lease table | row presence on an argument-chosen key, and equality of a stored value with an argument; inserts and deletes rows | per-key maps on `{free} ∪ owners` that pin each released owner value as an exception | **expected miss** (§8.5, conditional on the tabulation rule of §1) |
 
 No two rows share a guard behaviour, and no two share an algebra up to
 renaming of constants: the dispatcher is the only group, the order lifecycle
@@ -211,8 +228,11 @@ fn restart(value: Integer(I64)):
   return s0.last_value
 ```
 
-**Guard.** None that depends on the store: every `next_value` commits, and
-`restart` fails only on its argument. Every call reads and writes
+**Guard.** None that depends on the store on the declared domain: from an
+initial value in `[0, 1 000 000]` and within a batch of at most 256 calls,
+every `next_value` commits, and `restart` fails only on its argument. The one
+store-dependent failure, the arithmetic overflow of §4.2, lies outside that
+domain. Every call reads and writes
 `sequence[0]`. **Character.** Translate-or-overwrite.
 
 ### 4.2 Outcomes
@@ -221,15 +241,25 @@ With `v` the last value before the call:
 
 | Call | Condition, tested in this order | Outcome | `last_value` after |
 |---|---|---|---|
-| `next_value()` | always | commit `v + 1` | `v + 1` |
+| `next_value()` | `v = i64::MAX` | abort `Overflow(Arithmetic)` | `v` |
+| | otherwise | commit `v + 1` | `v + 1` |
 | `restart(w)` | `w < 1` or `w > 1000000` | abort `invalid_value` | `v` |
 | | otherwise | commit `v` | `w` |
 
 **Bounds and overflow.** The family domain is an initial `last_value` in
 `[0, 1 000 000]`. `next_value` has no ceiling, so the value may exceed
-`V_MAX`; after at most 256 calls it is at most `1 000 256`, and reaching
-`i64::MAX` would take about `9.2 · 10^18` calls, so no `i64` or width
-overflow is reachable. The check constraint never fires: no call writes a
+`V_MAX`. Today's IR adds with checked `i64` arithmetic, so the `next_value`
+call that would exceed `i64::MAX` aborts with
+`AbortReason::Overflow(OverflowReason::Arithmetic)`, changes no state, and
+every later `next_value` aborts the same way until a `restart` commits. The
+column is `I64`, so no width overflow precedes it. That abort lies outside
+the declared domain: from an initial value in `[0, 1 000 000]`, a batch of at
+most 256 calls leaves the value at most `1 000 256`, so there every
+`next_value` commits; reaching `i64::MAX` would take about `9.2 · 10^18`
+calls. The translate-or-overwrite character of §2 holds on that declared
+domain; on unrestricted batches the translation is partial, undefined (an
+abort) for a step past `i64::MAX`, and a summary must reproduce that abort
+to be exact there. The check constraint never fires: no call writes a
 negative value. An argument outside `I64` cannot be expressed as a
 `Value::Integer`, and none is generated.
 
@@ -813,7 +843,7 @@ each holder of resource 0 (resource 1 free throughout):
 
 The released owner `1` behaves like `free`; owner `3` keeps the resource.
 
-### 8.5 Why this family misses
+### 8.5 Why this family is expected to miss
 
 Take, on the family domain, the batch `B(o_1, …, o_k; o) = [release(0, o_1),
 …, release(0, o_k), acquire(0, o)]` with distinct owners `o_1 … o_k` and an
@@ -835,12 +865,24 @@ sets `{o_1, …, o_k}` therefore denote different transformers, and batches of
 `k + 1` calls denote at least `C(999 999, k)` distinct transformers. An exact
 summary must distinguish them, so its size is at least `log2 C(999 999, k)`
 bits, more than `11 k` bits for every `k <= 256` (since `C(m, k) >= (m /
-k)^k` and `999 999 / 256 > 3 900 > 2^11`). That lower bound grows with batch
-length, so no exact summary of this family has a size independent of batch
-size on family-domain batches: the family misses the bound class whenever
-the measured batches contain such release sequences. The checking domain's
-three owners cannot show this growth by themselves; that is why the
-family-domain rule of §1 matters here.
+k)^k` and `999 999 / 256 > 3 900 > 2^11`).
+
+That counting argument has a precise scope: it lower-bounds the number of
+distinguishable transformers that batches of `k + 1` calls denote, and so
+the information an exact summary of such a batch must carry. It does not by
+itself exclude a representation of fixed size. The owner universe is finite,
+so a full-domain transformation table over `{free} ∪ [1, 1 000 000]` per
+resource has a size and a composition cost independent of batch length, and
+the growing lower bound stays below that table's size. Such a table
+enumerates owners, which the family's semantics bounds only through its
+check constraints, and §1's tabulation rule forbids exactly that. The miss
+is therefore an expectation that rests on that rule and on the concrete
+representation restrictions S2's grammar imposes, not a proof. Under them,
+the growing number of transformers is why this freeze expects no admissible
+summary; an admission would be a result worth recording, and would also
+call S2's enforcement of the rule into question. The checking domain's three
+owners cannot show this growth by themselves; that is why the family-domain
+rule of §1 matters here.
 
 ### 8.6 Mutants
 
@@ -869,7 +911,7 @@ what a summary keeping one exception owner per resource would get right.
 | Dispatcher | 5 | 7 | 4 | 14 000 | 9 (D-1 … D-9) | admitted |
 | Order lifecycle | 4 | 4 | 4 | 1 360 | 8 (O-1 … O-8) | admitted |
 | Strict wallet | 16 | 12 | 4 | 361 920 | 9 (W-1 … W-9) | miss |
-| Lease table | 16 | 16 | 4 | 1 118 464 | 9 (L-1 … L-9) | miss |
+| Lease table | 16 | 16 | 4 | 1 118 464 | 9 (L-1 … L-9) | miss (conditional on §1's tabulation rule, §8.5) |
 
 Fifty-two preregistered mutants in total, each with a hand-derived witness
 inside its family's checking domain.
@@ -878,20 +920,27 @@ inside its family's checking domain.
 
 1. **No tabulation over the checking domain (§1).** On a finite checking
    domain every family has a constant-size exact table, so the bound class
-   and both expected misses are meaningful only if no candidate enumerates a
-   transformer over the checking domain's values, and if the bound class is
-   measured on family-domain batches. Recommendation: S2's candidate language
-   takes no checking-domain value as an input, a candidate's size is measured
-   on its representation, and the bound-class measurement batches are drawn
-   from the family domain (for the lease, with owners from the full `[1,
-   1 000 000]`).
+   and both expected misses are meaningful only under the head's ruling
+   stated in §1: enumerating a semantically finite, fixed state space (order
+   statuses, dispatcher cursor positions) is legitimate; enumerating values
+   only the checking domain bounds (balances, quotas, owners, sequence
+   values) is forbidden. S2 owns its enforcement in the grammar.
+   Recommendation: S2's candidate language takes no checking-domain value as
+   an input and offers no construct that encodes such a lookup through
+   literals, branches or a schema-derived domain, a candidate's size is
+   measured on its representation, and the bound-class measurement batches
+   are drawn from the family domain (for the lease, with owners from the
+   full `[1, 1 000 000]`).
 2. **Two expected misses (§2).** With the wallet and the lease expected to
    miss, E3's "at least 4 of 6" requires all four other families to be
-   admitted. Recommendation: keep both. The lease is a provable miss and
-   therefore checks that the bound-class measurement catches growth (a
-   candidate valid over the checking domain but growing on family-domain
-   batches must count as a miss); the wallet is the open case the source
-   ideation names. Replacing the lease with a bounded-owner variant would
+   admitted. Recommendation: keep both. Both are expectations, and neither
+   predetermines the measured outcome: E3 records whatever the measurement
+   shows. The lease's expectation rests on the counting argument of §8.5 and
+   on the tabulation rule, so it also checks that the bound-class
+   measurement catches growth (a candidate valid over the checking domain
+   but growing on family-domain batches must count as a miss); the wallet is
+   the open case the source ideation names. Keeping both leaves no expected
+   spare admission. Replacing the lease with a bounded-owner variant would
    make it an admit, but its algebra would then collide with the order
    lifecycle's finite monoid.
 3. **Which mutants are tested (§1).** `docs/experiments.md` asks for mutants
