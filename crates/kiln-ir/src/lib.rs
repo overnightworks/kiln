@@ -11,14 +11,16 @@
 //! the reference meaning it implements is recorded in `docs/concept.md`
 //! §2.2, the single owner of that meaning.
 //!
-//! The crate has no I/O: [`run`] is a pure function from a [`Program`], a
-//! [`Call`] and a [`Store`] to an [`Execution`], or a typed [`SchemaError`]
-//! if the program's own schema is not internally satisfiable (D3).
+//! The crate has no I/O: [`run`] is a pure function from a [`Program`],
+//! a [`Call`] and a [`Store`] to an [`Execution`], and [`replay`] chains
+//! it over a call sequence (D4). Both return a typed [`SchemaError`] if
+//! the program's own schema is not internally satisfiable (D3).
 
 mod call;
 mod evaluator;
 mod identifiers;
 mod ir;
+mod replay;
 mod store;
 
 pub use call::Call;
@@ -26,10 +28,11 @@ pub use evaluator::{
     run, AbortReason, AccessKind, AccessLogEntry, AccessOrigin, AccessTarget, AccessedColumns,
     Execution, Outcome, OverflowReason,
 };
-pub use identifiers::{AbortName, ColumnName, FunctionName, ParameterName, TableName};
+pub use identifiers::{AbortName, ColumnName, FunctionName, IndexName, ParameterName, TableName};
 pub use ir::{
-    ArithmeticOp, Block, ClampDomain, Column, ColumnType, Condition, Effect, Expr, Function,
-    IntegerWidth, Parameter, ParameterType, Program, Row, Schema, SchemaError, Slot, Table,
-    Terminal, UniqueConstraint, Value,
+    ArithmeticOp, Block, CheckConstraint, ClampDomain, Column, ColumnType, Comparison, Condition,
+    Effect, Expr, ForeignKey, Function, Index, IntegerWidth, Parameter, ParameterType, Program,
+    Relation, Row, Schema, SchemaError, Slot, Table, Terminal, UniqueConstraint, Value,
 };
-pub use store::Store;
+pub use replay::replay;
+pub use store::{KeyedRow, Store};

@@ -1,0 +1,332 @@
+TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
+Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Running breadth-first search Model-Checking with fp 0 and seed -2806981249289476509 with 1 worker on 12 cores with 15518MB heap and 64MB offheap memory [pid: 623728] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-10-16 00:44:37)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-10-16 00:44:38.
+Error: Invariant WidenCycleBothUnreached is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ seq = [t1 |-> 0, t2 |-> 0]
+/\ resp = [t1 |-> <<>>, t2 |-> <<>>]
+/\ pc = [t1 |-> 0, t2 |-> 0]
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >>
+/\ widened = [t1 |-> {}, t2 |-> {}]
+/\ reserved = [t1 |-> <<0, 0>>, t2 |-> <<0, 0>>]
+/\ draws = [ t1 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>>,
+  t2 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>> ]
+/\ status = [t1 |-> "pending", t2 |-> "pending"]
+/\ held = [t1 |-> {}, t2 |-> {}]
+/\ wr = [t1 |-> << >>, t2 |-> << >>]
+
+State 2: <Dispatch line 351, col 3 to line 353, col 75 of module Kernel>
+/\ seq = [t1 |-> 1, t2 |-> 0]
+/\ resp = [t1 |-> <<>>, t2 |-> <<>>]
+/\ pc = [t1 |-> 0, t2 |-> 0]
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >>
+/\ widened = [t1 |-> {}, t2 |-> {}]
+/\ reserved = [t1 |-> <<0, 0>>, t2 |-> <<0, 0>>]
+/\ draws = [ t1 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>>,
+  t2 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>> ]
+/\ status = [t1 |-> "pending", t2 |-> "pending"]
+/\ held = [t1 |-> {}, t2 |-> {}]
+/\ wr = [t1 |-> << >>, t2 |-> << >>]
+
+State 3: <Acquire line 364, col 3 to line 372, col 51 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
+/\ resp = [t1 |-> <<>>, t2 |-> <<>>]
+/\ pc = [t1 |-> 0, t2 |-> 0]
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >>
+/\ widened = [t1 |-> {}, t2 |-> {}]
+/\ reserved = [t1 |-> <<0, 0>>, t2 |-> <<0, 0>>]
+/\ draws = [ t1 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>>,
+  t2 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>> ]
+/\ status = [t1 |-> "active", t2 |-> "pending"]
+/\ held = [t1 |-> {[kind |-> "S", cov |-> {2}], [kind |-> "X", cov |-> {2}]}, t2 |-> {}]
+/\ wr = [t1 |-> << >>, t2 |-> << >>]
+
+State 4: <DoOp line 384, col 3 to line 407, col 35 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
+/\ resp = [t1 |-> <<[present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0]>>, t2 |-> <<>>]
+/\ pc = [t1 |-> 1, t2 |-> 0]
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >>
+/\ widened = [t1 |-> {}, t2 |-> {}]
+/\ reserved = [t1 |-> <<0, 0>>, t2 |-> <<0, 0>>]
+/\ draws = [ t1 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>>,
+  t2 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>> ]
+/\ status = [t1 |-> "active", t2 |-> "pending"]
+/\ held = [t1 |-> {[kind |-> "S", cov |-> {2}], [kind |-> "X", cov |-> {2}]}, t2 |-> {}]
+/\ wr = [ t1 |-> (2 :> [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0]),
+  t2 |-> << >> ]
+
+State 5: <WidenAndRestart line 418, col 3 to line 429, col 17 of module Kernel>
+/\ seq = [t1 |-> 1, t2 |-> 0]
+/\ resp = [t1 |-> <<>>, t2 |-> <<>>]
+/\ pc = [t1 |-> 0, t2 |-> 0]
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >>
+/\ widened = [t1 |-> {[kind |-> "S", cov |-> {1}], [kind |-> "S", cov |-> {2}]}, t2 |-> {}]
+/\ reserved = [t1 |-> <<0, 0>>, t2 |-> <<0, 0>>]
+/\ draws = [ t1 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>>,
+  t2 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>> ]
+/\ status = [t1 |-> "pending", t2 |-> "pending"]
+/\ held = [t1 |-> {}, t2 |-> {}]
+/\ wr = [t1 |-> << >>, t2 |-> << >>]
+
+State 6: <Acquire line 364, col 3 to line 372, col 51 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
+/\ resp = [t1 |-> <<>>, t2 |-> <<>>]
+/\ pc = [t1 |-> 0, t2 |-> 0]
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >>
+/\ widened = [t1 |-> {[kind |-> "S", cov |-> {1}], [kind |-> "S", cov |-> {2}]}, t2 |-> {}]
+/\ reserved = [t1 |-> <<0, 0>>, t2 |-> <<0, 0>>]
+/\ draws = [ t1 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>>,
+  t2 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>> ]
+/\ status = [t1 |-> "active", t2 |-> "pending"]
+/\ held = [ t1 |->
+      { [kind |-> "S", cov |-> {1}],
+        [kind |-> "S", cov |-> {2}],
+        [kind |-> "X", cov |-> {2}] },
+  t2 |-> {} ]
+/\ wr = [t1 |-> << >>, t2 |-> << >>]
+
+State 7: <DoOp line 384, col 3 to line 407, col 35 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
+/\ resp = [t1 |-> <<[present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0]>>, t2 |-> <<>>]
+/\ pc = [t1 |-> 1, t2 |-> 0]
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >>
+/\ widened = [t1 |-> {[kind |-> "S", cov |-> {1}], [kind |-> "S", cov |-> {2}]}, t2 |-> {}]
+/\ reserved = [t1 |-> <<0, 0>>, t2 |-> <<0, 0>>]
+/\ draws = [ t1 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>>,
+  t2 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>> ]
+/\ status = [t1 |-> "active", t2 |-> "pending"]
+/\ held = [ t1 |->
+      { [kind |-> "S", cov |-> {1}],
+        [kind |-> "S", cov |-> {2}],
+        [kind |-> "X", cov |-> {2}] },
+  t2 |-> {} ]
+/\ wr = [ t1 |-> (2 :> [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0]),
+  t2 |-> << >> ]
+
+State 8: <DoOp line 384, col 3 to line 407, col 35 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
+/\ resp = [ t1 |->
+      << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+         << [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0],
+            [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >> >>,
+  t2 |-> <<>> ]
+/\ pc = [t1 |-> 2, t2 |-> 0]
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >>
+/\ widened = [t1 |-> {[kind |-> "S", cov |-> {1}], [kind |-> "S", cov |-> {2}]}, t2 |-> {}]
+/\ reserved = [t1 |-> <<0, 0>>, t2 |-> <<0, 0>>]
+/\ draws = [ t1 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>>,
+  t2 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>> ]
+/\ status = [t1 |-> "active", t2 |-> "pending"]
+/\ held = [ t1 |->
+      { [kind |-> "S", cov |-> {1}],
+        [kind |-> "S", cov |-> {2}],
+        [kind |-> "X", cov |-> {2}] },
+  t2 |-> {} ]
+/\ wr = [ t1 |-> (2 :> [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0]),
+  t2 |-> << >> ]
+
+State 9: <Commit line 436, col 3 to line 443, col 41 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
+/\ resp = [ t1 |->
+      << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+         << [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0],
+            [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >> >>,
+  t2 |-> <<>> ]
+/\ pc = [t1 |-> 2, t2 |-> 0]
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0] >>
+/\ widened = [t1 |-> {[kind |-> "S", cov |-> {1}], [kind |-> "S", cov |-> {2}]}, t2 |-> {}]
+/\ reserved = [t1 |-> <<0, 0>>, t2 |-> <<0, 0>>]
+/\ draws = [ t1 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>>,
+  t2 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>> ]
+/\ status = [t1 |-> "committed", t2 |-> "pending"]
+/\ held = [t1 |-> {}, t2 |-> {}]
+/\ wr = [t1 |-> << >>, t2 |-> << >>]
+
+State 10: <Dispatch line 351, col 3 to line 353, col 75 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 1]
+/\ resp = [ t1 |->
+      << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+         << [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0],
+            [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >> >>,
+  t2 |-> <<>> ]
+/\ pc = [t1 |-> 2, t2 |-> 0]
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0] >>
+/\ widened = [t1 |-> {[kind |-> "S", cov |-> {1}], [kind |-> "S", cov |-> {2}]}, t2 |-> {}]
+/\ reserved = [t1 |-> <<0, 0>>, t2 |-> <<0, 0>>]
+/\ draws = [ t1 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>>,
+  t2 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>> ]
+/\ status = [t1 |-> "committed", t2 |-> "pending"]
+/\ held = [t1 |-> {}, t2 |-> {}]
+/\ wr = [t1 |-> << >>, t2 |-> << >>]
+
+State 11: <Acquire line 364, col 3 to line 372, col 51 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
+/\ resp = [ t1 |->
+      << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+         << [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0],
+            [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >> >>,
+  t2 |-> <<>> ]
+/\ pc = [t1 |-> 2, t2 |-> 0]
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0] >>
+/\ widened = [t1 |-> {[kind |-> "S", cov |-> {1}], [kind |-> "S", cov |-> {2}]}, t2 |-> {}]
+/\ reserved = [t1 |-> <<0, 0>>, t2 |-> <<0, 0>>]
+/\ draws = [ t1 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>>,
+  t2 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>> ]
+/\ status = [t1 |-> "committed", t2 |-> "active"]
+/\ held = [t1 |-> {}, t2 |-> {[kind |-> "S", cov |-> {1}], [kind |-> "X", cov |-> {1}]}]
+/\ wr = [t1 |-> << >>, t2 |-> << >>]
+
+State 12: <DoOp line 384, col 3 to line 407, col 35 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
+/\ resp = [ t1 |->
+      << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+         << [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0],
+            [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >> >>,
+  t2 |-> <<[present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0]>> ]
+/\ pc = [t1 |-> 2, t2 |-> 1]
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0] >>
+/\ widened = [t1 |-> {[kind |-> "S", cov |-> {1}], [kind |-> "S", cov |-> {2}]}, t2 |-> {}]
+/\ reserved = [t1 |-> <<0, 0>>, t2 |-> <<0, 0>>]
+/\ draws = [ t1 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>>,
+  t2 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>> ]
+/\ status = [t1 |-> "committed", t2 |-> "active"]
+/\ held = [t1 |-> {}, t2 |-> {[kind |-> "S", cov |-> {1}], [kind |-> "X", cov |-> {1}]}]
+/\ wr = [ t1 |-> << >>,
+  t2 |-> <<[present |-> TRUE, val |-> 2, bal |-> 0, parent |-> 0]>> ]
+
+State 13: <WidenAndRestart line 418, col 3 to line 429, col 17 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 1]
+/\ resp = [ t1 |->
+      << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+         << [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0],
+            [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >> >>,
+  t2 |-> <<>> ]
+/\ pc = [t1 |-> 2, t2 |-> 0]
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0] >>
+/\ widened = [ t1 |-> {[kind |-> "S", cov |-> {1}], [kind |-> "S", cov |-> {2}]},
+  t2 |-> {[kind |-> "S", cov |-> {1}], [kind |-> "S", cov |-> {2}]} ]
+/\ reserved = [t1 |-> <<0, 0>>, t2 |-> <<0, 0>>]
+/\ draws = [ t1 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>>,
+  t2 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>> ]
+/\ status = [t1 |-> "committed", t2 |-> "pending"]
+/\ held = [t1 |-> {}, t2 |-> {}]
+/\ wr = [t1 |-> << >>, t2 |-> << >>]
+
+State 14: <Acquire line 364, col 3 to line 372, col 51 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
+/\ resp = [ t1 |->
+      << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+         << [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0],
+            [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >> >>,
+  t2 |-> <<>> ]
+/\ pc = [t1 |-> 2, t2 |-> 0]
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0] >>
+/\ widened = [ t1 |-> {[kind |-> "S", cov |-> {1}], [kind |-> "S", cov |-> {2}]},
+  t2 |-> {[kind |-> "S", cov |-> {1}], [kind |-> "S", cov |-> {2}]} ]
+/\ reserved = [t1 |-> <<0, 0>>, t2 |-> <<0, 0>>]
+/\ draws = [ t1 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>>,
+  t2 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>> ]
+/\ status = [t1 |-> "committed", t2 |-> "active"]
+/\ held = [ t1 |-> {},
+  t2 |->
+      { [kind |-> "S", cov |-> {1}],
+        [kind |-> "S", cov |-> {2}],
+        [kind |-> "X", cov |-> {1}] } ]
+/\ wr = [t1 |-> << >>, t2 |-> << >>]
+
+State 15: <DoOp line 384, col 3 to line 407, col 35 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
+/\ resp = [ t1 |->
+      << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+         << [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0],
+            [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >> >>,
+  t2 |-> <<[present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0]>> ]
+/\ pc = [t1 |-> 2, t2 |-> 1]
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0] >>
+/\ widened = [ t1 |-> {[kind |-> "S", cov |-> {1}], [kind |-> "S", cov |-> {2}]},
+  t2 |-> {[kind |-> "S", cov |-> {1}], [kind |-> "S", cov |-> {2}]} ]
+/\ reserved = [t1 |-> <<0, 0>>, t2 |-> <<0, 0>>]
+/\ draws = [ t1 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>>,
+  t2 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>> ]
+/\ status = [t1 |-> "committed", t2 |-> "active"]
+/\ held = [ t1 |-> {},
+  t2 |->
+      { [kind |-> "S", cov |-> {1}],
+        [kind |-> "S", cov |-> {2}],
+        [kind |-> "X", cov |-> {1}] } ]
+/\ wr = [ t1 |-> << >>,
+  t2 |-> <<[present |-> TRUE, val |-> 2, bal |-> 0, parent |-> 0]>> ]
+
+State 16: <DoOp line 384, col 3 to line 407, col 35 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
+/\ resp = [ t1 |->
+      << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+         << [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0],
+            [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >> >>,
+  t2 |->
+      << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+         << [present |-> TRUE, val |-> 2, bal |-> 0, parent |-> 0],
+            [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0] >> >> ]
+/\ pc = [t1 |-> 2, t2 |-> 2]
+/\ db = << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0] >>
+/\ widened = [ t1 |-> {[kind |-> "S", cov |-> {1}], [kind |-> "S", cov |-> {2}]},
+  t2 |-> {[kind |-> "S", cov |-> {1}], [kind |-> "S", cov |-> {2}]} ]
+/\ reserved = [t1 |-> <<0, 0>>, t2 |-> <<0, 0>>]
+/\ draws = [ t1 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>>,
+  t2 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>> ]
+/\ status = [t1 |-> "committed", t2 |-> "active"]
+/\ held = [ t1 |-> {},
+  t2 |->
+      { [kind |-> "S", cov |-> {1}],
+        [kind |-> "S", cov |-> {2}],
+        [kind |-> "X", cov |-> {1}] } ]
+/\ wr = [ t1 |-> << >>,
+  t2 |-> <<[present |-> TRUE, val |-> 2, bal |-> 0, parent |-> 0]>> ]
+
+State 17: <Commit line 436, col 3 to line 443, col 41 of module Kernel>
+/\ seq = [t1 |-> 0, t2 |-> 0]
+/\ resp = [ t1 |->
+      << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+         << [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0],
+            [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0] >> >>,
+  t2 |->
+      << [present |-> TRUE, val |-> 0, bal |-> 0, parent |-> 0],
+         << [present |-> TRUE, val |-> 2, bal |-> 0, parent |-> 0],
+            [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0] >> >> ]
+/\ pc = [t1 |-> 2, t2 |-> 2]
+/\ db = << [present |-> TRUE, val |-> 2, bal |-> 0, parent |-> 0],
+   [present |-> TRUE, val |-> 1, bal |-> 0, parent |-> 0] >>
+/\ widened = [ t1 |-> {[kind |-> "S", cov |-> {1}], [kind |-> "S", cov |-> {2}]},
+  t2 |-> {[kind |-> "S", cov |-> {1}], [kind |-> "S", cov |-> {2}]} ]
+/\ reserved = [t1 |-> <<0, 0>>, t2 |-> <<0, 0>>]
+/\ draws = [ t1 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>>,
+  t2 |-> <<[val |-> 0, bal |-> 0], [val |-> 0, bal |-> 0]>> ]
+/\ status = [t1 |-> "committed", t2 |-> "committed"]
+/\ held = [t1 |-> {}, t2 |-> {}]
+/\ wr = [t1 |-> << >>, t2 |-> << >>]
+
+88 states generated, 64 distinct states found, 1 states left on queue.
+The depth of the complete state graph search is 17.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 2 and the 95th percentile is 2).
+Finished in 00s at (2026-10-16 00:44:38)

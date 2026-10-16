@@ -1,0 +1,10 @@
+--- Publication.tla
++++ Publication.tla
+@@ -113,7 +113,6 @@
+ 
+ Advance ==
+   /\ Serving /\ pointer < Len(log)
+-  /\ CompletelyInstalled(log[pointer + 1].txn)
+   /\ pointer' = pointer + 1
+   /\ Publish(log[pointer + 1])
+   /\ UNCHANGED <<seq, pc, resp, widened, log, unflushed, engine, answer, fsyncFailed, unresolved,

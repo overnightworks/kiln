@@ -109,7 +109,7 @@ or TypeORM extractor for E1, any future front end (§11).
 Every oracle this document and `docs/experiments.md` rely on — E1's
 lowering audit, E2's elementwise comparison, E3's checker, and
 `docs/verification.md`'s differential tests — interprets the IR against
-exactly these seven decisions; none of them may read a node kind above, or
+exactly these nine decisions; none of them may read a node kind above, or
 any decision below, differently from this section. This section is their
 single owner: a fact stated here is not restated in `docs/experiments.md`,
 `docs/verification.md`, or elsewhere in this document, which instead point
@@ -119,9 +119,17 @@ this meaning, one slice at a time.
 - **D1 Declarations.** A `Program` is one `Schema` — tables, each with
   typed columns that declare an integer width and an optional numeric
   domain, plus the schema's unique constraints, foreign keys, and check
-  constraints — together with the program's named transaction `Function`s.
-  A constraint lives only in the schema; a transaction function's own body
-  has no Constraint node to write.
+  constraints, and secondary indexes — together with the program's named
+  transaction `Function`s. A constraint lives only in the schema; a
+  transaction function's own body has no Constraint node to write. A
+  secondary index is a named declaration of one table, one or more of its
+  integer or text columns, and whether it is unique; it orders the table's
+  rows by those columns' values, ties broken by primary key, leaves out a
+  row lacking any of them, and enforces nothing (uniqueness is a constraint).
+  An indexed range read gives one bound per indexed column, compares them
+  lexicographically and inclusively, binds the matched rows in index order
+  like a primary-key range read — empty when the start sorts after the end,
+  aborting past its bound — and may be iterated.
   *Example.* `accounts.email` carries `unique(accounts.email)` in the
   schema; no `transfer` or `sign_up` function states that rule inline, and
   nothing in a function body could restate it even if it tried.
@@ -167,23 +175,39 @@ this meaning, one slice at a time.
   typed abort reason sits at index 1 and does not erase or block the
   first call's committed transfer.
 - **D5 Access log.** Every attempted access — a point read, a range read,
-  an insert, an update, or a delete — is logged with its table, its key or
-  range bounds, the columns it touched, and its origin (the transaction's
-  own logic, or a constraint check). A constraint check logs only the
-  accesses it logically needs — a uniqueness check is a point read on the
-  unique key, never a table scan — and an aborted call keeps every access
-  it attempted.
+  an insert, an update, or a delete — is logged with its table, its key
+  (every component) or its range (prefix and interval as written, D8), the
+  columns it touched, and its origin (the transaction's own logic, or a
+  constraint check). A constraint check logs only the accesses it logically
+  needs, never a table scan: a check that a referenced primary key exists
+  is a point read of that key, and a check that looks up a unique tuple, or
+  the rows still naming a deleted key, is a constraint lookup naming the
+  constraint and the tuple. An aborted call keeps every access it
+  attempted. An indexed range read is its own kind of range read,
+  distinct from a primary-key range read: it logs one entry naming the
+  index and both bounds, and every row reached from its result is accessed
+  by an ordinary point read. A call that stops at the index and one that
+  follows it to base rows therefore leave different evidence.
   *Example.* `sign_up(email)` inserting a duplicate email logs the insert
-  attempt and the uniqueness check's point read on that email, both kept
-  in the log even though the call aborts.
+  attempt and the uniqueness check's constraint lookup of that email under
+  `unique(accounts.email)`, both kept in the log even though the call
+  aborts.
 - **D6 Observable semantics.** A read sees the transaction's own earlier
   writes. An empty range reads as an empty sequence. Exceeding a bounded
   iteration's declared bound aborts the transaction. Inserting an already
   existing primary key aborts. A write (update or delete) targeting an
   absent row aborts — there is no implicit insert-on-update or
   no-op-on-delete. An absent key is itself a branchable value a
-  transaction may test and branch on, the same as any other value. Bounded
-  iteration proceeds in key order. Write effects apply in program order
+  transaction may test and branch on, the same as any other value, and so
+  is a comparison of two expressions (equal, not equal, less, less or
+  equal, greater, greater or equal): the branch takes its first arm when
+  the comparison holds and its second otherwise. Integers compare
+  numerically and text by its bytes; an integer against text aborts with a
+  typed reason, never holds or fails silently. An operand that cannot be
+  resolved aborts with its own reason, and the comparison logs no access.
+  Bounded
+  iteration proceeds in key order for a primary-key range and in index
+  order for an index range. Write effects apply in program order
   within one transaction. An abort discards every effect the transaction
   produced before it, not only the operation that triggered it. A
   successful call returns exactly the function's declared response.
@@ -193,6 +217,9 @@ this meaning, one slice at a time.
   writes the debited balance, then a later read of the same key inside the
   same call sees that debit — not the balance the transaction started
   with — and the call returns the new balance as its response.
+  *Example (comparison).* `if kind = 0 then read by id else read by last
+  name` is decided by the call's argument alone; `if order.status = 1`
+  is decided by data an earlier read returned.
 - **D7 Reserved boundary.** Verification layer 4 will need a per-call
   disposition — execute it, or force an abort replayed as a no-op — and
   will wrap `replay` to add it later. This meaning's `replay` and `run`
@@ -201,6 +228,104 @@ this meaning, one slice at a time.
   *Example.* A future crash-recovery harness marks one call in a replayed
   batch as a forced abort without changing `replay`'s own signature or
   adding a log, write-ahead buffer, or other durability mechanism here.
+- **D8 Keys.** A table declares its primary key as an ordered, non-empty
+  list of its own columns, or declares itself keyless (D9). A key is the
+  tuple of those columns' values, so each component has its column's kind
+  and width; keys are equal when every component is, and order
+  lexicographically, component by component. Key columns live only in the
+  key: a row's other columns never repeat them, an insert gives them only
+  through its key, and a projection, index, constraint or check naming a key
+  column reads it from the key, so no two copies can disagree. Keys are
+  unique per table (D6) and never change: an update naming a key column is
+  rejected before any call runs, so moving a row is a delete and an insert.
+  A key expression with the wrong number of components is rejected before
+  any call runs; a component of the wrong kind or outside its column's width
+  aborts with a typed reason naming the table and the component, and never
+  clamps (D3). A primary-key range read names an equality prefix — the first
+  k components, fewer than all — and optionally an inclusive interval on the
+  next component; it matches exactly the keys holding that prefix whose next
+  component lies in the interval, and an omitted interval matches every
+  value, never a sentinel bound (vector order alone cannot say "every key
+  under this prefix"). A foreign key maps an ordered list of the referencing
+  table's columns, one to one and kind for kind, onto the referenced table's
+  whole primary key; a row lacking any of those columns references nothing,
+  and since keys never change, only a delete removes a referenced key (D2).
+  It is checked for every row the call inserted or wrote any of those
+  columns on, against the key formed from that row's final values of all of
+  them: updating only `a` of `(a, b)` checks the parent at the new `a` and
+  the row's final `b` — the stored value, or the last value this call wrote
+  to it. Reading the retained `b` is part of the update's own access to
+  that row, not a further logged access. A unique constraint names an
+  ordered list of columns and binds only rows holding all of them. A
+  foreign key references a primary key only: a reference to a unique tuple
+  has no caller yet, its source construct is refused (E1 Q4,
+  `experiments/e1-classification-coverage/inputs.md` §5), and whatever adds
+  one must also abort an update that removes a referenced value. A unique
+  constraint enforces and is never an index: finding a row by a unique
+  tuple reads a declared index or scans (D9), and checking it is a
+  constraint lookup (D5).
+  *Example.* `order_line` is keyed by `(w, d, o, n)`. The range with
+  prefix `(1, 3, 3001)` and no interval holds every line of order 3001 of
+  district 3, and the log shows that prefix, not a bound such as
+  `(1, 3, 3001, MAX)`. An update of `order_line.n` is rejected before any
+  call runs.
+- **D9 Forms for OLTP transactions.** These refine §2.1's node kinds; none
+  adds a kind.
+  - *Append* (a write) adds a row to a keyless table and keeps duplicates.
+    The row's identity is internal: no column and no key, so no
+    expression projects it. A keyless table is reached only by appends and
+    by constraint checks: a read, range, scan, secondary index, update or
+    delete naming it is rejected before any call runs, so the order of its
+    rows is never observable. A per-table store counter gives one past the
+    highest identity the table holds (the first, when it holds none), so
+    replay is deterministic; an
+    aborted call's appends consume nothing (D6), and a counter past `i64`
+    aborts with a typed reason. The log records one append naming the
+    table and its columns, without the identity, and the row's constraints
+    are checked like any written row's (D2).
+  - *Scan* (a read) binds the rows of a keyed table, or of a primary-key
+    prefix, that satisfy a condition over their columns, in key order. It
+    logs one scan naming the table, prefix and condition, distinct from
+    every range read, so a scan never passes for a range. A scan or a range read may
+    bind only its first or last k rows in its order; it then needs no
+    row-count bound and logs the whole scan or range it consulted.
+  - *Local sequences.* A range, index or scan read binds a sequence of rows.
+    Filtering by a condition, mapping to values or records, sorting by
+    columns, distinct values, counting, folding with checked arithmetic
+    (D3), and selecting the first, last or middle (1-based position ⌈n/2⌉)
+    element compute over a sequence. Sorting is stable and distinct keeps
+    first occurrences, so ties and survivors keep the sequence's own order —
+    key order for a primary-key range or scan, index order for an index
+    range, pass order for a yielded sequence — and no order is invented.
+    These operations read nothing, log nothing and keep no durable state.
+    A selection from an empty sequence is absent, branchable like an absent
+    row. Bounded iteration runs over any bound sequence, and its body may
+    yield one value per pass, giving a new sequence.
+  - *Values.* A conditional value evaluates its condition and only the
+    chosen expression. Multiplication is checked like addition (D3). An
+    exact decimal is an integer at a declared scale; multiplying adds the
+    scales, and the IR never rounds — a source that rounds needs a
+    rounding operation, which waits for its first caller. Text has
+    concatenation, truncation to n characters, a containment condition, and
+    formatting of an integer at a scale as decimal text; lengths count
+    Unicode scalar values.
+  - *Responses and aborts.* A function returns a record of named fields,
+    each a value or a sequence of records. An abort carries its name and a
+    record of values computed before it, and still discards every effect
+    (D6). Both compare field by field (D4).
+  - *No null.* A missing value is an absent column: constraints and
+    indexes skip it, and projecting it aborts.
+  - *Host boundary.* Values from outside the database — the time, a
+    request input, a queue entry holding such inputs — enter as call
+    arguments; the IR has no clock and no queue. What the host must record
+    after commit, such as a result file, is a response field, and the host
+    records it only after the commit.
+
+  *Example.* `deliver(w, carrier, now)` takes, per district, the first
+  `new_order` row of prefix `(w, d)` with no row-count bound, iterates over
+  that zero-or-one-row sequence so an empty district is skipped, folds the
+  order's line amounts into one sum, and returns each delivered `(d, o)`
+  for the host to record after the commit.
 
 ## 3. The thesis: compile-time compatibility between transaction pairs
 
@@ -360,10 +485,11 @@ the point it inserts into (next-key locking), so a reader's range lock and
 a writer's claim on a value inside that range conflict correctly instead of
 racing past each other.
 
-A batch of class-3 calls acquires the resources its members need, in one
-fixed canonical order (to make deadlock structurally impossible rather than
-merely detected), proves the batch equivalent to some serial execution
-inside that protected interval, and only then applies the
+A batch of class-3 calls acquires the resources its members need as one
+footprint, atomically at dispatch like any other call (so no partial
+footprint is ever held and a wait cycle cannot form), proves the batch
+equivalent to some serial execution inside that protected interval, and
+only then applies the
 associative-summary/parallel-prefix-scan evaluation from §3.3 inside it.
 
 **Lock elision is a whole-program decision, not a pairwise one — and it
@@ -450,11 +576,21 @@ say — that is a translation failure under §2.1's unsupported-source rule,
 rejected at compile time, not a runtime surprise discovered after the fact.
 
 **Lock expansion restarts safely.** If a class-4 call's covering resource
-must widen mid-execution and acquiring the wider resource would violate the
-kernel's fixed canonical ordering, the call never acquires out of order —
-doing so would reintroduce the deadlock risk the ordering exists to avoid.
-Instead it discards its tentative effects and restarts from the beginning
-with the wider resource acquired first, in canonical order.
+must widen mid-execution, the call never acquires the wider resource on top
+of what it holds: an admitted transaction never waits, and a second
+acquisition by a holder is exactly the wait that closes cycles. Instead it
+discards its tentative writes, draws and reservations, releases everything,
+and re-requests the widened footprint as a new request that joins the
+admission queue at its tail, under the same atomic admission and
+reservations as any call. The response it gives is the one of its final
+attempt. Each restart adds a resource the call had not requested before;
+over a fixed, finite resource universe (the model's `Keys`) restarts are
+therefore finite. The kernel model checks this (`specs/README.md`) for
+data-dependent point reads (`Follow`) only, not for a widened range or
+table resource: serializability with exact responses, absence of wait
+cycles and §9.5's liveness hold with restarts, including a restart that
+discards a positive escrow reservation and draw, and acquiring in place or
+keeping tentative effects across a restart are each refuted.
 
 **Why this is the proposal.** The class-3 mechanism the thesis already
 commits to — associative summaries evaluated by a parallel prefix scan —
@@ -469,7 +605,7 @@ lock rather than a separate path carrying the staleness risk named above —
 which is what makes class 4 "always correct" rather than "usually
 correct." The cost accepted in return is two-phase locking's classic
 latency cost under heavy contention for classes 3 and 4, with
-deadlock-avoidance-by-ordering bookkeeping; unconditional class-1 elision
+admission-queue bookkeeping; unconditional class-1 elision
 takes no resource at all, and class-1's guarded case plus every class-2
 reservation contend only when two calls' keys collide or a keyed resource
 meets a covering range or table resource, under either proposal — so this
@@ -565,6 +701,19 @@ not — is specified precisely in §9.2; this document's architecture-level
 commitment is a single append-only commit log per store, with recovery
 replaying only commit groups that validate completely.
 
+**Status: checked within bounds** — the unknown-outcome rule above is
+checked on the kernel model (`Durable.tla`, `specs/README.md`): an `fsync`
+failure answers `unknown`, the transaction keeps its footprint and
+reservations (each exactly as held when the flush failed) until recovery,
+recovery resolves it to whatever the log shows, and mutants that answer an
+abort and release the reservations, or release part of one, are refuted.
+Bounds: 3 transactions, one log, at most two failures; `Durable.tla` does
+not model the publication pointer, which `Publication.tla` checks (§9.1),
+and torn writes are not modelled. Not proved: that a caller
+is eventually acknowledged or that recovery eventually runs (fairness
+covers neither, and recovery discards queued requests; only undispatched
+ones stay runnable).
+
 ## 6. Trust model
 
 AI agents may propose new specializations — a new reservation type, a new
@@ -651,10 +800,28 @@ commits recorded in one log, never implied across two independent logs. It
 fails if a crash lands between a commit's log record and the completion of
 every derived-structure install and recovery advances the pointer past that
 commit anyway — recovery must finish installing first, or not advance the
-pointer past it at all. **Status: not yet specified** — the exact pointer
-representation, how far ahead installation may run, and the recovery
-procedure that re-derives or replays incomplete installation are
-engine-phase work.
+pointer past it at all. **Status: checked within bounds** — the pointer rule is checked on the
+kernel model (`Publication.tla`, `specs/README.md`): installation of a
+commit's two derived structures follows its durable record step by step
+and may run ahead of the pointer; the pointer passes a commit only when
+both are installed; and only then does the commit take effect and release
+its locks and reservations, so every read, protocol or snapshot, sees
+published state plus the reader's own writes. Recovery recomputes the
+pointer from the log and the installation state, never from the retained
+value, and installs every durable commit before the pointer passes it.
+`AtomicVisibility`, `ReaderConsistent` (a snapshot reader's observations
+across several steps), `PointerBelowInstalled`, `PointerMonotone` and the
+durability properties hold (`RecoveredPrefix` as adapted into
+`HistoryIsLogPrefix` and `RecoveryOpensOnWholeLog`), and `Serializable` with exact responses holds
+over a delete's reference check and a read racing a commit still being
+installed. Mutants that advance the pointer before installation (also
+across a crash), advance it first in recovery, or release a commit's locks
+when its record is durable are refuted. Bounds: one log, 2 or 3
+transactions with 2 structures each, at most two failures, which strike
+while the engine operates and never during recovery. Not checked: several
+logs, a failure during recovery, byte layout and the pointer's on-disk
+representation; no liveness (nothing proves installation or recovery
+eventually runs).
 
 ### 9.2 Storage failure model
 
@@ -694,10 +861,25 @@ truthful-flush assumption
 makes for the same reason. Because an `fsync` failure here does not tell
 the engine whether the bytes actually reached storage, it leaves the
 transaction's commit outcome unknown rather than a known abort; §5 states
-the resulting reservation-release and recovery contract. **Status: not yet
-specified** — the exact extent
-size, the allocation and reclaim policy, and the checkpoint layout that
-make "never overwrite acknowledged bytes" concrete are engine-phase work.
+the resulting reservation-release and recovery contract. **Status: checked within bounds, layout not yet specified** — TLC checks
+the commit, crash and recovery contract on the kernel model with up to two
+crashes or `fsync` failures at any step of 3 transactions and one log:
+every acknowledged commit is in the recovered history, the recovered history
+is a prefix of the log's commit order (and the whole log once the engine
+serves again), an `fsync` failure is answered `unknown` and never as an
+abort, and recovered histories are serializable with exact responses,
+including responses that depend on a predecessor whose commit is durable
+but unacknowledged (`specs/README.md`, `Durable.tla`; that module does not
+model the publication pointer, which `Publication.tla` checks, §9.1). Mutants (an `fsync`
+failure answered as an abort or shrinking a reservation, an acknowledgement
+before the flush, a recovery that drops a durable record, locks released
+before the flush, tentative effects shown to a dependent whose record then
+survives a crash without its predecessor's) are each refuted. Eventual acknowledgement and eventual
+recovery are not proved. That is a bounded check of an
+abstract log, not of bytes, framing, checksums or a device that lies; the
+visible-version pointer (§9.1) is not covered. The exact extent size, the
+allocation and reclaim policy, and the checkpoint layout that make "never
+overwrite acknowledged bytes" concrete are engine-phase work.
 
 ### 9.3 Migration watermark and rollback window
 
@@ -763,23 +945,25 @@ never waits, and waits between queued requests point from the younger to
 the older, so the wait graph has no cycle by construction; the kernel
 model checks this, and deadlock freedom with it, on every scenario.
 
-The second half, that every waiter eventually proceeds, rests on a
-fairness assumption this document states and the model has not yet
-proven: **weak fairness of dispatch, admission, execution and completion
-for every transaction** — no step of a live transaction that stays
-enabled is withheld forever — together with finite programs. Under it
-every holder resolves (its program is finite and its steps are taken), a
-queued request has finitely many older requests on each resource it
-shares and none younger can bypass it, so by induction over dispatch
-order every queued request is admitted and then completes. Fairness
-cannot manufacture missing funds: completion may be a justified rejection
-(§5). It fails if an unbounded stream of younger requests could be
-admitted ahead of an older queued one — exactly what the dispatch-order
-rule forbids. **Status: safety checked, liveness stated** — the
-reachability of a terminal outcome for every request
-(`Requested ~> Terminal`) under this fairness condition, and a mutant
-that drops the dispatch-order rule and must fail it, are the liveness
-slice of [issue #6](https://github.com/overnightworks/kiln/issues/6).
+The second half, that every waiter eventually proceeds, rests on one
+fairness assumption: **weak fairness of admission, execution and
+completion for every transaction** — a step of a transaction that stays
+enabled is eventually taken — together with finite programs. Dispatch is
+the caller's request, not a step the protocol owes. Under it every holder
+resolves (its program is finite and its steps are taken), a queued request
+has finitely many older requests on each resource it shares and none
+younger can bypass it, so by induction over dispatch order every queued
+request is admitted and then completes. Fairness cannot manufacture
+missing funds: completion may be a justified rejection (§5). It fails if
+an unbounded stream of younger requests could be admitted ahead of an
+older queued one — exactly what the dispatch-order rule forbids.
+**Status: checked within bounds** — TLC proves `Requested ~> Terminal` for
+every request of the kernel model's scenarios (2-3 transactions, programs
+of 1-2 operations) under this fairness condition, including a scenario
+where finished transactions request again, and refutes a model without the
+dispatch-order rule with a starvation lasso (`specs/README.md`). That is a
+bounded check of the model, not a proof for arbitrary programs or an
+implementation.
 
 ## 10. Exit door (operator ruling 15.10.2026)
 
@@ -1006,8 +1190,9 @@ parallel prefix scan computes every caller's result inside *one* batch
 that already holds the kernel's locks (§4) — this is parallel work inside a
 protected interval, not concurrency between conflicting batches. Two
 batches whose members' footprints genuinely conflict are still fully
-serialized by the strict-2PL kernel, in canonical lock order, exactly like
-any class-4 pair. Avoiding Fable's domain-executor model removes a *static*
+serialized by the strict-2PL kernel's atomic admission (§4), exactly like
+any class-4 pair; any internal ordering of individual acquisitions is an
+implementation detail, not part of that contract. Avoiding Fable's domain-executor model removes a *static*
 partitioning bottleneck (a wrong ownership-key guess becoming a permanent
 hot spot); it does not remove the *dynamic* serialization strict 2PL
 imposes once two live batches actually conflict, and this document does

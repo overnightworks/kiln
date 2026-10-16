@@ -604,6 +604,127 @@ rather than a hypothetical:
   `.insert()` as its own one-shot S3 unit, as an earlier draft did, is
   exactly the double-count S5 exists to prevent.
 
+**Clarification 16.10.2026 (Django enumeration).** Three readings of the
+text above, ruled so the extractor applies them mechanically. They add no rule; none states or implies a count.
+
+- **S3 parameters.** Reads "the variables feeding that one call: its enclosing
+  function's own arguments, plus any local value already read earlier". The
+  call is the unit of S3, so only names the site's call expression references
+  (its receiver and arguments) count: those that are the enclosing function's
+  declared parameters, then those that are locals bound before the site. A
+  name bound only by the site's own statement or later, a global, and a name
+  the call does not reference are not parameters. Binding every earlier name
+  would make an unrelated assignment change a unit's parameters.
+- **Application boundary.** Reads "run unmodified against the application's
+  source" and "discarding any analyzer output message whose `filePath` falls
+  under an excluded path before enumeration". The `--exclude` globs only
+  keep the analyzer from starting at a file; it still follows imports into
+  files outside the application root and into files the selection excludes.
+  A report located outside the application root, or in a file the frozen
+  selection excludes, is not a site: applying the one selection rule to the
+  analyzer's output is not the "additional" filtering the paragraph after
+  the command forbids, since it picks no site by hand.
+- **Transaction markers.** Reads S1's "`method`-typed output messages" with
+  the three fixed lists (read, write, other) and S2's two Django forms. A
+  message of method type `transaction` is not in the three lists, so it is
+  not a site. It opens an S2 unit only when it is the decorator of a
+  function or an item of a `with` statement; a marker that is neither (for
+  example `ExitStack.enter_context(atomic())`) opens no S2 unit, and the
+  sites around it stay S3 by S3's default. Each such marker is recorded with
+  its location in a side output of the run and never aborts it, so the
+  uncounted transaction stays visible rather than silent.
+
+**Clarification 16.10.2026 (TypeORM enumeration).** Readings of the text above
+for TypeScript, ruled so the extractor applies them mechanically. They add no
+rule; none states or implies a count. Where the Django clarification above
+applies unchanged (S3 parameters, application boundary, transaction markers),
+it is applied to TypeScript.
+
+- **Nearest `tsconfig.json`.** "The shortest path from the root" is the path
+  with the fewest characters; equal lengths are ordered lexically. It is not
+  the shallowest path.
+- **S3 parameters.** "The enclosing function" is the innermost function, method,
+  constructor, accessor or arrow function whose body holds the call. Parameters
+  are the names that function declares (destructured names and rest included),
+  then its `const`/`let`/`var`, loop and `catch` variables bound before the
+  site, as the Django clarification orders them; a name of an outer function is
+  not one. For an S5 chain the call is the whole written chain. §3.1's
+  "parameterized by `recorded`" for `insertOnce` names only the function
+  argument; `connection`, a local bound earlier in the function and read by
+  the call, is also a parameter under the S3-parameter reading above, so the
+  unit's parameters are `recorded` and `connection`. This changes the
+  parameters, not the example's unit count.
+- **S5 chain.** A chain is one written receiver chain: the `createQueryBuilder()`
+  call and every call whose callee is a member access on the result of the call
+  before it, up to the last such call. A reported call on a variable that
+  holds a builder, or inside an argument of a chain method, is not in the
+  chain. A chain holding several `createQueryBuilder()` calls belongs to the
+  first one written.
+- **S2 forms.** `X.startTransaction()` is matched by enumerating the control-flow
+  paths of its function (the file body is one more function), statements in
+  order, and running a stack of open starts per receiver text on each path:
+  a start pushes, a `X.commitTransaction()` or `X.rollbackTransaction()` with
+  the same receiver text written directly in the same function pops the
+  innermost open start (one with nothing open is stray and changes nothing),
+  and a `return`, or the end of the function, ends the path. A start is
+  matched when every path that reaches it pops it, and its transaction ends
+  at the last terminator that pops it on any path; a start that no path
+  reaches is unmatched, and so is one that some path leaves open. An
+  unmatched start opens no unit. The arms
+  of an `if` (an absent `else` is the arm that skips it) and of a ternary are
+  separate paths; a `switch` is entered at any of its clauses, which run on
+  into the following ones until a `break`, `return` or `throw`, and it can
+  also be skipped when it has no `default`.
+  `try`, `catch` and `finally` run in sequence: after a body that completes,
+  the code goes on either without the catch or through it, and `finally`
+  runs after every path that did not throw. A path that ends in `throw` is
+  dropped and decides nothing, a stated limitation: judging it needs a model
+  of which `catch` or `finally` receives the exception, which this walk does
+  not carry. A start made while another is open on the same path nests in it
+  and the outermost owns the nested one's sites; starts in mutually exclusive
+  arms are on different paths and so are one alternative opening, not a
+  nesting. The definition covers exactly these constructs. A function has
+  unsupported control flow, and every start in it is an unmatched marker with
+  the reason "unsupported control flow", when it has a start, a commit or a
+  rollback inside a loop (body, condition, initializer, update, or the
+  iterated expression), a `break` or `continue` that names a label, or a
+  `return` inside a loop that an enclosing `finally` holding a commit or
+  rollback follows; a loop with none of these is walked as a path that may
+  skip it. Paths that did the same to every transaction count once, and a
+  function with more than 4096 distinct paths is not enumerated: every start
+  in it is an unmatched marker with the reason "path cap exceeded". Both
+  reasons are recorded in the side output.
+  `X.transaction(...)` opens a unit when `X` is, or ends in a property named,
+  `dataSource`, `manager` or `connection`, and its body is the last function
+  or arrow function argument. A method decorated `@Transaction` or
+  `@LazyTransaction`, and any other `transaction` call, is a marker that opens
+  no unit, recorded as the Django clarification states. A transaction report
+  that is neither a call over the reported span nor such a decorated method
+  is not a legitimate unsupported form and fails the run.
+- **Dependency installation (recorded deviation).** §3's plain `npm install`
+  of an application is run as `npm install --ignore-scripts --no-audit
+  --no-fund`. Reason: lifecycle scripts would execute arbitrary code from the
+  dependency trees of 32 third-party applications on the machine, and type
+  resolution needs package contents, not their build output. Possible bias:
+  types that a dependency's install script would generate stay unresolved,
+  which can hide sites the analyzer would otherwise report. The reach of the
+  deviation is recorded, not assumed: each application's run writes
+  `<application>.install-scripts.jsonl` naming the application and every
+  installed package that declares a `preinstall`, `install` or `postinstall`
+  script (the application also `prepare`), read from the package manifests
+  without running anything.
+- **Installation inputs.** Before the installation the whole checkout,
+  lockfiles included, is verified against the manifest commit (nothing
+  modified, deleted, untracked or ignored apart from `node_modules`). After
+  `npm install --ignore-scripts` every tracked lockfile must be byte-identical
+  to the commit, otherwise the run fails and names it; `npm ci` is not used.
+  An application that tracks no lockfile gets the lock the installation
+  generated recorded by the installation step, once the checkout is verified,
+  with its SHA-256 and the clock at that verification (never a file's
+  modification time) in `<application>.generated-locks.jsonl`, as evidence of
+  what resolved. The analysis step validates the lockfile it finds against that
+  record and fails on a missing record or any mismatch.
+
 ### 3.1 Worked examples: full unit counts against the frozen rule
 
 Both examples below were recounted by actually running the two pinned
@@ -890,3 +1011,343 @@ gating on its frozen mix. `docs/experiments.md`, "Gating numerator and
 verdict," is amended in the same change to state this directly, replacing
 the "at least five traced applications" condition it previously carried;
 the two documents agree from this point on.
+
+## 5. Amendment 16.10.2026: branch, index, hop, lowering and refusal rules
+
+Decided before the classifier, the TPC-C lowering or the application
+lowering exists and before any classification result exists, from an
+independent plan review of open questions Q1-Q4 (#44). They make the
+category definitions in `docs/experiments.md` ("Footprint categories")
+operational and add one qualification to the application-side verdict
+("Gating numerator and verdict"); a classifier builder applies them without
+further judgement. Each rule states its bias direction on the coverage
+number. No rule below is a result: none states or implies a category or
+coverage number for TPC-C or any application.
+
+**Q1. Branch composition.** *Changes:* what is classified. *Grounding:* the
+frozen text classifies a *function's* footprint ("the complete set of rows,
+ranges, or keys the function can touch"), so the unit is the whole function.
+
+1. A function is classified over its complete body, every feasible branch.
+2. A branch selected by an argument keeps the function static when each
+   branch's footprint is static.
+3. A branch selected by data counts the selector's dependency (the read that
+   decides the branch) as well as each continuation's footprint.
+4. Replacing a branch's footprint by a whole-table superset does not erase
+   navigation: a read whose result determines a further access still counts
+   under Q3 on that branch.
+5. TPC-C keeps its five units and weights (§1). Payment's and Order-Status's
+   by-name customer paths are part of the one gating classification of
+   their unit. A by-id-only row may be reported for sensitivity and never
+   gates. This corrects an earlier reading that made by-name sensitivity-only.
+
+*Bias:* conservative against classifying by the easiest variant. *TPC-C:*
+this moves Payment and Order-Status from the by-id variant to the complete
+function, which can move a unit out of the numerator; the conservative
+choice is taken.
+
+**Q2. Secondary indexes.** *Changes:* which lookups are identifiable.
+*Grounding:* "index or foreign key the compiler can identify ahead of time"
+names an index, not a unique one.
+
+1. A secondary index qualifies whether or not it is unique, if the schema of
+   the application or of TPC-C declares it. An index is never inferred or
+   added after a result is seen, and a unique constraint alone is not an
+   index. The lowering uses only declared indexes and does not substitute a
+   primary-key range for one.
+2. A range over such an index bounded by arguments and the schema is static.
+3. Resolving that range's contents into base-row keys not previously known
+   is one hop (Q3), provided it is the function's only qualifying
+   resolution.
+4. An index-only read and a lookup followed by base-row accesses are
+   distinct evidence; the classifier's evidence names which one applies.
+   Ordering and median-selection semantics of the range are preserved by
+   the lowering, else the function is refused (Q4).
+5. A predicate on a secondary attribute with no declared index stays
+   Unknown.
+6. `kiln-ir` gains declared secondary indexes and indexed range reads in
+   #45. Refusing index lookups for want of IR support would depress coverage
+   through an implementation limit rather than the thesis, so the extension
+   precedes the lowering.
+
+*Bias:* admitting non-unique indexes follows the frozen text and raises
+coverage; the declared-only restriction and the semantics requirement bound
+it. *TPC-C:* this can move Payment's by-name path from Unknown to One-hop;
+the conservative choice is to promote only when rule 3 holds on the whole
+function (Q1), and Order-Status's further navigation is not assumed promoted.
+
+**Q3. Hop counting.** *Changes:* what the single hop of "One-hop" counts.
+*Grounding:* "exactly one data-dependent read whose result determines a
+further access".
+
+1. A function is one-hop when, on its most demanding feasible path (Q1),
+   exactly one logical read has a result that determines further access
+   targets through an identifiable index or foreign key (Q2).
+2. A read whose result only affects returned values or control flow without
+   changing any access target is not a resolution.
+3. Several independent resolving reads exceed one even if they could run in
+   parallel.
+4. One resolving result may determine any number of later accesses without
+   adding a hop.
+5. A key for an insert derived from a read contributes that function's one
+   resolution; the inserted row need not exist beforehand. This holds
+   assuming all remaining behaviour qualifies.
+6. A minimum, maximum or selection computed over one argument-bounded range
+   of an identifiable index is computation, not a further read; using its
+   result as an access key is one resolution. An arbitrary secondary scan is
+   not covered by this rule.
+7. Two or more chained resolutions are not One-hop. Such a function is
+   Domain-bounded if provably confined to one argument-selected partition
+   (`docs/experiments.md`'s definition), otherwise Unknown.
+8. Splitting or combining independent reads syntactically (one query versus
+   several, helper calls) does not change the count.
+
+*Bias:* strict cardinality lowers coverage relative to counting parallel
+rounds; rule 5 keeps writes from biasing upward. *TPC-C:* no unit's category
+is stated here; the classifier assigns it by these rules. Recognising one
+minimum or one lookup inside a unit that chains two or more resolutions
+(rule 7) does not make it One-hop.
+
+**Q4. Lowering fidelity and the audit oracle.** *Changes:* what a lowering
+may omit and where audit expectations come from. *Grounding:* the
+source-to-IR boundary of `docs/concept.md` §2.1 and the lowering audit.
+
+1. A lowering may cover only recognised idioms, but never drops a helper's
+   effects, failures, responses or constraints. A function with anything
+   not translated is refused in full and stays in the denominator as
+   Unknown (the frozen rule), and counts toward R as `docs/experiments.md`,
+   "Gating numerator and verdict", defines it.
+2. The lowering audit's expected outcomes are derived independently from the
+   function's source and the framework's semantics, never from the IR under
+   test; an expectation generated from that IR checks only consistency and
+   does not satisfy the audit.
+3. Both frozen seed-17 audit populations (§3), the affirmative S4 evidence
+   and the separate access-log containment audit are unchanged. Controlled
+   source execution is permitted as audit evidence, not required.
+
+*Bias:* refusals depress coverage; a weak oracle could inflate it, hence
+rule 2.
+
+**Refusal-qualified falsification.** *Changes:* when an application-side
+Fail counts as falsification. *Grounding:* "A unit landing strictly between
+..." and "an unsupported function is never dropped from the denominator"
+keep every denominator; this adds a reading, not a new threshold.
+
+The definitions of L and U, the median(U) threshold and the required
+report wording are owned by `docs/experiments.md` ("Gating numerator and
+verdict"); this section keeps only the rationale. Refusals never leave a
+denominator, so both L and U are always reported.
+
+*Bias:* a Fail that refusals may have caused cannot falsify the thesis;
+a Pass is untouched. Realised in the `kiln-e1 verdict` command's
+application half in #2 slice 6.
+
+**Amendment 16.10.2026: which targets versus whether (Q1).** *Changes:*
+when a data-selected branch makes a function Unknown. It amends Q1.3 as
+the classifier applies it — `specs/kiln-e1.spec.md` KILN-E1-19 and
+KILN-E1-29, and the data-selection check of `crates/kiln-e1/src/footprint`
+— which today make any two paths reaching different targets Unknown. Ruled
+by the head on #64 before any TPC-C result exists: the only classified
+output refuses every unit (`data/README.md`). *Grounding:* Static
+classifies "the complete set of rows, ranges, or keys the function can
+touch, over every feasible branch": "can touch" is an upper bound, so a read
+that only decides whether part of that set is touched leaves the set a pure
+function of the arguments. One-hop counts a read "whose result determines a
+further access", and Q3.2 already excludes a read that only affects control
+flow "without changing any access target"; a read that decides which
+targets are touched does determine them, through no identifiable index or
+foreign key. Q1.3 and Q3.2 do not by themselves entail the inclusion rule
+below, hence an amendment.
+
+1. A read, or a comparison over a read result, whose outcome decides
+   **which** targets are accessed makes the function Unknown, naming it:
+   two feasible paths that agree on every argument decision (KILN-E1-28)
+   and on every other selector both test, differ only in its outcome, and
+   reach target sets neither of which contains the other.
+2. A selector that only decides **whether** an access happens is no
+   resolution and makes nothing Unknown: where those two paths' target sets
+   are ordered by inclusion, the footprint is the larger set, and each path
+   still classifies on its own (Q1.1; Q3.1's most demanding feasible
+   path).
+3. Preserved: the comparison is per pair of paths, never over the union of
+   an arm's targets, so independent selectors whose arms swap targets stay
+   Unknown; paths taking different argument arms are never compared; and
+   the larger set never erases a path's own navigation — a resolving read on
+   either path still counts under Q3 (Q1.4), and the selector's own read
+   belongs to the footprint like any read (Q1.3).
+
+*Example.* `read account(a); if balance < amount abort; update account(a);
+insert ledger(a, n)` reaches {account a} or {account a, ledger (a, n)}:
+ordered by inclusion, the balance read decides whether, and the function
+stays static, where the landed rule made it Unknown. `read flag(f); if
+flag.v = 1 update a(x) else update b(y)` reaches {flag f, a x} or {flag f,
+b y}: neither contains the other, so it is Unknown naming the comparison.
+(`read X; if absent abort; update X` reaches {X} on both paths and was
+static already.)
+
+*Bias:* upward: a function the landed rule made Unknown for a
+whether-selector can become Static or One-hop. Rule 3 bounds it, and the
+incomparability test keeps every which-selector Unknown. *TPC-C:*
+New-Order's invalid-item abort (`tpcc-fidelity.md` N14) decides whether
+the remaining lines are processed, not which targets they reach. The
+classifier follows in its own #61 slice.
+
+**Clarification 16.10.2026: keys, constraint accesses and the OLTP forms.**
+*Changes:* how Q1-Q4 apply to compound keys and to the forms of
+`docs/concept.md` §2.2 D8-D9, from the plan review of #61 (#64).
+*Grounding:* the frozen category definitions, Q1-Q4 and the reference
+meaning. Decided before any classification result states a category: the
+only classified output, #55's TPC-C scaffolding, refuses every unit for
+want of IR and is marked unsuitable for measurement (`data/README.md`).
+No rule adds a category or changes a threshold; none states a TPC-C
+category. The fidelity expectations for TPC-C are owned by
+[`tpcc-fidelity.md`](tpcc-fidelity.md).
+
+1. *Provenance per component.* A key, a range prefix and an interval are
+   judged component by component. A component from arguments or literals
+   is static; one projected from a read's row is read-derived; one computed
+   from a read result (arithmetic, a conditional value, a text operation) is
+   computed. Two aliases follow from the read's own meaning: a key column of
+   a point-read row is the operand that read used for it, and an equality
+   prefix component of a primary-key prefix range's row is that prefix
+   operand. Values merely observed equal are never aliases.
+2. *Lookups.* A read, update or delete key is judged by the first of these
+   that applies, and a key that qualifies at one step is never judged by a
+   later one: (a) every component static: static; (b) same-table
+   containment (rule 4): covered, no resolution; (c) a declared index
+   range's rows resolved into base rows of its table (rule 4, Q2.3): one
+   resolution by that index read; (d) whole foreign key: one resolution by
+   read R when a declared foreign key from R's table maps its source
+   columns, in order, onto the accessed table's whole key, and each
+   component projects the matching source column of R's row or equals it by
+   an alias; (e) otherwise Unknown — matching only the read-derived
+   components is not enough, and a computed component never matches.
+   Example: ORDER read at `(w, d, o)`, then CUSTOMER at
+   `(w, d, ORDER.O_C_ID)`, matches `(O_W_ID, O_D_ID, O_C_ID)` with the first
+   two by alias: one resolution by the ORDER read. STOCK at
+   `(w, ORDER-LINE.OL_I_ID)` against `(OL_SUPPLY_W_ID, OL_I_ID)` fails: `w`
+   is not provably `OL_SUPPLY_W_ID`.
+3. *Counting.* Resolutions are distinct logical reads (Q3.1, Q3.3): any
+   number of components, keys or constraint targets fed by one read add one.
+4. *Preserved.* Static argument and literal keys; same-table containment:
+   a key of a primary-key range's table whose every component projects the
+   matching key column of a row that range bound — directly, or after
+   filtering, sorting or selection (rule 7) — stays covered by that range,
+   with no resolution; index ranges and their resolution into base rows
+   (Q2.2-Q2.4); Q3.5's read-derived insert keys, now any component; a
+   primary-key range whose prefix or interval comes from a read stays
+   Unknown, even when its prefix equals a foreign key's target key —
+   reverse foreign-key navigation is not decided here.
+5. *Constraint accesses.* The accesses a declared constraint's check makes
+   (D2, D5) belong to the function's footprint. Each target component takes
+   its provenance from the row the check judges (D8): a column the write
+   sets, an inserted key's components included, from the value written; a
+   retained key column from the write's key; a
+   retained non-key column from the last write of it at a provably equal
+   key earlier on the path, else from the stored row, read by the write's
+   own access to it.
+   (a) A foreign key's parent point read is static when every component is.
+   A read-derived component makes it one resolution through that declared
+   foreign key — the only relationship it uses — by the read the component
+   projects: an earlier read, or for a retained stored value the write's
+   own access; rule 3 counts distinct reads. A computed component is
+   Unknown, as in rule 2. Example: inserting ORDER-LINE with
+   `OL_O_ID = DISTRICT.D_NEXT_O_ID` resolves its ORDER check by the DISTRICT
+   read; updating only `a` of a foreign key `(a, b)` from an argument,
+   where `b` is a stored non-key column, is one resolution by the update's
+   access to that row.
+   (b) A unique-tuple lookup is static when every component is; a
+   read-derived or computed component makes it Unknown, since a unique
+   constraint is no index (Q2.1) and One-hop admits only an index or a
+   foreign key.
+   (c) A parent-deletion lookup is static only when the deleted key is
+   static (every component from arguments or literals). Any read-derived or
+   computed component makes it Unknown, even when the delete itself is
+   covered by a same-table range: the lookup reaches the referencing table,
+   which that range does not cover (rule 4), so it is the reverse
+   navigation rule 4 leaves undecided.
+6. *Appends.* An append is static: its one access is a fresh row of its
+   table, which no key of any function can name (D9), so the logged append
+   (table, no identity) lies inside the inferred footprint "a fresh row of
+   T". The counter-chosen identity is never an argument-derived key; the
+   append's constraint accesses follow rule 5.
+7. *Scans and sequences.* A scan is Unknown (Q2.5) even when restricted to
+   an argument prefix or condition, and so is every value derived from it.
+   Filtering, mapping, sorting, distinct, counting, folding and selection
+   read nothing (Q3.6). Over a sequence bound by an argument-bounded
+   primary-key or declared-index range:
+   (a) Filtering, sorting, distinct rows and selecting an element keep each
+   surviving element the row that range bound, so an access through its
+   columns is judged by rule 2 as if taken from that row: same-table
+   containment stays covered with no resolution, index-to-base stays one
+   resolution by the index read, and a whole foreign key is one resolution
+   by the range read. Selection never turns a covered access into a
+   resolution, nor adds one to an index-to-base resolution. Q3.6's minimum
+   and maximum are selections — a sort, or the first or last row of the
+   range — and follow (a).
+   (b) Mapping and distinct values keep each value's provenance: a field
+   that projects a column stays that projection.
+   (c) Counting, folding, arithmetic and conditional values are computed
+   (rule 1) even when every input projects the same column of one read:
+   they inherit neither containment nor foreign-key identity, so a key
+   built from them is Unknown.
+   (d) A first- or last-limited read is judged as the whole range or scan
+   it consulted.
+8. *Faithfulness conditions* (Q4.1). Exact decimals are integers at a
+   pinned scale per attribute, rounded only where and when the source
+   rounds, and the lowering shows that no legal input overflows `i64` where
+   the source would not fail. An unrolled argument-bounded repetition
+   covers every legal argument case with the source's accesses, logical
+   reads, failures (position and order) and responses for each. A bound is
+   at least what the source can reach — the declared key domain, or an
+   invariant every writer of the table keeps, cited — so it adds no abort
+   the source lacks; selecting first or last rows uses a limited read, not
+   a row-count bound. A source null lowers to an absent column where the
+   source's constraints and indexes treat it as missing, and to a sentinel
+   only where the source defines null as one fixed out-of-range value
+   (TPC-C Clause 1.3.1). A lowering meeting none of these refuses.
+9. *Host boundary and units.* A host-supplied argument is admissible only
+   for a value the source receives from outside the database within the
+   unit: a request input, a clock, a queue entry carrying such inputs. A
+   value the source reads from the database stays a read inside the unit,
+   so host work cannot hide a resolution, and no queue table enters a unit
+   whose source has none. TPC-C keeps five units: Delivery's is the
+   deferred business transaction of Clause 2.7.4.2, one function over its
+   ten districts although the clause permits up to ten database
+   transactions; its enqueue and dequeue lie outside it, because the queue
+   carries only the terminal's input (Clause 2.7.2.2, rule 2). What the
+   host records after commit is a response field (D9).
+10. *Unknown is not refusal.* A function lowered in full whose footprint is
+    Unknown counts in N only; a refused function counts in R as well. A
+    lowering never refuses a function it can express faithfully, never
+    approximates one (a scan as a range, a guessed bound) to reach either
+    outcome, and names the missing capability in every refusal.
+
+*Bias, per rule:* 1 raises coverage through its aliases, bounded by the
+read's own meaning (a value merely observed equal is no alias). 2 restates
+KILN-E1-21/-22 for one-column keys; for composite keys, whole-key matching
+admits a resolution the landed classifier has no rule for (up), and
+refusing a partial match or a computed component lowers it. 3 restates
+Q3.1 and Q3.3. 4 preserves the landed rules; keeping reverse foreign-key
+navigation Unknown lowers coverage. 5 lowers it in every part: (a) adds
+accesses the landed classifier leaves out, so a function writing a foreign
+key from a read, or partially, is at least One-hop, admitted only through
+the declared foreign key the frozen text names; (b) and (c) keep
+unique-tuple and reverse lookups Unknown, (c) also when the delete is
+range-contained (downward; no TPC-C impact, since no table references
+NEW-ORDER). 6 raises it, bounded by the
+containment audit of the logged append. 7: (a), (b) and (d) only carry
+rules 2 and 4 through computation; scans and (c) lower it. 8 and 9 lower it
+(a lowering that cannot meet them refuses; host work hides no resolution).
+10 moves no category. *TPC-C:* rule 2 decides Delivery's ORDER and CUSTOMER
+keys and Stock-Level's STOCK keys; rule 4 leaves the read-bounded
+ORDER-LINE ranges of Order-Status, Delivery and Stock-Level Unknown, the
+conservative reading; rule 7 decides the by-name customer selection of
+Payment and Order-Status and Order-Status's last-order selection (all
+scans, `tpcc-fidelity.md` E4) and Delivery's first NEW-ORDER row (a
+limited range whose delete stays contained); rules 3 and 5(a) count
+New-Order's DISTRICT read once for every key and foreign-key target it
+feeds. No TPC-C update writes a foreign-key column, no TPC-C table has a
+unique constraint besides its key, and no table references NEW-ORDER, the
+only table TPC-C deletes from, so apart from that read and Payment's
+by-name HISTORY append (rule 7) rule 5 moves no TPC-C step.

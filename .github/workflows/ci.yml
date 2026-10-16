@@ -111,3 +111,50 @@ jobs:
           if [ "$found_root" -eq 0 ]; then
             echo "No Rust workspace root found; nothing to check."
           fi
+
+  e1-django-extractor:
+    name: E1 Django extractor tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11.15"
+
+      # Standard library only; the recorded analyzer output is committed, so
+      # the tests need neither the analyzer nor the network.
+      - name: Run the extractor tests
+        run: python3 -m unittest discover -s experiments/e1-classification-coverage/extract/django -v
+
+  e1-typeorm-extractor:
+    name: E1 TypeORM extractor tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.23.1"
+
+      # The recorded analyzer output is committed, so the tests need neither the
+      # analyzer nor the network; only the pinned TypeScript parser is installed.
+      - name: Install the pinned parser
+        working-directory: experiments/e1-classification-coverage/extract/typeorm
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Run the extractor tests
+        working-directory: experiments/e1-classification-coverage/extract/typeorm
+        run: node --test

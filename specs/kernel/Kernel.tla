@@ -46,7 +46,11 @@ Refs(v, k) == {c \in Keys : v[c].present /\ v[c].parent = k}
                         sold: a branch on the row, so it also reads k (S) and
                         the budget covers it either way
      BuyVal(k, j)       draws row j's val from k: an amount the program
-                        does not know statically (budget unbounded) *)
+                        does not know statically (budget unbounded)
+     Follow(k)          reads row k and the row its val names (0 names
+                        none): a covering resource only the data decides,
+                        so the footprint guessed at dispatch can fall short
+                        and the call widens and restarts *)
 Read(k) == [op |-> "Read", k |-> k]
 Scan(lo, hi) == [op |-> "Scan", lo |-> lo, hi |-> hi]
 Update(k, val, bal) == [op |-> "Update", k |-> k, val |-> val, bal |-> bal]
@@ -55,6 +59,7 @@ Delete(k) == [op |-> "Delete", k |-> k]
 Buy(k, a) == [op |-> "Buy", k |-> k, a |-> a]
 BuyUnder(k, a, cap) == [op |-> "BuyUnder", k |-> k, a |-> a, cap |-> cap]
 BuyVal(k, j) == [op |-> "BuyVal", k |-> k, j |-> j]
+Follow(k) == [op |-> "Follow", k |-> k]
 
 DrawOps == {"Buy", "BuyUnder", "BuyVal"}
 Draws(op) == op.op \in DrawOps
@@ -75,6 +80,9 @@ Need(op, v) ==
     [] op.op = "Buy"    -> {Res("DRAW", {op.k})}
     [] op.op = "BuyUnder" -> {Res("DRAW", {op.k}), Res("S", {op.k})}
     [] op.op = "BuyVal" -> {Res("DRAW", {op.k}), Res("S", {op.j})}
+    [] op.op = "Follow" -> {Res("S", {op.k})}
+                           \cup (IF v[op.k].present /\ v[op.k].val \in Keys
+                                 THEN {Res("S", {v[op.k].val})} ELSE {})
 
 (* Compatibility (§4, §5). Two resources whose coverage is disjoint never
    contend ("two keyed resources with distinct keys never contend"); with
@@ -135,6 +143,10 @@ ApplyOp(op, v) ==
          ELSE Result("skipped", v, FALSE)
     [] op.op = "BuyVal" ->
          DrawFrom(op.k, v[op.j].val, v)
+    [] op.op = "Follow" ->
+         Result(IF v[op.k].present /\ v[op.k].val \in Keys
+                THEN <<v[op.k], v[v[op.k].val]>> ELSE <<v[op.k]>>,
+                v, FALSE)
 
 ----------------------------------------------------------------------------
 (* Serial reference execution: run the transactions of `perm` one after
@@ -172,7 +184,9 @@ Perms(S) ==
    is set by InitDb or by an Insert in some program, so the footprint pins
    every parent the row can have. The over-approximation costs at most a
    spurious conflict; `FootprintCovers` checks that it never misses a
-   resource an operation turns out to need. *)
+   resource an operation turns out to need, except for a `Follow`, whose
+   resource the data decides: its static footprint is the guess against
+   InitDb, and the guess may fall short (widen-and-restart below). *)
 Ops == UNION {{Prog[t][i] : i \in DOMAIN Prog[t]} : t \in Txns}
 PossibleParents(k) ==
   ({InitDb[k].parent} \cup {op.p : op \in {op \in Ops : op.op = "Insert" /\ op.k = k}})
@@ -188,8 +202,6 @@ Footprint(t) == UNION {OpFootprint(Prog[t][i]) : i \in DOMAIN Prog[t]}
    the data decides (BuyVal) makes the budget unknown, which counts as
    unbounded. A branch (BuyUnder) counts in full whether or not it is
    taken. *)
-EscrowKeys(t) == {k \in Keys : Res("DRAW", {k}) \in Footprint(t)}
-
 BudgetKnown(t, k) ==
   ~\E i \in DOMAIN Prog[t] : Prog[t][i].op = "BuyVal" /\ Prog[t][i].k = k
 
@@ -205,7 +217,8 @@ ASSUME \A k \in Keys : InitDb[k] \in Row /\ (~InitDb[k].present => InitDb[k] = A
 
 ----------------------------------------------------------------------------
 VARIABLES
-  status,   \* [Txns -> {"pending", "active", "committed", "rejected"}]
+  status,   \* [Txns -> {"pending", "active", "committed", "rejected", "aborted"}]
+            \* ("aborted": discarded by recovery, only the Durable module reaches it)
   seq,      \* [Txns -> Nat]: dispatch sequence number, 0 before dispatch
   pc,       \* [Txns -> Nat]: operations already executed
   held,     \* [Txns -> SUBSET Resource]: the footprint, held from admission to the end
@@ -213,11 +226,18 @@ VARIABLES
   wr,       \* [Txns -> partial Keys -> Row]: tentative writes, applied at commit
   draws,    \* [Txns -> [Keys -> Draw]]: tentative escrow draws, deltas at commit
   resp,     \* [Txns -> Seq(response)]: what the caller has been told
+  widened,  \* [Txns -> SUBSET Resource]: resources discovered beyond the guessed footprint
   db        \* [Keys -> Row]: committed state
 
-Vars == <<status, seq, pc, held, reserved, wr, draws, resp, db>>
+Vars == <<status, seq, pc, held, reserved, wr, draws, resp, widened, db>>
 
 Resource == [kind : Kinds, cov : SUBSET Keys]
+
+(* What admission requests: the guessed footprint plus every resource an
+   earlier attempt found it lacked. *)
+Requested(t) == Footprint(t) \cup widened[t]
+
+EscrowKeys(t) == {k \in Keys : Res("DRAW", {k}) \in Requested(t)}
 
 NoWrites == [k \in {} |-> AbsentRow]
 
@@ -236,6 +256,7 @@ Init ==
   /\ wr = [t \in Txns |-> NoWrites]
   /\ draws = [t \in Txns |-> NoDraws]
   /\ resp = [t \in Txns |-> <<>>]
+  /\ widened = [t \in Txns |-> {}]
   /\ db = InitDb
 
 (* A pending transaction holds nothing; once dispatched it is queued for
@@ -306,7 +327,7 @@ EscrowBlockers(t) ==
    order. A queued transaction waits on every older queued transaction
    whose footprint shares a resource with its own, so it never bypasses
    it; disjoint footprints proceed independently. *)
-Shares(t, u) == \E a \in Footprint(t), b \in Footprint(u) : a.cov \cap b.cov # {}
+Shares(t, u) == \E a \in Requested(t), b \in Requested(u) : a.cov \cap b.cov # {}
 
 OlderQueued(t) == {u \in Txns \ {t} : Queued(u) /\ seq[u] < seq[t] /\ Shares(t, u)}
 
@@ -317,41 +338,51 @@ OlderQueued(t) == {u \in Txns \ {t} : Queued(u) /\ seq[u] < seq[t] /\ Shares(t, 
    its whole footprint and never waits again (rule 1). Empty exactly when
    its next step may run. *)
 WaitsOn(t) ==
-  IF Queued(t) THEN Conflicting(t, Footprint(t)) \cup EscrowBlockers(t) \cup OlderQueued(t)
+  IF Queued(t) THEN Conflicting(t, Requested(t)) \cup EscrowBlockers(t) \cup OlderQueued(t)
   ELSE {}
 
 Changed(t, v) == {k \in Keys : v[k] # View(t)[k]}
 
 (* Dispatch: the request enters the admission queue with the next
-   sequence number. *)
+   sequence number. Queued sequence numbers are dense (1..n): admission
+   closes the gap it leaves, so the numbers stay bounded when requests
+   repeat. *)
 Dispatch(t) ==
   /\ Pending(t) /\ seq[t] = 0
-  /\ seq' = [seq EXCEPT ![t] = 1 + Cardinality({u \in Txns : seq[u] > 0})]
-  /\ UNCHANGED <<status, pc, held, reserved, wr, draws, resp, db>>
+  /\ seq' = [seq EXCEPT ![t] = 1 + Cardinality({u \in Txns : Queued(u)})]
+  /\ UNCHANGED <<status, pc, held, reserved, wr, draws, resp, widened, db>>
 
 (* Acquire the complete footprint in one step, atomically with the
    compatibility check and the escrow reservations (§4: registered
    "atomically at dispatch, held through commit"; a covering resource is
    acquired "before any read or write touches the underlying state"). The
-   implementation acquires the same set resource by resource in canonical
-   order; the step abstracts that sequence, so no partial footprint is
-   ever held. *)
+   logical contract is this one step: no partial footprint is ever held or
+   observable. How an implementation realises it (an internal ordering of
+   individual acquisitions, say) is not specified here and is not part of
+   the contract. *)
 Acquire(t) ==
   /\ Queued(t)
   /\ WaitsOn(t) = {}
   /\ status' = [status EXCEPT ![t] = "active"]
-  /\ held' = [held EXCEPT ![t] = Footprint(t)]
+  /\ held' = [held EXCEPT ![t] = Requested(t)]
   /\ reserved' = [reserved EXCEPT ![t] =
                    [k \in Keys |-> IF k \in EscrowKeys(t) THEN Reservation(t, k) ELSE 0]]
-  /\ UNCHANGED <<seq, pc, wr, draws, resp, db>>
+  /\ seq' = [u \in Txns |->
+             IF u = t THEN 0 ELSE IF Queued(u) /\ seq[u] > seq[t] THEN seq[u] - 1 ELSE seq[u]]
+  /\ UNCHANGED <<pc, wr, draws, resp, widened, db>>
+
+(* The held footprint covers the next operation on the view it runs on. *)
+Covered(t) == Need(NextOp(t), View(t)) \subseteq held[t]
 
 (* Execute the next operation on the view under the footprint already
-   held; it acquires nothing and waits for nothing. A constraint rejection
+   held; it acquires nothing and waits for nothing. It runs only when that
+   footprint covers it; otherwise the call widens and restarts. A constraint rejection
    ends the transaction with the caller's failure response and releases
    everything it held, the unused reservation included; nothing it wrote
    survives. *)
 DoOp(t) ==
   /\ Running(t)
+  /\ Covered(t)
   /\ LET op == NextOp(t)
          v == OpView(t, op)
          r == ApplyOp(op, v) IN
@@ -373,7 +404,29 @@ DoOp(t) ==
                                 [k \in DOMAIN @ \cup Changed(t, r.db) |->
                                    Undrawn(t, k, r.db[k])]]
                      /\ UNCHANGED draws
-  /\ UNCHANGED <<seq, db>>
+  /\ UNCHANGED <<seq, widened, db>>
+
+(* Widen-and-restart (§4, "lock expansion restarts safely"): the next
+   operation needs a resource the held footprint lacks. The call never
+   acquires it on top of what it holds - that would be an acquisition out
+   of order - but discards every tentative effect, releases everything it
+   held, and re-requests with the discovered resource added, joining the
+   admission queue at its tail like any new request. The response it will
+   give is the one of its final attempt. Each restart adds a resource to
+   `widened`, a subset of the finite resource set, so restarts are finite. *)
+WidenAndRestart(t) ==
+  /\ Running(t)
+  /\ ~Covered(t)
+  /\ widened' = [widened EXCEPT ![t] = @ \cup Need(NextOp(t), View(t))]
+  /\ status' = [status EXCEPT ![t] = "pending"]
+  /\ seq' = [seq EXCEPT ![t] = 1 + Cardinality({u \in Txns : Queued(u)})]
+  /\ pc' = [pc EXCEPT ![t] = 0]
+  /\ resp' = [resp EXCEPT ![t] = <<>>]
+  /\ held' = [held EXCEPT ![t] = {}]
+  /\ reserved' = [reserved EXCEPT ![t] = NoReservation]
+  /\ wr' = [wr EXCEPT ![t] = NoWrites]
+  /\ draws' = [draws EXCEPT ![t] = NoDraws]
+  /\ UNCHANGED db
 
 (* Commit applies the tentative writes and draws atomically - the view
    becomes the committed state - and releases every resource and the
@@ -387,7 +440,7 @@ Commit(t) ==
   /\ reserved' = [reserved EXCEPT ![t] = NoReservation]
   /\ wr' = [wr EXCEPT ![t] = NoWrites]
   /\ draws' = [draws EXCEPT ![t] = NoDraws]
-  /\ UNCHANGED <<seq, pc, resp>>
+  /\ UNCHANGED <<seq, pc, resp, widened>>
 
 Finished == \A t \in Txns : ~Live(t)
 
@@ -397,20 +450,46 @@ Finished == \A t \in Txns : ~Live(t)
 Terminating == Finished /\ UNCHANGED Vars
 
 Next ==
-  \/ \E t \in Txns : Dispatch(t) \/ Acquire(t) \/ DoOp(t) \/ Commit(t)
+  \/ \E t \in Txns : Dispatch(t) \/ Acquire(t) \/ DoOp(t) \/ WidenAndRestart(t) \/ Commit(t)
   \/ Terminating
 
-Spec == Init /\ [][Next]_Vars
+(* Rearrival: a finished transaction requests its program again, from
+   a clean slate; the committed rows stay. Only the repeated-arrival
+   scenarios (`RepeatSpec`) take this step: the cycle it closes is what
+   lets a lasso starve a request. The step only makes the transaction
+   pending again; the request starts with the next `Dispatch`.
+   Rearrival resets the transaction histories, which `Serializable` and
+   `Uniqueness` read, so those history-based checks do not apply to
+   repeated executions and those scenarios do not check them. *)
+Rearrive(t) ==
+  /\ ~Live(t)
+  /\ status' = [status EXCEPT ![t] = "pending"]
+  /\ pc' = [pc EXCEPT ![t] = 0]
+  /\ resp' = [resp EXCEPT ![t] = <<>>]
+  /\ widened' = [widened EXCEPT ![t] = {}]
+  /\ UNCHANGED <<seq, held, reserved, wr, draws, db>>
+
+(* Weak fairness (concept §9.5): a step of a transaction that stays
+   enabled is taken - admission, execution, completion. Dispatch is the
+   caller's request, not a step the protocol owes. *)
+Fairness ==
+  \A t \in Txns : WF_Vars(Acquire(t)) /\ WF_Vars(DoOp(t)) /\ WF_Vars(WidenAndRestart(t))
+    /\ WF_Vars(Commit(t))
+
+Spec == Init /\ [][Next]_Vars /\ Fairness
+
+RepeatSpec == Init /\ [][Next \/ \E t \in Txns : Rearrive(t)]_Vars /\ Fairness
 
 ----------------------------------------------------------------------------
 TypeOK ==
-  /\ status \in [Txns -> {"pending", "active", "committed", "rejected"}]
+  /\ status \in [Txns -> {"pending", "active", "committed", "rejected", "aborted"}]
   /\ seq \in [Txns -> Nat]
   /\ pc \in [Txns -> Nat]
   /\ \A t \in Txns : held[t] \subseteq Resource
   /\ reserved \in [Txns -> [Keys -> Nat]]
   /\ \A t \in Txns : DOMAIN wr[t] \subseteq Keys /\ \A k \in DOMAIN wr[t] : wr[t][k] \in Row
   /\ draws \in [Txns -> [Keys -> Draw]]
+  /\ \A t \in Txns : widened[t] \subseteq Resource
   /\ db \in [Keys -> Row]
 
 (* No two live transactions hold incompatible resources. *)
@@ -419,9 +498,10 @@ MutualExclusion ==
     \A a \in held[t], b \in held[u] : Compatible(a, b)
 
 (* An operation runs without acquiring anything: the footprint taken at
-   admission holds every resource it needs on the view it runs on. *)
+   admission holds every resource it needs on the view it runs on. Only a
+   `Follow` may fall short, and then it widens and restarts. *)
 FootprintCovers ==
-  \A t \in Txns : Running(t) => Need(NextOp(t), View(t)) \subseteq held[t]
+  \A t \in Txns : Running(t) /\ NextOp(t).op # "Follow" => Covered(t)
 
 (* Escrow conservation (§4, rule 1). Live reservations are funded: their
    sum on a key never exceeds its committed balance. Draws stay within the
@@ -449,7 +529,7 @@ NoWaitCycle == \A t \in Txns : <<t, t>> \notin Closure(WaitFor, Cardinality(Txns
    returned, exactly the terminal outcome each reached (committed, or
    rejected with its caller-visible failure as the last response), and
    exactly the committed state. *)
-Ended == {t \in Txns : ~Live(t)}
+Ended == {t \in Txns : status[t] \in {"committed", "rejected"}}
 
 Serializable ==
   \E perm \in Perms(Ended) :
@@ -473,5 +553,11 @@ ReferentialIntegrity ==
   \A k \in Keys : db[k].present /\ db[k].parent # 0 => db[db[k].parent].present
 
 BalanceNonNegative == \A k \in Keys : db[k].bal >= 0
+
+(* Liveness (concept §9.5): every request ends, committed or rejected,
+   under the fairness of `Spec`. After a `Rearrive` the transaction is
+   pending and undispatched; the obligation starts with the later
+   `Dispatch`, so a repeated request is a new request. *)
+RequestedLeadsToTerminal == \A t \in Txns : Queued(t) ~> ~Live(t)
 
 ============================================================================

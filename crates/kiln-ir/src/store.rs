@@ -11,6 +11,14 @@ use std::collections::BTreeMap;
 use crate::identifiers::{ColumnName, TableName};
 use crate::ir::{Row, Value};
 
+/// A row together with the primary key it is stored under, so a read's
+/// result can answer `Expr::PrimaryKey` without the row restating its key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyedRow {
+    pub key: Value,
+    pub row: Row,
+}
+
 /// A snapshot of every table's rows. [`crate::evaluator::run`] never mutates
 /// the `Store` it is given; it returns a new one.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -39,15 +47,15 @@ impl Store {
         self.tables.get(table).and_then(|rows| rows.get(key))
     }
 
-    /// Every row of `table` whose key falls in `[start, end]`, in key
-    /// order.
+    /// Every row of `table` whose key falls in `[start, end]`, with its
+    /// key, in key order.
     ///
     /// Empty if `table` has no rows, if no key falls between `start` and
     /// `end`, or if `start` sorts after `end` — a reversed bound is an
     /// empty range, not a panic: `BTreeMap::range` would panic on a
     /// reversed bound, so this checks for it first instead of ever calling
     /// into that panic (`docs/concept.md` §2.2 D6).
-    pub fn rows_in_range(&self, table: &TableName, start: &Value, end: &Value) -> Vec<Row> {
+    pub fn rows_in_range(&self, table: &TableName, start: &Value, end: &Value) -> Vec<KeyedRow> {
         if start > end {
             return Vec::new();
         }
@@ -55,10 +63,56 @@ impl Store {
             .get(table)
             .map(|rows| {
                 rows.range(start.clone()..=end.clone())
-                    .map(|(_, row)| row.clone())
+                    .map(|(key, row)| KeyedRow {
+                        key: key.clone(),
+                        row: row.clone(),
+                    })
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Every row of `table` holding all of `columns` whose values, in that
+    /// order, lie in `[start, end]`, ordered by those values and then by
+    /// primary key — empty if `start` sorts after `end`. Each result carries
+    /// its key and only the indexed columns: the index holds nothing else.
+    pub fn rows_in_index_range(
+        &self,
+        table: &TableName,
+        columns: &[ColumnName],
+        start: &[Value],
+        end: &[Value],
+    ) -> Vec<KeyedRow> {
+        let mut entries: Vec<(Vec<&Value>, &Value)> = self
+            .tables
+            .get(table)
+            .into_iter()
+            .flatten()
+            .filter_map(|(key, row)| {
+                let held: Option<Vec<&Value>> = columns
+                    .iter()
+                    .map(|column| row.columns.get(column))
+                    .collect();
+                held.map(|held| (held, key))
+            })
+            .filter(|(held, _)| {
+                held.iter().copied().ge(start.iter()) && held.iter().copied().le(end.iter())
+            })
+            .collect();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
+            .into_iter()
+            .map(|(held, key)| KeyedRow {
+                key: key.clone(),
+                row: Row {
+                    columns: columns
+                        .iter()
+                        .cloned()
+                        .zip(held.into_iter().cloned())
+                        .collect(),
+                },
+            })
+            .collect()
     }
 
     /// Whether a row of `table` other than the one at `except_key` holds
@@ -70,10 +124,32 @@ impl Store {
         value: &Value,
         except_key: &Value,
     ) -> bool {
-        self.tables.get(table).is_some_and(|rows| {
-            rows.iter()
-                .any(|(key, row)| key != except_key && row.columns.get(column) == Some(value))
-        })
+        self.keys_holding(table, column, value)
+            .any(|key| key != except_key)
+    }
+
+    /// Whether any row of `table` holds `value` in `column`.
+    pub(crate) fn any_row_holds(
+        &self,
+        table: &TableName,
+        column: &ColumnName,
+        value: &Value,
+    ) -> bool {
+        self.keys_holding(table, column, value).next().is_some()
+    }
+
+    fn keys_holding<'a>(
+        &'a self,
+        table: &TableName,
+        column: &'a ColumnName,
+        value: &'a Value,
+    ) -> impl Iterator<Item = &'a Value> {
+        self.tables
+            .get(table)
+            .into_iter()
+            .flatten()
+            .filter(move |(_, row)| row.columns.get(column) == Some(value))
+            .map(|(key, _)| key)
     }
 
     /// Writes `row` at `key` in `table`, overwriting whatever was there.
@@ -128,12 +204,14 @@ mod tests {
         }
     }
 
-    fn observed_keys(rows: &[Row]) -> Vec<i64> {
+    fn observed_keys(rows: &[KeyedRow]) -> Vec<i64> {
         rows.iter()
-            .map(|row| match row.columns.get(&ColumnName("k".to_owned())) {
-                Some(Value::Integer(key)) => *key,
-                other => panic!("expected row_keyed's own integer column, got {other:?}"),
-            })
+            .map(
+                |keyed| match keyed.row.columns.get(&ColumnName("k".to_owned())) {
+                    Some(Value::Integer(key)) => *key,
+                    other => panic!("expected row_keyed's own integer column, got {other:?}"),
+                },
+            )
             .collect()
     }
 

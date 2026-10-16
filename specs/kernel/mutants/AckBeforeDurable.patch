@@ -1,0 +1,12 @@
+--- Durable.tla
++++ Durable.tla
+@@ -96,7 +96,8 @@
+   /\ Serving /\ Active(t) /\ pc[t] = Len(Prog[t])
+   /\ t \notin TxnsOf(unflushed) /\ t \notin TxnsOf(log)
+   /\ unflushed' = Append(unflushed, Record(t))
+-  /\ UNCHANGED <<Vars, log, history, engine, answer, fsyncFailed, unresolved, reservedAtUnknown, failuresUsed>>
++  /\ answer' = [answer EXCEPT ![t] = "committed"]
++  /\ UNCHANGED <<Vars, log, history, engine, fsyncFailed, unresolved, reservedAtUnknown, failuresUsed>>
+ 
+ (* The oldest record of the tail becomes durable. *)
+ AppendToLog ==

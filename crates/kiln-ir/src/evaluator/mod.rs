@@ -16,13 +16,19 @@
 use std::collections::HashMap;
 
 use crate::call::Call;
-use crate::identifiers::{AbortName, ColumnName, ParameterName, TableName};
-use crate::ir::{Parameter, Program, Row, SchemaError, Slot, UniqueConstraint, Value};
-use crate::store::Store;
+use crate::identifiers::{AbortName, ColumnName, IndexName, ParameterName, TableName};
+use crate::ir::{
+    CheckConstraint, ForeignKey, Parameter, Program, SchemaError, Slot, UniqueConstraint, Value,
+};
+use crate::store::{KeyedRow, Store};
 
+mod check;
+mod constraints;
 mod effects;
+mod foreign_key;
 mod resolve;
 mod unique;
+mod written;
 
 /// What a committed or aborted call produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,6 +109,8 @@ pub enum AbortReason {
         slot: Slot,
         column: ColumnName,
     },
+    /// A comparison condition compared an integer with text.
+    ComparisonTypeMismatch,
     /// A write gave an integer to `column` of `table`, which the schema
     /// declares as text.
     NonTextValue {
@@ -115,6 +123,24 @@ pub enum AbortReason {
     UniqueViolation {
         constraint: UniqueConstraint,
         value: Value,
+    },
+    /// The transaction's final state holds a row whose `foreign_key` column
+    /// names `value`, a key no row of the referenced table holds (D2).
+    DanglingReference {
+        foreign_key: ForeignKey,
+        value: Value,
+    },
+    /// The transaction deleted the row at `key` of the table `foreign_key`
+    /// references, while its final state still holds a row naming `key` (D2).
+    ReferencedParentDeleted {
+        foreign_key: ForeignKey,
+        key: Value,
+    },
+    /// The transaction's final state holds the row at `key` violating
+    /// `constraint` (D2).
+    CheckViolation {
+        constraint: CheckConstraint,
+        key: Value,
     },
 }
 
@@ -156,6 +182,7 @@ pub enum AccessedColumns {
 pub enum AccessKind {
     PointRead,
     RangeRead,
+    IndexRangeRead,
     Insert,
     Update,
     Delete,
@@ -168,7 +195,15 @@ pub enum AccessKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccessTarget {
     Point(Value),
-    Range { start: Value, end: Value },
+    Range {
+        start: Value,
+        end: Value,
+    },
+    IndexRange {
+        index: IndexName,
+        start: Vec<Value>,
+        end: Vec<Value>,
+    },
 }
 
 /// Who made an access: the transaction's own effects, or the end-of-
@@ -211,13 +246,14 @@ struct CallContext<'a> {
 }
 
 /// What a [`Slot`] holds once the effect that bound it has run: a single
-/// row or its absence (`Effect::Read`), or the ordered sequence of rows a
-/// range matched (`Effect::ReadRange`). [`Condition::RowPresent`](crate::ir::Condition::RowPresent) reads
+/// keyed row or its absence (`Effect::Read`), or the ordered sequence of
+/// keyed rows a range matched (`Effect::ReadRange`,
+/// `Effect::ReadIndexRange`). [`Condition::RowPresent`](crate::ir::Condition::RowPresent) reads
 /// either kind as one branchable fact — "did this read find anything" —
 /// without the rest of `run` needing to know which effect produced it.
 enum Binding {
-    Row(Option<Row>),
-    Range(Vec<Row>),
+    Row(Option<KeyedRow>),
+    Range(Vec<KeyedRow>),
 }
 
 impl Binding {
@@ -275,7 +311,7 @@ pub fn run(program: &Program, call: &Call, store: &Store) -> Result<Execution, S
 
     let outcome = match outcome {
         Outcome::Committed { .. } => {
-            unique::first_violation(&program.schema, &working_store, &mut access_log)
+            constraints::first_violation(&program.schema, &working_store, &mut access_log)
                 .map_or(outcome, |reason| Outcome::Aborted { reason })
         }
         aborted @ Outcome::Aborted { .. } => aborted,

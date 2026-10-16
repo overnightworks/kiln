@@ -4,8 +4,9 @@ Verification layer 1 of `docs/verification.md` (design proofs, checked with
 TLC). Slice 1 (issue #16, cut from #6) built resources, admission and
 typed reservations in one composed state space; #24 added escrow
 admission by aggregate budget after slice 1 found a wait cycle among
-escrow draws. Crash, recovery and publication, and liveness under stated
-fairness, are later slices of #6.
+escrow draws. Liveness under stated weak fairness is #38. Crash, recovery and
+unknown commit outcomes are #51 (`Durable.tla`); the publication pointer of
+concept §9.1 is #59 (`Publication.tla`).
 
 ## Tool
 
@@ -81,10 +82,9 @@ step, atomically with the compatibility check against every live holder
 and the escrow admission check. This is the model's abstraction of §4's
 atomic-at-dispatch registration: a keyed resource is registered
 "atomically at dispatch, held through commit", and a covering resource is
-acquired "before any read or write touches the underlying state". §4's
-canonical order is how an implementation acquires the same set piece by
-piece; the step abstracts that sequence, so the model never holds a
-partial footprint. The transaction is then `active` and `DoOp` executes
+acquired "before any read or write touches the underlying state". An
+implementation may acquire the same set piece by piece; the step abstracts
+that sequence, so the model never holds a partial footprint. The transaction is then `active` and `DoOp` executes
 its program in order on its view — committed rows overlaid with its own
 tentative writes and draws — acquiring nothing more and waiting for
 nothing (§4, rule 1: an admitted transaction never waits again). A
@@ -167,6 +167,31 @@ over the static footprint, credited a transaction with a pin it never
 held and admitted a deadlock. The `PerOperationAcquisition` mutant
 reintroduces that registration; TLC refutes it on all four.
 
+**Widen-and-restart (§4, "lock expansion restarts safely", #46).**
+`Follow(k)` reads row `k` and the row its `val` names, so the second
+resource is decided by data. `Footprint(t)` guesses it from `InitDb`;
+`widened[t]` holds what earlier attempts found missing, and admission
+requests `Requested(t) = Footprint(t) \cup widened[t]`. `DoOp` runs only
+when `Covered(t)`: the held footprint contains `Need(NextOp(t), View(t))`.
+Otherwise `WidenAndRestart(t)` is the only step of the running transaction:
+
+```
+WidenAndRestart(t) ==
+  /\ Running(t) /\ ~Covered(t)
+  /\ widened' = [widened EXCEPT ![t] = @ \cup Need(NextOp(t), View(t))]
+  /\ status' = pending, seq' = 1 + (number of queued), pc' = 0, resp' = <<>>
+  /\ held', reserved', wr', draws' = nothing; db unchanged
+```
+
+The call holds nothing afterwards and joins the admission queue at its
+tail, so queue order, conflicts and escrow reservations apply to it as to
+any request. Its `resp` is cleared, so the response it finally gives is
+the one of its last attempt, which `Serializable` checks exactly. Every
+restart adds a resource not yet requested (the held footprint contains
+`widened`), a subset of a finite set, so restarts are finite; the step is
+weakly fair like the others. `FootprintCovers` now exempts `Follow`
+only. `Rearrive` clears `widened`.
+
 **Serializability, checked for real.** `Serializable`: for the transactions
 that have ended (committed or rejected), some permutation, executed
 serially from `InitDb` with the same `ApplyOp`, returns exactly the
@@ -187,8 +212,7 @@ pinned only by the state invariants below (`Uniqueness`,
 `ReferentialIntegrity`, `BalanceNonNegative`) and by the witnesses, which
 name the concrete responses they expect. `resp` entries of a still-active
 transaction are buffered observations the caller has not been shown yet;
-publication is a later slice, and `Serializable` compares only ended
-transactions.
+`Serializable` compares only ended transactions.
 
 **Other properties.** `MutualExclusion` (no two live transactions hold
 incompatible resources), `FootprintCovers` (above), `ReservationsFunded`
@@ -201,56 +225,259 @@ present), `BalanceNonNegative`, `TypeOK`, and TLC's deadlock check (a state
 with a live transaction and no enabled step; `Terminating` self-loops once
 every transaction has ended).
 
-**Liveness, deferred.** The model has no fairness condition: `Spec` is
-`Init /\ [][Next]_Vars`, so TLC checks safety and deadlock freedom only.
-The assumption §9.5 needs is weak fairness of dispatch, admission,
-execution and completion for every transaction — no enabled step of a
-live transaction stays enabled forever without being taken — with
-finite programs. Under it every holder resolves, so every queued
-transaction's blockers (holders, and older queued transactions, finitely
-many and never bypassed) resolve in turn; stating this as
-`Requested(t) ~> Terminal(t)` and checking it, with a `NoBypass` mutant
-whose refutation is a liveness violation, is #6's liveness slice.
+**Liveness under weak fairness (#38).** `Spec` is `Init /\ [][Next]_Vars /\
+Fairness` with
+
+```
+Fairness == \A t \in Txns : WF_Vars(Acquire(t)) /\ WF_Vars(DoOp(t))
+                      /\ WF_Vars(WidenAndRestart(t)) /\ WF_Vars(Commit(t))
+```
+
+A step of a transaction that stays enabled is eventually taken: admission,
+execution, completion. Dispatch is the caller's request, not a step the
+protocol owes, so it is not fair. Every scenario with a program of finite
+length is checked against
+
+```
+RequestedLeadsToTerminal == \A t \in Txns : Queued(t) ~> ~Live(t)
+```
+
+a request, once dispatched, ends committed or rejected (a justified
+rejection is an end: fairness cannot manufacture missing funds). It holds
+on every scenario below. On finite programs that run once, though, it holds
+for any deadlock-free protocol, bypass included: every transaction ends once
+nothing blocks the last one. So the `Starvation` scenario closes the cycle:
+`RepeatSpec` adds `Rearrive`, by which a finished transaction requests its
+program again, so a transaction that is overtaken forever is a lasso. Its
+history is unbounded, and `Rearrive` resets the transaction histories
+that `Serializable` and `Uniqueness` read (`Serializable` compares a
+history with `InitDb`, `Uniqueness` counts the retained committed
+insert and delete responses), so these history-based checks do not suit
+repeated executions and `Starvation` checks neither. Rearrival leaves a
+transaction pending and undispatched; only the next `Dispatch` queues it
+and starts the `RequestedLeadsToTerminal` obligation. The `NoBypass` mutant drops `OlderQueued` from
+`WaitsOn` (rule 3) and TLC returns the lasso: t2 and t3 are admitted in turn, commit and
+request again, over and over, while t1, queued before each of their
+requests, is admitted in no state of the loop.
+
+Queued sequence numbers are dense (1..n): `Acquire` closes the gap it
+leaves, so the numbers stay bounded when requests repeat. This changed the
+encoding, not the behaviour, of every earlier scenario; their state counts
+below are from the rerun.
 
 **Bounds.** 2-3 transactions with programs of 1-2 operations, 1-3 keys,
-fixed programs per scenario. The footprint is acquired as one step; the
-canonical order in which an implementation acquires it piecewise, and §4's
-restart of a class-4 call whose covering resource must widen
-mid-execution, are not modelled. Not covered: longer programs, more than
-one table, crash and recovery, any liveness.
+fixed programs per scenario; `Starvation` repeats its three single-operation programs without bound. The footprint is acquired as one step; the
+order in which an implementation acquires it piecewise is not modelled.
+Widening is modelled for one data-dependent read (`Follow`), not for a
+widened range or table resource. Not covered: longer programs, more than
+one table. Liveness is checked only for the
+fair steps above, on scenarios of 2-3 transactions; it makes no claim
+beyond those bounds.
+
+## specs/kernel/Durable.tla — crash, recovery and unknown outcomes
+
+`Durable.tla` extends `Kernel.tla` with the failure model of concept §5 and
+§9.2 (#51). `Kernel.tla` changes only by one status value (`aborted`, a
+transaction discarded by recovery) and by `Ended` naming committed and
+rejected transactions; no earlier scenario changes, and all were rerun
+with identical state counts. Commit is split into the steps an engine
+takes: `Enqueue(t)` puts the transaction's commit record (its tentative
+rows and escrow deltas) in the volatile tail; `Flush` makes the oldest
+record durable, and only then are its effects committed and its footprint
+and reservations released; `Ack(t)` tells the caller, after `Flush`. The
+durable `log` is a sequence of such records; `history` is what the engine
+serves and `db = Replay(history)`.
+
+Failures, at most `Failures` per run (a constant of the scenario), each
+enabled only while the engine is up:
+
+- `Crash`: the engine stops; of the tail, a prefix of any length
+  (including none) reached storage and joins the log, the rest is lost.
+- `FsyncFail` (tail not empty): the writer is fenced and every transaction
+  in the tail is answered `unknown`; any prefix of the tail may have
+  reached storage anyway. Those transactions keep their footprint and
+  reservations (`status` stays `active`).
+- `Recover` (engine fenced or down): `history` and `db` are rebuilt from
+  the log alone. Every transaction with a durable record becomes
+  `committed`, acknowledged or not; every other dispatched transaction
+  becomes `aborted`; a request not yet made stays pending and runs on the
+  recovered engine. A transaction that had run its program and was not
+  acknowledged, or whose flush completed before the crash, is answered
+  `unknown`.
+
+A fenced or crashed engine does nothing but `Recover`: §5 resumes serving
+only after recovery resolves the outcome.
+
+Properties, checked as invariants of every crash scenario beside every
+Kernel invariant (`Serializable` now ranges over the recovered committed
+state and every ended transaction's exact responses):
+
+| Property | Meaning |
+|---|---|
+| `AcknowledgedSurvive` | every transaction answered `committed` is in the engine's history and in the log |
+| `RecoveredPrefix` | the engine's history is a prefix of the log, and equal to it while the engine is up |
+| `NoKnownAbortAfterFsyncFailure` | no transaction whose commit met an fsync failure is answered `aborted` |
+| `KnownAbortNotInLog` | nothing answered or recorded `aborted` has a durable commit record |
+| `UnknownKeepsReservations` | until recovery, an unknown-outcome transaction is still `active`, holds its whole footprint and holds exactly the escrow reservations it held when the flush failed (recorded at the failure, so an unused part and a legitimate zero reservation are covered) |
+
+`CrashFree` instantiates `Durable` with `Failures = 0` on the `Composed`
+programs: every Kernel invariant and `RequestedLeadsToTerminal` hold when
+commit is three steps and nothing fails. `Recovery` runs up to two
+failures over t1: `Buy(1,1)`; t2: `Buy(1,1)`, `Insert(2,0)`; t3:
+`Update(3,7,0)` (quota 2, key 2 absent): the two draws coexist, so two
+records can sit in the tail at once. `RecoveryEscrow` holds a reservation
+larger than its draw and a zero one through an fsync failure.
+`RecoveryDependent` has three transactions on one key, so a response
+depends on a predecessor whose commit survived or was lost.
+
+**Bounds.** One log, one writer, three transactions, at most two
+failures; a failure discards every volatile transaction. Recovery
+discards every queued or active request; only a request not yet
+dispatched stays runnable. Not covered here (the
+publication pointer is `Publication.tla`): torn writes that reach acknowledged bytes and
+a device that lies about a flush (outside §9.2's model), retried commits
+after an unknown outcome, storage layout. Records are abstract effect
+deltas, not bytes: framing and checksums are not modelled.
+
+**Not proved.** `DFairness` covers the protocol steps and `Flush`, but
+neither `Ack` nor `Recover`: a failure-free run may flush everything and
+leave a caller unanswered forever, and a fenced engine may stay fenced.
+`RequestedLeadsToTerminal` (checked on `CrashFree` only) speaks of
+terminal transaction status, not of the caller's answer. Eventual
+acknowledgement and eventual recovery are unproved, and no temporal
+claim is made for them.
+
+## specs/kernel/Publication.tla — the visible-version pointer
+
+`Publication.tla` extends `Durable.tla` (#59). A record that is durable is
+recoverable, not visible. `Durable.tla` was split for it, behaviour
+unchanged: `Flush` is `AppendToLog` (the record joins the log) followed by
+`Publish` (the commit takes effect in `db` and the history and releases its
+locks and reservations), and `Recover` is `RecoverTo(log)`. Publication takes
+the pieces apart. A commit's derived structures (`Structures`: the base row
+and the reverse-reference set of §5) are installed one at a time, and a
+single `pointer` into the log says how much of the log is published.
+Installed structures and the pointer are durable; a crash keeps both.
+
+- `PFlush`: the record becomes durable; the commit keeps its locks and
+  reservations and `db` does not change.
+- `Install(t, s)`: structure `s` of any durable commit `t` is installed, in
+  any order across structures and commits, so installation runs ahead of
+  the pointer.
+- `Advance`: the pointer passes the next log record, only when every
+  structure of it is installed. This is the publication: the commit takes
+  effect in `db` and releases its locks and reservations (`Publish`). The
+  acknowledgement follows it, so an acknowledged commit is visible to every
+  later reader; durability alone decides that a commit survives.
+- `RecoverPublication`: restart from the log. The pointer is recomputed from
+  the log and the installation state as the end of the longest prefix of
+  fully installed commits; the retained pointer value is not read. Commits
+  past it stay unpublished with their locks gone, and the engine is
+  `recovering`: it serves snapshot readers at the recomputed pointer while
+  `Install` and `Advance` finish the log.
+- `Open`: recovery ends only once the pointer has passed the whole log.
+
+**Every read sees published state.** A protocol transaction reads `db`,
+which is the log up to the pointer (`DbIsPublished`) and, because the
+pointer never passes an incompletely installed commit, only installed
+structures, plus its own writes. A commit's locks outlive its durability, so
+a transaction that conflicts with it waits until the pointer passes it: a
+delete cannot check reverse references, nor an insert its parent, against a
+commit that is durable but not yet installed. A snapshot reader (`reader`)
+captures the pointer and reads each structure over separate steps, whatever
+is installed or published meanwhile; a failure ends its session.
+`ReaderConsistent` requires every observation to equal the structure as of
+the captured version (`AsOf`), computed from the log. The reader also
+records which commits beyond its version had a copy in the structure it read
+while incompletely installed (`hidden`), which the reader witness requires.
+
+| Property | Statement |
+|---|---|
+| `AtomicVisibility` | whenever the engine serves, each durable commit shows in every structure or in none |
+| `ReaderConsistent` | each observation of a snapshot reader is the structure as of the version it captured, across its steps |
+| `PointerBelowInstalled` | the pointer never passes a commit with a structure missing |
+| `PointerMonotone` | the pointer never falls back (an action property; includes recovery, where the pointer is recomputed) |
+| `DbIsPublished` | the served history is the log up to the pointer and `db` is its replay: no protocol read sees an unpublished commit |
+| `PublishedAreCommitted` | a published commit is committed and released; a durable unpublished one is still active |
+| `AcknowledgedAreVisible` | an acknowledged commit is published |
+| `RestartIsAtomic` | the step that restarts the engine after a failure leaves nothing partially visible |
+| `RecoveryOpensOnWholeLog` | `Open` serves the whole log (#51's `RecoveredPrefix` for a pointer; `HistoryIsLogPrefix` holds throughout) |
+
+`PublicationCrash`: key 1 present; t1 inserts key 2 and t2 key 3 as
+children of key 1, so each commit changes a base row and key 1's
+reverse-reference set; up to two failures. `PublicationFree` is the same
+without failures. `PublicationDependent` adds the protocol readers: t1
+inserts key 2 under key 1, t2 deletes key 1 (the reference check) and t3
+reads key 2, with up to two failures; `Serializable` compares every
+response exactly. All three check every Kernel invariant and every #51
+property with `PTypeOK` (`RecoveredPrefix` as `HistoryIsLogPrefix`, see
+`RecoveryOpensOnWholeLog`), plus the rows above.
+
+**Bounds.** One log, two or three transactions, two structures per commit,
+at most two failures, which strike while the engine operates and never
+during recovery. One snapshot reader, one session at a time. Installation
+runs ahead of the pointer: `Install` accepts any logged commit. Not
+covered: several logs, byte layout, a failure during recovery. No
+liveness is claimed: nothing obliges `Install`, `Advance` or `Open` to run.
 
 ## Scenarios and results
 
 For every scenario TLC explores the whole state space against every
-property above and the deadlock check; every scenario passes with no
-violation and no deadlock, each run in under one second with 4 workers.
+invariant its configuration lists and the deadlock check; every scenario
+passes with no violation and no deadlock, with 4 workers. Each scenario
+also passes `RequestedLeadsToTerminal` under `Fairness`. `Starvation`
+(under `RepeatSpec`) checks `TypeOK`, `MutualExclusion`,
+`FootprintCovers`, `ReservationsFunded`, `DrawsWithinReservation`,
+`NoWaitCycle`, `ReferentialIntegrity`, `BalanceNonNegative` and
+`RequestedLeadsToTerminal`; it is exempt from `Serializable` and
+`Uniqueness` because `Rearrive` resets the histories they read. Every
+other scenario checks `Serializable` and `Uniqueness` too. `CrashFree` and the three
+`Recovery` scenarios check `DTypeOK` (`TypeOK` plus the durable state) in
+place of `TypeOK`, and the `Recovery` scenarios check no liveness property (failures are not owed by
+fairness). `CrashFree` checks `RequestedLeadsToTerminal` under `DSpec`'s
+fairness.
 Depth is the length of the longest shortest path (breadth-first).
 
 | Scenario | What runs | Distinct states | Depth | Log |
 |---|---|---|---|---|
-| `Composed` | t1: `Buy(1,1)`, `Insert(2,3)`; t2: `Buy(1,1)`, `Delete(3)`; t3: `Scan(1,3)` (table) — claim, pin, delete, two draws on key 1 (quota 2) and a table scan in one key space; the pin on 3 conflicts with its delete and the scan with everything, so the three serialize: insert first rejects the delete with `referenced`, delete first the insert with `noparent`, and a draw from a later-rejected transaction leaves no effect | 129 | 14 | `Composed.tlc.log` |
-| `Pins` | t1: `Delete(1)`, `Scan(1,3)` (table); t2: `Insert(2,1)`; t3: `Insert(3,1)` — two pins on parent 1 coexist against its delete, two claims meet the table scan | 136 | 12 | `Pins.tlc.log` |
-| `RangePoint` | t1: `Scan(1,2)`; t2: `Read(2)`, `Buy(3,1)`; t3: `Update(2,1,0)` — a range scan and a point read coexist against an update; the draw on 3 lies outside the range | 177 | 14 | `RangePoint.tlc.log` |
+| `Composed` | t1: `Buy(1,1)`, `Insert(2,3)`; t2: `Buy(1,1)`, `Delete(3)`; t3: `Scan(1,3)` (table) — claim, pin, delete, two draws on key 1 (quota 2) and a table scan in one key space; the pin on 3 conflicts with its delete and the scan with everything, so the three serialize: insert first rejects the delete with `referenced`, delete first the insert with `noparent`, and a draw from a later-rejected transaction leaves no effect | 127 | 14 | `Composed.tlc.log` |
+| `Pins` | t1: `Delete(1)`, `Scan(1,3)` (table); t2: `Insert(2,1)`; t3: `Insert(3,1)` — two pins on parent 1 coexist against its delete, two claims meet the table scan | 110 | 12 | `Pins.tlc.log` |
+| `RangePoint` | t1: `Scan(1,2)`; t2: `Read(2)`, `Buy(3,1)`; t3: `Update(2,1,0)` — a range scan and a point read coexist against an update; the draw on 3 lies outside the range | 138 | 14 | `RangePoint.tlc.log` |
 | `Phantom` | t1: `Scan(2,3)` twice; t2: `Insert(2,0)` — round-1 phantom | 26 | 10 | `Phantom.tlc.log` |
-| `EventClose` | t1: `Update(1,10,0)` on the event row (sold 10, quota 1); t2, t3: `Buy(1,1)` — the second draw's reservation waits on the first's, the update waits on both | 107 | 12 | `EventClose.tlc.log` |
-| `ClaimAbort` | t1: `Insert(2,0)`, `Buy(3,1)` against an empty escrow; t2, t3: `Insert(2,0)` — tentative claim whose holder is rejected while claimants wait | 101 | 12 | `ClaimAbort.tlc.log` |
+| `EventClose` | t1: `Update(1,10,0)` on the event row (sold 10, quota 1); t2, t3: `Buy(1,1)` — the second draw's reservation waits on the first's, the update waits on both | 101 | 12 | `EventClose.tlc.log` |
+| `ClaimAbort` | t1: `Insert(2,0)`, `Buy(3,1)` against an empty escrow; t2, t3: `Insert(2,0)` — tentative claim whose holder is rejected while claimants wait | 99 | 12 | `ClaimAbort.tlc.log` |
 | `ParentDelete` | t1: `Delete(1)`; t2: `Insert(2,1)` — parent delete concurrent with child insert | 21 | 8 | `ParentDelete.tlc.log` |
 | `OutOfOrder` | t1: `Buy(1,1)`, `Insert(2,0)`; t2: `Insert(2,0)`, `Buy(1,1)` — the programs touch keys 1 and 2 in opposite orders (quota 1); the claims conflict at dispatch and the second draw is rejected with `insufficient` | 25 | 9 | `OutOfOrder.tlc.log` |
 | `FootprintGap` | t1: `Insert(3,1)`, `Update(2,0,0)`; t2: `Update(2,1,0)`, `Delete(3)` — in order by lowest key per operation (1, 2; 2, 3), out of order over the footprint; the `X` locks on 2 conflict at dispatch | 29 | 11 | `FootprintGap.tlc.log` |
-| `ScanUpgrade` | t1: `Scan(1,2)`, `Update(1,0,0)`; t2: `Scan(1,2)`, `Update(2,0,0)` — each needs `X` on a key its own scan covers; range and `X` lock are taken together, and each `X` lock conflicts with the other's range | 29 | 11 | `ScanUpgrade.tlc.log` |
+| `ScanUpgrade` | t1: `Scan(1,2)`, `Update(1,0,0)`; t2: `Scan(1,2)`, `Update(2,0,0)` — each needs `X` on a key its own scan covers; range and `X` lock are taken together, and each `X` lock conflicts with the other's range | 28 | 11 | `ScanUpgrade.tlc.log` |
 | `DeleteReinsert` | rows 1 and 2 present, no parents; t1: `Delete(2)`, `Insert(2,1)`; t2: `Delete(1)`, `Update(2,0,0)` — the reinsert makes 1 a possible parent of 2, so t1's footprint pins 1; `DEL 1` against `PIN 1` and `DEL 2` against `X 2` conflict at dispatch | 26 | 10 | `DeleteReinsert.tlc.log` |
 | `AllowanceCycle` | t1, t2: `Buy(1,1)`, `Buy(1,1)` against quota 2 — slice 1's documented failure (each second draw waited on the other's tentative draw): now each reserves 2 at admission, the second is admitted once the first has resolved, capped at the remaining 0, and fails its first draw on committed state | 25 | 9 | `AllowanceCycle.tlc.log` |
 | `BranchBudget` | t1: `BuyUnder(1,1,1)` twice against quota 2 (the second branch is never taken, the budget is 2); t2: `Buy(1,1)` — the untaken branch keeps the balance reserved until t1 commits; t2 then takes the ticket it left | 26 | 10 | `BranchBudget.tlc.log` |
 | `ConcurrentBranch` | quota 2; t1, t2: `BuyUnder(1,1,1)` once each — both reservations are funded, but the branch reads the sold count, so the `S` lock orders them: one draws, the other skips | 23 | 9 | `ConcurrentBranch.tlc.log` |
 | `Unfundable` | t1: `Buy(1,2)`, `Buy(1,1)` (budget 3) against quota 2; t2: `Buy(1,1)` — t1's reservation is capped at the balance and admitted only with no other reservation live; it draws its reservation and fails the rest with `insufficient` on committed state | 22 | 9 | `Unfundable.tlc.log` |
-| `TwoEscrows` | keys 1 and 2 with quota 1 each; t1: `Buy(1,1)`, `Buy(2,1)`; t2: `Buy(2,1)`; t3: `Buy(1,1)` — admission is all-or-nothing across escrows: t1 waits on both holders reserving nothing, then is capped at 0 on both | 154 | 13 | `TwoEscrows.tlc.log` |
+| `TwoEscrows` | keys 1 and 2 with quota 1 each; t1: `Buy(1,1)`, `Buy(2,1)`; t2: `Buy(2,1)`; t3: `Buy(1,1)` — admission is all-or-nothing across escrows: t1 waits on both holders reserving nothing, then is capped at 0 on both | 113 | 13 | `TwoEscrows.tlc.log` |
 | `HolderAbort` | key 2 present; t1: `Buy(1,1)`, `Insert(2,0)` (rejected with `exists`, releasing its reservation); t2: `Buy(1,1)` twice against quota 2 — t2 waits instead of reserving the remainder and failing on it; after t1's rejection it reserves 2 and commits both draws | 25 | 10 | `HolderAbort.tlc.log` |
 | `MixedModes` | quota 1; t1: `Update(1,0,2)`, `Buy(1,1)`; t2: `Buy(1,1)`, `Update(1,5,0)` — `X` and `DRAW` on one key in each footprint; the `X` locks serialize them; after t2 commits, t1 is capped at 0 and draws from the balance its own update raised | 29 | 11 | `MixedModes.tlc.log` |
-| `UnknownBudget` | quota 2, row 2 with `val` 1; t1: `BuyVal(1,2)`; t2: `Buy(1,1)`; t3: `Update(2,3,0)` — an unknown budget reserves the whole balance; the draw amount t3 raises fails on committed state | 165 | 13 | `UnknownBudget.tlc.log` |
+| `UnknownBudget` | quota 2, row 2 with `val` 1; t1: `BuyVal(1,2)`; t2: `Buy(1,1)`; t3: `Update(2,3,0)` — an unknown budget reserves the whole balance; the draw amount t3 raises fails on committed state | 112 | 13 | `UnknownBudget.tlc.log` |
+| `Starvation` | t1, t2, t3: `Update(1,0,0)` each, requested again after finishing (`RepeatSpec`, no `Serializable`) — three transactions contend for one `X` lock forever; dispatch order keeps every request from being overtaken | 98 | 13 | `Starvation.tlc.log` |
+| `Widen` | key 1 points at 2; t1: `Follow(1)`; t2: `Update(1,3,0)`; t3: `Update(3,9,0)` — t1's guessed footprint is `S 1, S 2`; if t2 commits first t1 needs `S 3`, restarts, and waits for t3 if t3 holds key 3 | 135 | 15 | `Widen.tlc.log` |
+| `WidenQueue` | the same pointer; t1: `Follow(1)`; t2: `Update(1,3,0)`; t3: `Update(2,5,0)` — t3 queues behind t1; when t1 restarts it re-enters behind t3 and t3 is admitted first | 129 | 15 | `WidenQueue.tlc.log` |
+| `WidenCycle` | no pointers; t1: `Update(2,1,0)`, `Follow(2)`; t2: `Update(1,2,0)`, `Follow(1)` — each discovers the key the other holds from a pointer it just wrote; restarting discards the pointer and the two serialize | 65 | 17 | `WidenCycle.tlc.log` |
+| `WidenEscrow` | quota 1; key 3 has no pointer; t1: `Buy(1,1)`, `Follow(3)`; t2: `Update(3,2,0)`; t3: `Buy(1,1)` — if t2 commits first, t1 has reserved and drawn the ticket when its follow needs `S 2`; the restart discards both, t3 (waiting on the reservation) takes the ticket and t1's buy then fails on committed state | 130 | 16 | `WidenEscrow.tlc.log` |
+| `CrashFree` | the `Composed` programs on `Durable` with no failure — commit is append, flush, acknowledge; the Kernel invariants and `RequestedLeadsToTerminal` still hold | 273 | 18 | `CrashFree.tlc.log` |
+| `Recovery` | t1: `Buy(1,1)`; t2: `Buy(1,1)`, `Insert(2,0)`; t3: `Update(3,7,0)` (quota 2) with up to two crashes or fsync failures at any step; checks the Kernel invariants and the five durability properties | 10891 | 24 | `Recovery.tlc.log` |
+| `RecoveryEscrow` | balances 2 (key 1) and 0 (key 2); t1: `BuyUnder(1,1,1)` twice (reservation 2, draw 1); t2: `BuyUnder(2,1,0)` (skipped on an empty balance, reservation 0), one failure — the reservations an unknown outcome keeps are compared exactly | 337 | 16 | `RecoveryEscrow.tlc.log` |
+| `RecoveryDependent` | key 1 present; t1: `Update(1,5,0)`; t2: `Update(1,6,0)`; t3: `Read(1)`, with up to two failures — t2's and t3's responses depend on t1, whose commit may be durable but unacknowledged, or lost; `Serializable` compares them exactly | 6864 | 23 | `RecoveryDependent.tlc.log` |
+| `PublicationFree` | key 1 present; t1: `Insert(2,1)`; t2: `Insert(3,1)` with no failure — each commit has a base row and a reverse-reference set to install; a snapshot reader reads both at the pointer, which passes a commit only when whole | 1579 | 22 | `PublicationFree.tlc.log` |
+| `PublicationCrash` | the same with up to two crashes or fsync failures while the engine operates (none during recovery), including between a durable record and its installation | 17098 | 28 | `PublicationCrash.tlc.log` |
+| `PublicationDependent` | key 1 present; t1: `Insert(2,1)`; t2: `Delete(1)` (checks the reverse references of 1); t3: `Read(2)`, with up to two failures — t2 and t3 race a commit that is durable but not yet installed; `Serializable` compares their responses exactly, `ReaderConsistent` a snapshot reader | 111705 | 32 | `PublicationDependent.tlc.log` |
 
 **Reachability witnesses.** Each scenario names negated state predicates
 (`*Unreached`); TLC's counterexample is the proof that the scenario's
 decisive state is reachable. Logs: `<Scenario>.witness.<Predicate>.tlc.log`.
+Witnesses and mutants run with one worker and a fixed fingerprint
+function, so their traces reproduce; trace lengths are the number of
+states in the committed log.
 Two witnesses (`ComposedPinDeleteUnreached`, `PinsTableUnreached`) once
 asserted that two queued transactions each wait *only* on the holder;
 under rule 3 the later-dispatched one also waits on the earlier, so they
@@ -280,13 +507,38 @@ assert membership.
 | `HolderAbortReleasedUnreached` | t1 was rejected with `ok, exists`; t2, which waited on it, holds the whole balance | 7 |
 | `MixedModesRaisedUnreached` | t1 drew one against a reservation of 0 under its X lock | 10 |
 | `UnknownBudgetUnboundedUnreached` | t1 holds the whole balance under an unknown budget; t2 waits on it | 4 |
+| `StarvationQueuedBehindUnreached` | t1 holds the key; t2 and t3 are queued behind it, t2 first | 5 |
+| `WidenRestartedUnreached` | t2 committed the repointing; t1 restarted with a widened footprint and holds `S 3` | 9 |
+| `WidenConflictUnreached` | t1 restarted and is queued waiting on t3, which is active and holds `X 3` | 10 |
+| `WidenQueueBehindUnreached` | t1 restarted and is queued behind t3, which was waiting on it | 9 |
+| `WidenCycleBothUnreached` | both calls widened and both ended | 17 |
+| `WidenEscrowDrawnUnreached` | t1 is about to restart with its whole balance reserved and drawn (reservation 1, draw 1) while t3 waits on that reservation | 9 |
+| `WidenEscrowDiscardedUnreached` | t1 restarted: it is queued and widened with reservation 0 and draw 0 | 9 |
 | `UnknownBudgetInsufficientUnreached` | after t3 raised the amount to 3, t1's draw failed on the committed balance 2 | 8 |
+| `RecoveryDurableUnackedUnreached` | the engine crashed after t1's flush made its record durable and before t1 was acknowledged | 7 |
+| `RecoveryUnackedCommittedUnreached` | recovery serves t1 as committed and answers `unknown`, with no fsync failure: t1's record was in the tail when the crash persisted it (Enqueue, Crash, Recover; no Flush) | 7 |
+| `RecoveryFencedUnreached` | a flush failed: the engine is fenced, t1 is answered `unknown`, still active and holds its escrow reservation | 6 |
+| `RecoveryResolvedCommittedUnreached` | an fsync failure, then recovery: t1's unknown outcome resolved to committed, its record had reached storage | 7 |
+| `RecoveryResolvedAbortedUnreached` | an fsync failure, then recovery: t1's unknown outcome resolved to aborted, its record had not | 7 |
+| `RecoveryEscrowFencedUnreached` | the engine is fenced with both outcomes unknown; t1 holds a reservation of 2 against a draw of 1, t2 a reservation of 0 after a skipped branch | 11 |
+| `RecoveryDependentSeesUnackedUnreached` | t1's flush completed and its caller was not told when the engine crashed; t2 read t1's committed row and its record reached storage in the crash; recovery serves both as committed and answers both `unknown`; t2 was told the row t1 wrote | 12 |
+| `RecoveryDependentIgnoresLostUnreached` | t1 ran its update and was told the initial row, then the crash discarded it before any flush (`aborted`, answered `unknown`); t2, not yet requested, ran on the recovered state, was told the initial row and committed | 11 |
+| `ReaderSeesPreCommitUnreached` (`PublicationCrash`) | a snapshot reader read a structure at its captured version while a later commit had a copy there and was incompletely installed: it observed the pre-commit state (`hidden`) | 9 |
+| `CrashMidInstallUnreached` (`PublicationCrash`) | the engine is down with t1's record durable (persisted from the tail by the crash) and none of it installed | 6 |
+| `RecoveryPublishesInterruptedUnreached` (`PublicationCrash`) | a crash left t1's record durable and uninstalled; recovery installed both structures and the pointer passed it | 11 |
+| `RecoveryRebuildsPublishedPrefixUnreached` (`PublicationCrash`) | a failure struck with the pointer past t1; during recovery the recomputed pointer keeps t1 published while t2, an interrupted commit, is half installed by recovery and stays below it | 16 |
+| `DependentWaitsOnDurableUnreached` (`PublicationDependent`) | t1's record is durable and unpublished, and t2's reference check and t3's read both wait on it | 8 |
+| `DependentReferencedUnreached` (`PublicationDependent`) | t1 published first: t2's reference check finds key 2 and is told `referenced` | 12 |
+| `DependentReadsPublishedUnreached` (`PublicationDependent`) | t1 published first: t3 reads the child row | 17 |
 
 ## Mutants (specs/kernel/mutants/)
 
-Each mutant is a patch against `Kernel.tla` that removes one named guard;
-`run.sh` applies it to a temporary copy and checks exactly one property.
+Each mutant is a patch against `Kernel.tla`, `Durable.tla` or `Publication.tla` that removes one named guard or adds one named fault;
+`run.sh` applies it to a temporary copy and checks exactly one property
+under the scenario's own constants.
 TLC refutes every one; the log is `<Mutant>.<Scenario>.<Property>.tlc.log`.
+`run.sh` uses one worker and a fixed fingerprint function; the trace
+lengths below are the states of the committed logs.
 
 | Mutant (guard removed) | Scenario | Property refuted | Trace length |
 |---|---|---|---|
@@ -302,7 +554,7 @@ TLC refutes every one; the log is `<Mutant>.<Scenario>.<Property>.tlc.log`.
 | `PerOperationAcquisition` — slice 1's registration per operation: nothing is acquired at dispatch, `DoOp` registers each operation's resources as it runs, a draw sees the committed balance and waits for the allowance | `DeleteReinsert` | `NoWaitCycle` (t1 holds `DEL 2` waiting for `PIN 1`, t2 holds `DEL 1` waiting for `X 2`) | 3 |
 | `PerOperationAcquisition` | `DeleteReinsert` | TLC deadlock check | 3 |
 | `PerOperationAcquisition` | `OutOfOrder` | `NoWaitCycle` (t1 waits on t2's claim, t2 waits on t1's draw) | 3 |
-| `PerOperationAcquisition` | `FootprintGap` | `NoWaitCycle` (t1 holds `CLAIM 3` waiting for `X 2`, t2 holds `X 2` waiting for `DEL 3`) | 3 |
+| `PerOperationAcquisition` | `FootprintGap` | `NoWaitCycle` (t1 holds `CLAIM 3` and `PIN 1` waiting for `X 2`, t2 holds `X 2` waiting for `DEL 3`) | 3 |
 | `PerOperationAcquisition` | `ScanUpgrade` | `NoWaitCycle` (each holds its range and waits for `X` on a key the other's range covers) | 3 |
 | `ActiveAllowanceWait` — slice 1's escrow restored: no reservation at admission, a draw sees the committed balance, an active transaction waits for the allowance left by other tentative draws | `AllowanceCycle` | `NoWaitCycle` (each holds a tentative draw and waits on the other's) | 7 |
 | `ActiveAllowanceWait` | `AllowanceCycle` | TLC deadlock check | 7 |
@@ -312,6 +564,48 @@ TLC refutes every one; the log is `<Mutant>.<Scenario>.<Property>.tlc.log`.
 | `DrawIgnoresReservation` — admission accounts what other holders have drawn, not what they reserved | `AllowanceCycle` | `ReservationsFunded` (both admitted with 2 on a balance of 2) | 5 |
 | `DrawIgnoresReservation` | `AllowanceCycle` | `BalanceNonNegative` (quota −2) | 11 |
 | `BudgetUndercounts` — the budget is the largest single draw, not the total | `AllowanceCycle` | `Serializable` (t1 reserves 1 and is told `insufficient` on its second draw; no serial order rejects t1) | 5 |
+| `NoBypass` — a later request may overtake an older queued request on a shared resource (`OlderQueued` dropped from `WaitsOn`) | `Starvation` | `RequestedLeadsToTerminal` (liveness: a lasso in which t2 and t3 are admitted in turn, commit and request again forever while t1, queued first, is never admitted) | 17, loop back to 8 |
+| `WidenInPlace` — a call acquires the widened resource on top of its held footprint and waits for it instead of restarting | `WidenCycle` | `NoWaitCycle` (each holds `X` on the key the other's pointer names and waits for `S` on it) | 7 |
+| `WidenInPlace` | `WidenCycle` | TLC deadlock check | 7 |
+| `KeepTentativeOnRestart` — a restart keeps the tentative writes and draws | `WidenCycle` | `Serializable` (the re-run `Update` returns the call's own earlier write; no serial order yields it) | 9 |
+| `KeepTentativeOnRestart` | `WidenEscrow` | `Serializable` (the kept draw leaves the re-run `Buy` no balance in its new reservation: t1 is told `insufficient` while t3, which could have taken the ticket, has not run; no serial order of the ended calls yields it) | 11 |
+| `FsyncFailureAsAbort` — an fsync failure answers `aborted`, marks the transactions aborted and releases their footprint and reservations | `Recovery` | `NoKnownAbortAfterFsyncFailure` | 6 |
+| `FsyncFailureAsAbort` | `Recovery` | `KnownAbortNotInLog` (the record had reached storage: recovery finds it for a transaction told `aborted`) | 6 |
+| `FsyncFailureAsAbort` | `Recovery` | `UnknownKeepsReservations` (the footprint is released while the outcome is unknown) | 6 |
+| `FsyncFailureShrinksReservation` — an fsync failure releases one unit of any reservation above 1 and keeps the rest | `RecoveryEscrow` | `UnknownKeepsReservations` (t1's reservation falls from 2 to 1, still positive: only the exact comparison sees it) | 7 |
+| `ReleaseAtEnqueue` — a transaction releases its footprint and reservations when its record enters the tail, before the flush (premature release, not exposure: the dependent runs on the initial row) | `RecoveryDependent` | `Serializable` (t2 passes t1's lock and is told the initial row although t1's record precedes its own in the log; no serial order yields both responses) | 11 |
+| `ExposeBeforeDurable` — a transaction that has run its program shows its tentative rows to others and releases its footprint to them, before its record is enqueued or durable; a dependent's flush waits for the transactions it read from, but its record may enter the tail first and reach storage in a crash | `RecoveryDependent` | `Serializable` (t1 has updated and is not enqueued; t2 admitted past it is told t1's row 5 and enqueues; the crash persists t2's record alone, recovery commits t2 and discards t1: no serial order of the committed t2 yields the row 5) | 10 |
+| `AckBeforeDurable` — the caller is acknowledged when the record is appended, before the flush | `Recovery` | `AcknowledgedSurvive` (t1 answered `committed`, its record in no log) | 5 |
+| `RecoverSkipsTail` — recovery drops the last durable record | `Recovery` | `AcknowledgedSurvive` (an acknowledged commit missing after recovery) | 9 |
+| `RecoverSkipsTail` | `Recovery` | `RecoveredPrefix` (the served history is shorter than the log) | 7 |
+| `RecoverSkipsTail` | `Recovery` | `Serializable` (a committed transaction's effects are missing from the recovered state) | 8 |
+| `AdvanceBeforeInstall` — the pointer passes a commit without waiting for its installation | `PublicationCrash` | `PointerBelowInstalled` (the pointer passes a commit with nothing installed) | 7 |
+| `AdvanceBeforeInstall` | `PublicationCrash` | `AtomicVisibility` (one structure installed, the pointer passed: a reader sees the commit in one structure only) | 8 |
+| `AdvanceBeforeInstall` | `PublicationCrash` | `ReaderConsistent` (a snapshot reader captures the version past the commit and reads a structure its installation has not reached) | 9 |
+| `AdvanceBeforeInstall` | `PublicationCrash` | `PointerMonotone` (the pointer passed a commit with nothing installed, the engine crashed, and the pointer rebuilt from the log and the installation falls back below it) | 9 |
+| `RecoveryAdvancesFirst` — recovery moves the pointer to the end of the log before it installs | `PublicationCrash` | `PointerBelowInstalled` (the pointer is past commits recovery has not installed) | 7 |
+| `RecoveryAdvancesFirst` | `PublicationCrash` | `AtomicVisibility` (a reader served during recovery sees a half-installed commit) | 8 |
+| `RecoveryAdvancesFirst` | `PublicationCrash` | `RestartIsAtomic` (the restart step exposes the half-installed commit) | 9 |
+| `ReleaseAtFlush` — a commit releases its locks and reservations when its record is durable, not when the pointer passes it | `PublicationDependent` | `Serializable` (t1 durable and unpublished, t2's reference check runs against the published state without key 2 and is told `ok`; both commit after the restart publishes them, and no serial order yields both) | 17 |
+
+`AdvanceBeforeInstall` no longer fails `RestartIsAtomic`: the restart rebuilds
+the pointer from the installation state, which hides the half-installed
+commit it had exposed, and the rebuild is what `PointerMonotone` refutes
+(a reader that saw the commit published sees it vanish). `ReleaseAtFlush`
+is refuted with no failure as well (checked once with `Failures = 0`: 17
+states, ending in the two `Advance` steps); the committed trace, of the
+same length, publishes both durable commits at one restart.
+
+`ExposeBeforeDurable` fails here only through a failure: checked once on
+`RecoveryDependent` with `Failures = 0` (no log committed; not a general
+guarantee), the same mutant passed `Serializable`, because a dependent's
+flush waits for the transactions finishing when it ran. The crash is where a response justified by a tentative
+effect is lost with it. A *rejection* resting on a tentative effect needs no
+crash: it is final when told, and `ClaimLoserTrustsTentativeHolder` refutes
+it as soon as it is told. The repair is to expose nothing before the
+durable commit: a dependent that must run on a tentative effect would need
+its record to follow its predecessor's in the log, and a rejection would
+wait for committed state.
 
 `TypeOK` has no mutant: it is a typing check with no protocol content.
 
