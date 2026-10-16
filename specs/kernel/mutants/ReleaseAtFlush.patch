@@ -1,0 +1,15 @@
+--- Publication.tla
++++ Publication.tla
+@@ -104,7 +104,11 @@
+ PFlush ==
+   /\ Serving /\ unflushed # <<>>
+   /\ AppendToLog
+-  /\ UNCHANGED <<Vars, history, engine, answer, fsyncFailed, unresolved, reservedAtUnknown, failuresUsed>>
++  /\ LET t == Head(unflushed).txn IN
++     /\ held' = [held EXCEPT ![t] = {}]
++     /\ reserved' = [reserved EXCEPT ![t] = NoReservation]
++  /\ UNCHANGED <<seq, pc, resp, widened, status, db, wr, draws, history, engine, answer, fsyncFailed,
++                 unresolved, reservedAtUnknown, failuresUsed>>
+ 
+ Install(t, s) ==
+   /\ Serving /\ t \in TxnsOf(log) /\ s \notin installed[t]

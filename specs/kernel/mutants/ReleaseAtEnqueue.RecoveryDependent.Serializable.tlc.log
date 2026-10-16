@@ -1,10 +1,10 @@
 TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
 Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
 (Use the -nowarning option to disable this warning.)
-Running breadth-first search Model-Checking with fp 0 and seed -4348358478047325355 with 1 worker on 12 cores with 15518MB heap and 64MB offheap memory [pid: 729380] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
-Starting... (2026-10-16 00:50:31)
+Running breadth-first search Model-Checking with fp 0 and seed -210685039848980162 with 1 worker on 12 cores with 15518MB heap and 64MB offheap memory [pid: 1768824] (Linux 6.17.0-35-generic amd64, Eclipse Adoptium 21.0.12.1 x86_64, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-10-16 01:36:08)
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-10-16 00:50:32.
+Finished computing initial states: 1 distinct state generated at 2026-10-16 01:36:09.
 Error: Invariant Serializable is violated.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>
@@ -30,7 +30,7 @@ State 1: <Initial predicate>
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 2: <Dispatched line 87, col 18 to line 87, col 59 of module Durable>
+State 2: <Dispatched line 90, col 18 to line 90, col 59 of module Durable>
 /\ seq = [t1 |-> 1, t2 |-> 0, t3 |-> 0]
 /\ answer = [t1 |-> "none", t2 |-> "none", t3 |-> "none"]
 /\ log = <<>>
@@ -53,7 +53,7 @@ State 2: <Dispatched line 87, col 18 to line 87, col 59 of module Durable>
 /\ held = [t1 |-> {}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 3: <Acquired line 88, col 16 to line 88, col 56 of module Durable>
+State 3: <Acquired line 91, col 16 to line 91, col 56 of module Durable>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ answer = [t1 |-> "none", t2 |-> "none", t3 |-> "none"]
 /\ log = <<>>
@@ -76,7 +76,7 @@ State 3: <Acquired line 88, col 16 to line 88, col 56 of module Durable>
 /\ held = [t1 |-> {[kind |-> "X", cov |-> {1}]}, t2 |-> {}, t3 |-> {}]
 /\ wr = [t1 |-> << >>, t2 |-> << >>, t3 |-> << >>]
 
-State 4: <Executed line 89, col 16 to line 89, col 53 of module Durable>
+State 4: <Executed line 92, col 16 to line 92, col 53 of module Durable>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ answer = [t1 |-> "none", t2 |-> "none", t3 |-> "none"]
 /\ log = <<>>
@@ -103,7 +103,7 @@ State 4: <Executed line 89, col 16 to line 89, col 53 of module Durable>
   t2 |-> << >>,
   t3 |-> << >> ]
 
-State 5: <Enqueue line 93, col 3 to line 98, col 152 of module Durable>
+State 5: <Enqueue line 96, col 3 to line 101, col 152 of module Durable>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ answer = [t1 |-> "none", t2 |-> "none", t3 |-> "none"]
 /\ log = <<>>
@@ -132,7 +132,7 @@ State 5: <Enqueue line 93, col 3 to line 98, col 152 of module Durable>
   t2 |-> << >>,
   t3 |-> << >> ]
 
-State 6: <Dispatched line 87, col 18 to line 87, col 59 of module Durable>
+State 6: <Dispatched line 90, col 18 to line 90, col 59 of module Durable>
 /\ seq = [t1 |-> 0, t2 |-> 1, t3 |-> 0]
 /\ answer = [t1 |-> "none", t2 |-> "none", t3 |-> "none"]
 /\ log = <<>>
@@ -161,7 +161,7 @@ State 6: <Dispatched line 87, col 18 to line 87, col 59 of module Durable>
   t2 |-> << >>,
   t3 |-> << >> ]
 
-State 7: <Acquired line 88, col 16 to line 88, col 56 of module Durable>
+State 7: <Acquired line 91, col 16 to line 91, col 56 of module Durable>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ answer = [t1 |-> "none", t2 |-> "none", t3 |-> "none"]
 /\ log = <<>>
@@ -190,7 +190,7 @@ State 7: <Acquired line 88, col 16 to line 88, col 56 of module Durable>
   t2 |-> << >>,
   t3 |-> << >> ]
 
-State 8: <Executed line 89, col 16 to line 89, col 53 of module Durable>
+State 8: <Executed line 92, col 16 to line 92, col 53 of module Durable>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ answer = [t1 |-> "none", t2 |-> "none", t3 |-> "none"]
 /\ log = <<>>
@@ -219,7 +219,7 @@ State 8: <Executed line 89, col 16 to line 89, col 53 of module Durable>
   t2 |-> <<[present |-> TRUE, val |-> 6, bal |-> 0, parent |-> 0]>>,
   t3 |-> << >> ]
 
-State 9: <Enqueue line 93, col 3 to line 98, col 152 of module Durable>
+State 9: <Enqueue line 96, col 3 to line 101, col 152 of module Durable>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ answer = [t1 |-> "none", t2 |-> "none", t3 |-> "none"]
 /\ log = <<>>
@@ -251,7 +251,7 @@ State 9: <Enqueue line 93, col 3 to line 98, col 152 of module Durable>
   t2 |-> <<[present |-> TRUE, val |-> 6, bal |-> 0, parent |-> 0]>>,
   t3 |-> << >> ]
 
-State 10: <Flush line 104, col 3 to line 116, col 115 of module Durable>
+State 10: <Flush line 124, col 3 to line 127, col 115 of module Durable>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ answer = [t1 |-> "none", t2 |-> "none", t3 |-> "none"]
 /\ log = << [ txn |-> "t1",
@@ -284,7 +284,7 @@ State 10: <Flush line 104, col 3 to line 116, col 115 of module Durable>
   t2 |-> <<[present |-> TRUE, val |-> 6, bal |-> 0, parent |-> 0]>>,
   t3 |-> << >> ]
 
-State 11: <Flush line 104, col 3 to line 116, col 115 of module Durable>
+State 11: <Flush line 124, col 3 to line 127, col 115 of module Durable>
 /\ seq = [t1 |-> 0, t2 |-> 0, t3 |-> 0]
 /\ answer = [t1 |-> "none", t2 |-> "none", t3 |-> "none"]
 /\ log = << [ txn |-> "t1",
@@ -322,4 +322,4 @@ State 11: <Flush line 104, col 3 to line 116, col 115 of module Durable>
 2217 states generated, 1568 distinct states found, 542 states left on queue.
 The depth of the complete state graph search is 11.
 The average outdegree of the complete state graph is 2 (minimum is 0, the maximum 8 and the 95th percentile is 6).
-Finished in 00s at (2026-10-16 00:50:32)
+Finished in 00s at (2026-10-16 01:36:09)

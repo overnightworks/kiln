@@ -21,9 +21,12 @@
    Recover (a fenced engine serves no requests, §5), and a restart loses
    every volatile transaction, so a transaction that is neither durable
    nor finished is discarded ("aborted") by recovery. Torn writes that
-   reach acknowledged bytes and the publication pointer of §9.1 are
-   outside this module. With `Failures = 0` a run is a Kernel run whose
-   commit takes three steps. *)
+   reach acknowledged bytes are outside this module, and so is the
+   publication pointer of §9.1: here a commit is published (the served
+   state and the locks) at the very step its record becomes durable.
+   Publication.tla takes the two apart over the `Publish`, `AppendToLog`
+   and `RecoverTo` pieces below. With `Failures = 0` a run is a Kernel run
+   whose commit takes three steps. *)
 
 EXTENDS Kernel
 
@@ -91,26 +94,34 @@ Restarted(t) == Serving /\ WidenAndRestart(t) /\ JournalUnchanged
 
 Enqueue(t) ==
   /\ Serving /\ Active(t) /\ pc[t] = Len(Prog[t])
-  /\ t \notin TxnsOf(unflushed)
+  /\ t \notin TxnsOf(unflushed) /\ t \notin TxnsOf(log)
   /\ unflushed' = Append(unflushed, Record(t))
   /\ UNCHANGED <<Vars, log, history, engine, answer, fsyncFailed, unresolved, reservedAtUnknown, failuresUsed>>
 
-(* The flush of the oldest record succeeds: the commit is durable and takes
-   effect, releasing everything the transaction held (strict two-phase
-   locking: held from admission to the durable commit). *)
+(* The oldest record of the tail becomes durable. *)
+AppendToLog ==
+  /\ log' = Append(log, Head(unflushed))
+  /\ unflushed' = Tail(unflushed)
+
+(* A durable commit takes effect: its record joins the served history and
+   the committed state, and it releases everything the transaction held
+   (strict two-phase locking: held from admission to this step). *)
+Publish(rec) ==
+  LET t == rec.txn IN
+  /\ history' = Append(history, rec)
+  /\ db' = ApplyRecord(rec, db)
+  /\ status' = [status EXCEPT ![t] = "committed"]
+  /\ held' = [held EXCEPT ![t] = {}]
+  /\ reserved' = [reserved EXCEPT ![t] = NoReservation]
+  /\ wr' = [wr EXCEPT ![t] = NoWrites]
+  /\ draws' = [draws EXCEPT ![t] = NoDraws]
+
+(* The flush of the oldest record succeeds: the commit is durable and,
+   here, takes effect at once. *)
 Flush ==
   /\ Serving /\ unflushed # <<>>
-  /\ LET rec == Head(unflushed)
-         t == rec.txn IN
-     /\ log' = Append(log, rec)
-     /\ history' = Append(history, rec)
-     /\ unflushed' = Tail(unflushed)
-     /\ db' = ApplyRecord(rec, db)
-     /\ status' = [status EXCEPT ![t] = "committed"]
-     /\ held' = [held EXCEPT ![t] = {}]
-     /\ reserved' = [reserved EXCEPT ![t] = NoReservation]
-     /\ wr' = [wr EXCEPT ![t] = NoWrites]
-     /\ draws' = [draws EXCEPT ![t] = NoDraws]
+  /\ AppendToLog
+  /\ Publish(Head(unflushed))
   /\ UNCHANGED <<seq, pc, resp, widened, engine, answer, fsyncFailed, unresolved, reservedAtUnknown, failuresUsed>>
 
 Ack(t) ==
@@ -147,23 +158,23 @@ FsyncFail ==
   /\ failuresUsed' = failuresUsed + 1
   /\ UNCHANGED <<Vars, history>>
 
-(* What recovery rebuilds: the committed history is the durable log. *)
-RecoveredHistory == log
-
 Undispatched(t) == Pending(t) /\ seq[t] = 0
 
-(* Restart from the log alone. Every transaction with a durable record is
-   committed, whether or not its caller was told; every other dispatched
+(* Restart from the log alone, serving the history `published`, a prefix
+   of the log. Every transaction with a record in `published` is
+   committed, whether or not its caller was told. A durable record beyond
+   it stays as it is, its publication pending. Every other dispatched
    transaction is discarded, while a request not yet made is made on the
    recovered engine. A commit whose caller got no acknowledgement
    - an unflushed append, or a flush that completed before the crash - is
    answered "unknown": the caller learns the outcome from the log. *)
-Recover ==
+RecoverTo(published) ==
   /\ ~Serving
-  /\ history' = RecoveredHistory
-  /\ db' = Replay(RecoveredHistory)
+  /\ history' = published
+  /\ db' = Replay(published)
   /\ status' = [t \in Txns |->
-       IF t \in TxnsOf(RecoveredHistory) THEN "committed"
+       IF t \in TxnsOf(published) THEN "committed"
+       ELSE IF t \in TxnsOf(log) THEN status[t]
        ELSE IF Live(t) /\ ~Undispatched(t) THEN "aborted" ELSE status[t]]
   /\ answer' = [t \in Txns |->
        IF answer[t] = "none" /\ (status[t] = "committed" \/ (Active(t) /\ pc[t] = Len(Prog[t])))
@@ -178,10 +189,15 @@ Recover ==
   /\ engine' = "up"
   /\ UNCHANGED <<pc, resp, widened, log, fsyncFailed, reservedAtUnknown, failuresUsed>>
 
+(* What recovery rebuilds: the committed history is the durable log. *)
+Recover == RecoverTo(log)
+
 DTerminating == Finished /\ Serving /\ UNCHANGED DVars
 
+DSteps == \E t \in Txns : Dispatched(t) \/ Acquired(t) \/ Executed(t) \/ Restarted(t) \/ Enqueue(t) \/ Ack(t)
+
 DNext ==
-  \/ \E t \in Txns : Dispatched(t) \/ Acquired(t) \/ Executed(t) \/ Restarted(t) \/ Enqueue(t) \/ Ack(t)
+  \/ DSteps
   \/ Flush
   \/ Crash
   \/ FsyncFail
@@ -215,8 +231,10 @@ AcknowledgedSurvive ==
 
 (* §9.2: the history the engine serves is a prefix of the log's commit
    order, and once the engine is up it is the whole durable log. *)
+HistoryIsLogPrefix == IsPrefix(history, log)
+
 RecoveredPrefix ==
-  /\ IsPrefix(history, log)
+  /\ HistoryIsLogPrefix
   /\ engine = "up" => history = log
 
 (* §5, §9.2: an fsync failure is never answered with an abort. *)

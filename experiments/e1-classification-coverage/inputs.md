@@ -634,6 +634,97 @@ text above, ruled so the extractor applies them mechanically. They add no rule; 
   its location in a side output of the run and never aborts it, so the
   uncounted transaction stays visible rather than silent.
 
+**Clarification 16.10.2026 (TypeORM enumeration).** Readings of the text above
+for TypeScript, ruled so the extractor applies them mechanically. They add no
+rule; none states or implies a count. Where the Django clarification above
+applies unchanged (S3 parameters, application boundary, transaction markers),
+it is applied to TypeScript.
+
+- **Nearest `tsconfig.json`.** "The shortest path from the root" is the path
+  with the fewest characters; equal lengths are ordered lexically. It is not
+  the shallowest path.
+- **S3 parameters.** "The enclosing function" is the innermost function, method,
+  constructor, accessor or arrow function whose body holds the call. Parameters
+  are the names that function declares (destructured names and rest included),
+  then its `const`/`let`/`var`, loop and `catch` variables bound before the
+  site, as the Django clarification orders them; a name of an outer function is
+  not one. For an S5 chain the call is the whole written chain. §3.1's
+  "parameterized by `recorded`" for `insertOnce` names only the function
+  argument; `connection`, a local bound earlier in the function and read by
+  the call, is also a parameter under the S3-parameter reading above, so the
+  unit's parameters are `recorded` and `connection`. This changes the
+  parameters, not the example's unit count.
+- **S5 chain.** A chain is one written receiver chain: the `createQueryBuilder()`
+  call and every call whose callee is a member access on the result of the call
+  before it, up to the last such call. A reported call on a variable that
+  holds a builder, or inside an argument of a chain method, is not in the
+  chain. A chain holding several `createQueryBuilder()` calls belongs to the
+  first one written.
+- **S2 forms.** `X.startTransaction()` is matched by enumerating the control-flow
+  paths of its function (the file body is one more function), statements in
+  order, and running a stack of open starts per receiver text on each path:
+  a start pushes, a `X.commitTransaction()` or `X.rollbackTransaction()` with
+  the same receiver text written directly in the same function pops the
+  innermost open start (one with nothing open is stray and changes nothing),
+  and a `return`, or the end of the function, ends the path. A start is
+  matched when every path that reaches it pops it, and its transaction ends
+  at the last terminator that pops it on any path; a start that no path
+  reaches is unmatched, and so is one that some path leaves open. An
+  unmatched start opens no unit. The arms
+  of an `if` (an absent `else` is the arm that skips it) and of a ternary are
+  separate paths; a `switch` is entered at any of its clauses, which run on
+  into the following ones until a `break`, `return` or `throw`, and it can
+  also be skipped when it has no `default`.
+  `try`, `catch` and `finally` run in sequence: after a body that completes,
+  the code goes on either without the catch or through it, and `finally`
+  runs after every path that did not throw. A path that ends in `throw` is
+  dropped and decides nothing, a stated limitation: judging it needs a model
+  of which `catch` or `finally` receives the exception, which this walk does
+  not carry. A start made while another is open on the same path nests in it
+  and the outermost owns the nested one's sites; starts in mutually exclusive
+  arms are on different paths and so are one alternative opening, not a
+  nesting. The definition covers exactly these constructs. A function has
+  unsupported control flow, and every start in it is an unmatched marker with
+  the reason "unsupported control flow", when it has a start, a commit or a
+  rollback inside a loop (body, condition, initializer, update, or the
+  iterated expression), a `break` or `continue` that names a label, or a
+  `return` inside a loop that an enclosing `finally` holding a commit or
+  rollback follows; a loop with none of these is walked as a path that may
+  skip it. Paths that did the same to every transaction count once, and a
+  function with more than 4096 distinct paths is not enumerated: every start
+  in it is an unmatched marker with the reason "path cap exceeded". Both
+  reasons are recorded in the side output.
+  `X.transaction(...)` opens a unit when `X` is, or ends in a property named,
+  `dataSource`, `manager` or `connection`, and its body is the last function
+  or arrow function argument. A method decorated `@Transaction` or
+  `@LazyTransaction`, and any other `transaction` call, is a marker that opens
+  no unit, recorded as the Django clarification states. A transaction report
+  that is neither a call over the reported span nor such a decorated method
+  is not a legitimate unsupported form and fails the run.
+- **Dependency installation (recorded deviation).** §3's plain `npm install`
+  of an application is run as `npm install --ignore-scripts --no-audit
+  --no-fund`. Reason: lifecycle scripts would execute arbitrary code from the
+  dependency trees of 32 third-party applications on the machine, and type
+  resolution needs package contents, not their build output. Possible bias:
+  types that a dependency's install script would generate stay unresolved,
+  which can hide sites the analyzer would otherwise report. The reach of the
+  deviation is recorded, not assumed: each application's run writes
+  `<application>.install-scripts.jsonl` naming the application and every
+  installed package that declares a `preinstall`, `install` or `postinstall`
+  script (the application also `prepare`), read from the package manifests
+  without running anything.
+- **Installation inputs.** Before the installation the whole checkout,
+  lockfiles included, is verified against the manifest commit (nothing
+  modified, deleted, untracked or ignored apart from `node_modules`). After
+  `npm install --ignore-scripts` every tracked lockfile must be byte-identical
+  to the commit, otherwise the run fails and names it; `npm ci` is not used.
+  An application that tracks no lockfile gets the lock the installation
+  generated recorded by the installation step, once the checkout is verified,
+  with its SHA-256 and the clock at that verification (never a file's
+  modification time) in `<application>.generated-locks.jsonl`, as evidence of
+  what resolved. The analysis step validates the lockfile it finds against that
+  record and fails on a missing record or any mismatch.
+
 ### 3.1 Worked examples: full unit counts against the frozen rule
 
 Both examples below were recounted by actually running the two pinned
