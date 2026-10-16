@@ -46,22 +46,22 @@ pub enum Operand {
     Arithmetic(ArithmeticOp, Box<Operand>, Box<Operand>),
     /// A condition of a conditional value: whether the read found a row.
     Presence(ReadRef),
+    /// A condition of a conditional value that tests a slot an ended iteration
+    /// released: it finds no row, whatever the data.
+    Absence,
     /// A condition of a conditional value: whether `left` stands in the
     /// relation to `right`.
     Comparison(Relation, Box<Operand>, Box<Operand>),
     /// The first operand is a condition; the value is the second when it
     /// holds and the third otherwise.
     Conditional(Box<Operand>, Box<Operand>, Box<Operand>),
-    /// An arm that aborts the call when the condition chooses it, so no
-    /// access follows it.
-    Aborting,
 }
 
 impl Operand {
     /// The reads whose results the operand reads.
     pub fn uses(&self) -> Vec<ReadRef> {
         match self {
-            Self::Literal(_) | Self::Parameter(_) | Self::Aborting => Vec::new(),
+            Self::Literal(_) | Self::Parameter(_) | Self::Absence => Vec::new(),
             Self::Column { read, .. } | Self::Presence(read) => vec![read.clone()],
             Self::Arithmetic(_, first, second) | Self::Comparison(_, first, second) => {
                 let mut uses = first.uses();
@@ -80,9 +80,7 @@ impl Operand {
     /// The row occurrences the operand's columns come from, in reading order.
     pub fn origins(&self) -> Vec<&RowOrigin> {
         match self {
-            Self::Literal(_) | Self::Parameter(_) | Self::Presence(_) | Self::Aborting => {
-                Vec::new()
-            }
+            Self::Literal(_) | Self::Parameter(_) | Self::Presence(_) | Self::Absence => Vec::new(),
             Self::Column { row, .. } => vec![row],
             Self::Arithmetic(_, first, second) | Self::Comparison(_, first, second) => {
                 let mut origins = first.origins();
@@ -102,7 +100,7 @@ impl Operand {
     /// when `rename` has no name for one of them.
     pub fn renamed(&self, rename: &impl Fn(&RowOrigin) -> Option<RowOrigin>) -> Option<Self> {
         Some(match self {
-            Self::Literal(_) | Self::Parameter(_) | Self::Presence(_) | Self::Aborting => {
+            Self::Literal(_) | Self::Parameter(_) | Self::Presence(_) | Self::Absence => {
                 self.clone()
             }
             Self::Column { read, row, column } => Self::Column {
@@ -141,6 +139,9 @@ pub enum Unresolvable {
     /// It projects a slot that holds no current row where the path reads it:
     /// the evaluator aborts there with `ProjectionSourceAbsent` (`KILN-IR-15`).
     AbsentSource,
+    /// A conditional the path does not decide has an arm that aborts and an
+    /// arm that does not (`KILN-E1-39`).
+    ConditionalAbortsOnOneArm,
     Fault(ClassifyError),
 }
 
@@ -159,7 +160,7 @@ pub fn operand_of(
     expression: &Expr,
     at: &NodePath,
 ) -> Result<Operand, Unresolvable> {
-    Ok(match decided_expression(facts, expression, at) {
+    Ok(match expression {
         Expr::Literal(value) => Operand::Literal(value.clone()),
         Expr::Parameter(parameter) => Operand::Parameter(parameter.clone()),
         Expr::Projection { slot, .. } if facts.holds_no_row(*slot) => {
@@ -185,11 +186,7 @@ pub fn operand_of(
             condition,
             when_true,
             when_false,
-        } => Operand::Conditional(
-            Box::new(condition_operand(schema, facts, condition, at)?),
-            Box::new(arm_operand(schema, facts, when_true, at)?),
-            Box::new(arm_operand(schema, facts, when_false, at)?),
-        ),
+        } => conditional_operand(schema, facts, condition, [when_true, when_false], at)?,
     })
 }
 
@@ -200,6 +197,7 @@ fn condition_operand(
     at: &NodePath,
 ) -> Result<Operand, Unresolvable> {
     Ok(match condition {
+        Condition::RowPresent(slot) if facts.is_released(*slot) => Operand::Absence,
         Condition::RowPresent(slot) => Operand::Presence(facts.read_of(*slot, at)?),
         Condition::Compare {
             left,
@@ -213,33 +211,44 @@ fn condition_operand(
     })
 }
 
-/// An arm the condition does not decide on this path is reached only when the
-/// data chooses it, so a projection that finds no row there aborts only then.
-fn arm_operand(
+/// A conditional value is computed whatever its condition: the arm a decided
+/// condition chooses settles which projections the evaluator reaches, never
+/// what the value is made of (`inputs.md` §5, Clarification 7(c)).
+fn conditional_operand(
     schema: &Schema,
     facts: &PathFacts,
-    arm: &Expr,
+    condition: &Condition,
+    arms: [&Expr; 2],
     at: &NodePath,
 ) -> Result<Operand, Unresolvable> {
-    match operand_of(schema, facts, arm, at) {
-        Err(Unresolvable::AbsentSource) => Ok(Operand::Aborting),
-        resolved => resolved,
-    }
+    let chosen = decided_arm(facts, condition, at);
+    let condition = condition_operand(schema, facts, condition, at)?;
+    let [when_true, when_false] = arms.map(|arm| match operand_of(schema, facts, arm, at) {
+        Err(Unresolvable::AbsentSource) => Ok(None),
+        resolved => resolved.map(Some),
+    });
+    let (when_true, when_false) = match (chosen, when_true?, when_false?) {
+        (_, Some(when_true), Some(when_false)) => (when_true, when_false),
+        (Some(true), Some(chosen), None) | (Some(false), None, Some(chosen)) => {
+            (chosen.clone(), chosen)
+        }
+        (None, Some(_), None) | (None, None, Some(_)) => {
+            return Err(Unresolvable::ConditionalAbortsOnOneArm)
+        }
+        _ => return Err(Unresolvable::AbsentSource),
+    };
+    Ok(Operand::Conditional(
+        Box::new(condition),
+        Box::new(when_true),
+        Box::new(when_false),
+    ))
 }
 
-/// `expression` with every conditional the path decides statically replaced by
-/// the arm it chooses: a condition that compares two literals, or tests a slot
-/// whose presence the path knows (`KILN-E1-19`) or an ended iteration released.
-pub fn decided_expression<'e>(facts: &PathFacts, expression: &'e Expr, at: &NodePath) -> &'e Expr {
-    let Expr::Conditional {
-        condition,
-        when_true,
-        when_false,
-    } = expression
-    else {
-        return expression;
-    };
-    let holds = match &**condition {
+/// The arm `condition` chooses on this path, if it chooses one statically: a
+/// condition that compares two literals, or tests a slot whose presence the
+/// path knows (`KILN-E1-19`) or an ended iteration released.
+pub fn decided_arm(facts: &PathFacts, condition: &Condition, at: &NodePath) -> Option<bool> {
+    match condition {
         Condition::Compare {
             left: Expr::Literal(left),
             relation,
@@ -251,11 +260,6 @@ pub fn decided_expression<'e>(facts: &PathFacts, expression: &'e Expr, at: &Node
             .read_of(*slot, at)
             .ok()
             .and_then(|read| facts.presence_of(&read)),
-    };
-    match holds {
-        Some(true) => decided_expression(facts, when_true, at),
-        Some(false) => decided_expression(facts, when_false, at),
-        None => expression,
     }
 }
 

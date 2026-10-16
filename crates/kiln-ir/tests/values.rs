@@ -6,13 +6,23 @@ mod support;
 use kiln_ir::{
     AbortReason, ArithmeticOp, Column, ColumnType, Condition, Effect, Expr, FunctionFault,
     IntegerWidth, KeyComponentFault, KeyDeclaration, Outcome, OverflowReason, ProgramError,
-    Relation, Schema, Slot, Store, Table, Terminal, Value,
+    Relation, Row, Schema, Slot, Store, Table, Terminal, Value,
 };
 use support::{
-    aborted_reason, call_under_test, column, committed_response, integer, key_expr, one_part,
-    parameter, program_with_schema, run_ok, run_write, single_function_program, table, text,
-    typed_parameter, WriteVia,
+    aborted_reason, call_under_test, column, columns_of, columns_of_values, committed_response,
+    integer, key_expr, keyed_by_id, literal_key, one_part, parameter, program_with_schema, run_ok,
+    run_write, single_function_program, table, text, typed_parameter, WriteVia,
 };
+
+fn int_column(name: &str) -> Column {
+    Column {
+        name: column(name),
+        kind: ColumnType::Integer {
+            width: IntegerWidth::I64,
+            domain: None,
+        },
+    }
+}
 
 fn literal(value: i64) -> Expr {
     Expr::Literal(integer(value))
@@ -86,6 +96,53 @@ mod kiln_ir_84 {
 
             assert_eq!(outcome, committed(amount));
         }
+    }
+
+    #[test]
+    fn an_order_line_amount_is_the_exact_product_of_quantity_and_a_scale_2_price_read_from_the_item(
+    ) {
+        let item_price_19_99_at_scale_2 = Row {
+            columns: columns_of_values([("i_price", integer(1999))]),
+        };
+        let item = keyed_by_id("item", vec![int_column("i_price")]);
+        let order_line = keyed_by_id("order_line", vec![int_column("ol_amount")]);
+        let amount = times(
+            argument("quantity"),
+            Expr::Projection {
+                slot: Slot(0),
+                column: column("i_price"),
+            },
+        );
+        let program = program_with_schema(
+            Schema {
+                tables: vec![item, order_line],
+                ..Default::default()
+            },
+            vec![typed_parameter("quantity", IntegerWidth::I64)],
+            vec![
+                Effect::Read {
+                    table: table("item"),
+                    key: literal_key(1),
+                    into: Slot(0),
+                },
+                Effect::Insert {
+                    table: table("order_line"),
+                    key: literal_key(1),
+                    columns: columns_of([("ol_amount", amount)]),
+                },
+            ],
+            Terminal::Return(literal(0)),
+        );
+        let store = Store::containing([(table("item"), one_part(1), item_price_19_99_at_scale_2)]);
+
+        let execution = run_ok(&program, &call_under_test(vec![integer(3)]), &store);
+
+        let line = execution.store.row(&table("order_line"), &one_part(1));
+        assert_eq!(
+            line.map(|row| row.columns.clone()),
+            Some(columns_of_values([("ol_amount", integer(5997))])),
+            "3 x 19.99 is 59.97, an integer at scale 2"
+        );
     }
 
     #[test]

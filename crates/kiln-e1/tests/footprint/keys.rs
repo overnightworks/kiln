@@ -427,7 +427,7 @@ mod kiln_e1_19 {
     }
 }
 
-mod kiln_e1_27 {
+pub(super) mod kiln_e1_27 {
     use super::*;
 
     #[test]
@@ -476,7 +476,7 @@ mod kiln_e1_27 {
         Expr::Literal(Value::Text("k".to_owned()))
     }
 
-    fn point_read_of_u(key: Expr) -> Effect {
+    pub(crate) fn point_read_of_u(key: Expr) -> Effect {
         read("u", key, 3)
     }
 
@@ -489,10 +489,11 @@ mod kiln_e1_27 {
     /// arms' accesses stay ordered by inclusion), so no single table says what a
     /// projection of it is; the present arm reads `bound_on_path` into it. The
     /// key of `u` is the integer `id`; `c`, the key of `t1` and `t2`, is what
-    /// the slot's row holds.
-    fn slot_bound_by_either_arm(
+    /// the slot's row holds. `access` takes `key` after both arms' reads.
+    pub(crate) fn slot_bound_by_either_arm(
         bound_on_path: &str,
-        keyed_by_slot_2: fn(Expr) -> Effect,
+        key: Expr,
+        access: fn(Expr) -> Effect,
     ) -> Program {
         let plain = |name| table_keyed_by(name, KEY_COLUMN, INTEGER);
         let reading = |name: &str, into| match name {
@@ -504,7 +505,7 @@ mod kiln_e1_27 {
             read("a", literal(1), 1),
             reading(bound_on_path, 2),
             reading(other, 5),
-            keyed_by_slot_2(column_of(2, "c")),
+            access(key),
             read("b", literal(1), 4),
         ]);
         let absent = returns(vec![reading(other, 2), read("b", literal(1), 4)]);
@@ -528,7 +529,7 @@ mod kiln_e1_27 {
         }
     }
 
-    fn classification_of(program: &Program) -> Classification {
+    pub(crate) fn classification_of(program: &Program) -> Classification {
         let function = FunctionName(FUNCTION.to_owned());
         classify_function(program, &function)
             .unwrap()
@@ -539,7 +540,7 @@ mod kiln_e1_27 {
     fn a_key_projecting_a_column_of_the_wrong_kind_from_a_slot_two_arms_bind_ends_the_path_before_its_access(
     ) {
         for keyed_by_slot_2 in [point_read_of_u, range_over_u_starting_at] {
-            let program = slot_bound_by_either_arm("t1", keyed_by_slot_2);
+            let program = slot_bound_by_either_arm("t1", column_of(2, "c"), keyed_by_slot_2);
             let classification = classification_of(&program);
             assert!(
                 matches!(classification, Classification::Unknown { .. }),
@@ -551,7 +552,7 @@ mod kiln_e1_27 {
     #[test]
     fn a_key_projecting_a_column_of_the_right_kind_from_a_slot_two_arms_bind_keeps_its_access() {
         for keyed_by_slot_2 in [point_read_of_u, range_over_u_starting_at] {
-            let program = slot_bound_by_either_arm("t2", keyed_by_slot_2);
+            let program = slot_bound_by_either_arm("t2", column_of(2, "c"), keyed_by_slot_2);
             let classification = classification_of(&program);
             assert!(
                 matches!(classification, Classification::Proven { .. }),

@@ -4,16 +4,16 @@
 use std::collections::BTreeMap;
 
 use kiln_ir::{
-    slots_released_by_iteration, Block, ColumnName, Condition, Effect, Expr, Function, IndexName,
-    Schema, Slot, TableName, Terminal,
+    slots_released_by_iteration, Block, Column, ColumnName, Condition, Effect, Expr, Function,
+    IndexName, Schema, Slot, TableName, Terminal,
 };
 
 use super::carried::first_carried_slot;
 use super::cause::UnknownCause;
 use super::dependency::{track_access, AccessRole};
-use super::facts::{Binding, BindingKind, PathFacts, RangeBounds, Target};
+use super::facts::{Binding, BindingKind, Obstacle, PathFacts, RangeBounds, Target};
 use super::node_path::NodePath;
-use super::operand::{decided_expression, operand_of, Operand, ReadRef, Unresolvable};
+use super::operand::{decided_arm, operand_of, Operand, ReadRef, Unresolvable};
 use super::ClassifyError;
 
 pub struct FeasiblePath {
@@ -52,6 +52,12 @@ enum Halt {
         at: NodePath,
         unless_empty: Option<ReadRef>,
     },
+    /// What the evaluator does at `at` depends on the data, in a way that
+    /// hides the targets after it from the comparison of paths: the path
+    /// ends there unknown (`KILN-E1-39`).
+    Refuses {
+        at: NodePath,
+    },
     Fault(ClassifyError),
 }
 
@@ -66,6 +72,7 @@ impl Halt {
     fn at(node: &NodePath) -> impl Fn(Unresolvable) -> Self + '_ {
         move |unresolvable| match unresolvable {
             Unresolvable::AbsentSource => Self::aborting_at(node),
+            Unresolvable::ConditionalAbortsOnOneArm => Self::Refuses { at: node.clone() },
             Unresolvable::Fault(error) => Self::Fault(error),
         }
     }
@@ -117,6 +124,16 @@ impl Walker<'_> {
         match reached {
             Ok(operands) => self.terminal(&block.terminal, terminal, &operands, walked),
             Err(Halt::Fault(error)) => Err(error),
+            Err(Halt::Refuses { at: conditional }) => {
+                walked.obstacles.push(Obstacle {
+                    node: conditional,
+                    cause: UnknownCause::ConditionalAbortsOnOneArm,
+                });
+                Ok(vec![FeasiblePath {
+                    facts: walked,
+                    terminal,
+                }])
+            }
             Err(Halt::Aborts {
                 at: abort,
                 unless_empty: None,
@@ -431,23 +448,58 @@ impl Walker<'_> {
             return Ok(());
         };
         for (key_column, component) in declared.key_columns().iter().zip(key) {
-            let Expr::Projection { slot, column } = decided_expression(facts, component, node)
-            else {
+            let Some(key_column) = declared.column(key_column) else {
                 continue;
             };
-            let read = facts.read_of(*slot, node)?;
-            let source = facts
-                .binding_of(&read)
-                .and_then(|binding| binding.kind.table())
-                .and_then(|source| self.schema.column(source, column));
-            let key_column = declared.column(key_column);
-            if let (Some(source), Some(key_column)) = (source, key_column) {
-                if key_column.key_component_fault_from(source).is_some() {
-                    return Err(Halt::aborting_at(node));
-                }
+            match self.misfit_of(facts, key_column, component, node)? {
+                Aborts::Never => {}
+                Aborts::Always => return Err(Halt::aborting_at(node)),
+                Aborts::OnOneArm => return Err(Halt::Refuses { at: node.clone() }),
             }
         }
         Ok(())
+    }
+
+    /// Whether `component`, which a conditional may choose among projections,
+    /// is of a kind `key_column` cannot take, where the path evaluates it.
+    fn misfit_of(
+        &self,
+        facts: &PathFacts,
+        key_column: &Column,
+        component: &Expr,
+        node: &NodePath,
+    ) -> Result<Aborts, ClassifyError> {
+        match component {
+            Expr::Projection { slot, .. } if facts.holds_no_row(*slot) => Ok(Aborts::Never),
+            Expr::Projection { slot, column } => {
+                let read = facts.read_of(*slot, node)?;
+                let source = facts
+                    .binding_of(&read)
+                    .and_then(|binding| binding.kind.table())
+                    .and_then(|source| self.schema.column(source, column));
+                let misfits = source
+                    .is_some_and(|source| key_column.key_component_fault_from(source).is_some());
+                Ok(if misfits {
+                    Aborts::Always
+                } else {
+                    Aborts::Never
+                })
+            }
+            Expr::Conditional {
+                condition,
+                when_true,
+                when_false,
+            } => {
+                let when_true = self.misfit_of(facts, key_column, when_true, node)?;
+                let when_false = self.misfit_of(facts, key_column, when_false, node)?;
+                Ok(Aborts::of_arms(
+                    decided_arm(facts, condition, node),
+                    when_true,
+                    when_false,
+                ))
+            }
+            Expr::Literal(_) | Expr::Parameter(_) | Expr::Arithmetic(..) => Ok(Aborts::Never),
+        }
     }
 
     /// The evaluator logs a write before it resolves the written columns, so a
@@ -499,6 +551,28 @@ fn read_by(terminal: &Terminal) -> Vec<&Expr> {
             condition: Condition::RowPresent(_),
             ..
         } => Vec::new(),
+    }
+}
+
+/// Whether evaluating an expression aborts the call at a place.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Aborts {
+    Never,
+    Always,
+    /// An arm the condition leaves to the data aborts and the other does not.
+    OnOneArm,
+}
+
+impl Aborts {
+    /// The outcome of a conditional whose arms have the given outcomes: a
+    /// decided condition runs only the arm it chooses.
+    fn of_arms(chosen: Option<bool>, when_true: Self, when_false: Self) -> Self {
+        match chosen {
+            Some(true) => when_true,
+            Some(false) => when_false,
+            None if when_true == when_false => when_true,
+            None => Self::OnOneArm,
+        }
     }
 }
 
