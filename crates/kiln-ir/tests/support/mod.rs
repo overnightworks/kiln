@@ -12,6 +12,7 @@
 //! disabled per unused helper.
 #![allow(dead_code)]
 
+pub mod text_forms;
 pub mod world;
 
 use std::collections::{BTreeMap, BTreeSet};

@@ -1,7 +1,9 @@
 //! Key components that can never name a row, found before any call runs: a
 //! literal of another kind or outside the key column's width, and an
-//! expression whose static kind differs from the key column's (D8). A
-//! component known only at run time stays a run-time abort.
+//! expression whose static kind differs from the key column's (D8); and the
+//! text forms no call can run: an operand that cannot be text, a length that
+//! cannot be an integer, a negative literal length (D9). What is known only at
+//! run time stays a run-time abort.
 
 use std::collections::HashMap;
 
@@ -9,10 +11,10 @@ use crate::identifiers::{ColumnName, TableName};
 
 use super::block::{Block, Terminal};
 use super::effect::Effect;
-use super::expression::{Expr, Slot};
+use super::expression::{Condition, Expr, Slot};
 use super::program::{Function, Parameter, ParameterType};
 use super::schema::{Column, ColumnType, KeyComponentFault, Schema, Table};
-use super::validation::FunctionFault;
+use super::validation::{FunctionFault, TextFormFault};
 use super::value::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,6 +141,67 @@ impl<'a> FunctionScope<'a> {
         fault
     }
 
+    /// The first fault, in the order the evaluator resolves them, of a text
+    /// form that `expr` always evaluates and no call can get past. An arm of
+    /// a conditional is evaluated only when chosen, so only its condition is
+    /// examined.
+    pub(super) fn check_text_forms(&self, expr: &Expr) -> Result<(), FunctionFault> {
+        self.text_form_fault(expr)
+            .map_or(Ok(()), |fault| Err(FunctionFault::TextForm(fault)))
+    }
+
+    pub(super) fn check_condition_text_forms(
+        &self,
+        condition: &Condition,
+    ) -> Result<(), FunctionFault> {
+        self.condition_fault(condition)
+            .map_or(Ok(()), |fault| Err(FunctionFault::TextForm(fault)))
+    }
+
+    fn text_form_fault(&self, expr: &Expr) -> Option<TextFormFault> {
+        match expr {
+            Expr::Literal(_) | Expr::Parameter(_) | Expr::Projection { .. } => None,
+            Expr::Arithmetic(_, left, right) => self
+                .text_form_fault(left)
+                .or_else(|| self.text_form_fault(right)),
+            Expr::Concat(first, second) => self
+                .operand_fault(first, StaticKind::Text)
+                .or_else(|| self.operand_fault(second, StaticKind::Text)),
+            Expr::Truncate { text, length } => self
+                .operand_fault(text, StaticKind::Text)
+                .or_else(|| self.operand_fault(length, StaticKind::Integer))
+                .or_else(|| {
+                    matches!(**length, Expr::Literal(Value::Integer(n)) if n < 0)
+                        .then_some(TextFormFault::NegativeLength)
+                }),
+            Expr::Conditional { condition, .. } => self.condition_fault(condition),
+        }
+    }
+
+    fn condition_fault(&self, condition: &Condition) -> Option<TextFormFault> {
+        match condition {
+            Condition::RowPresent(_) => None,
+            Condition::Compare { left, right, .. } => self
+                .text_form_fault(left)
+                .or_else(|| self.text_form_fault(right)),
+            Condition::Contains { text, part } => self
+                .operand_fault(text, StaticKind::Text)
+                .or_else(|| self.operand_fault(part, StaticKind::Text)),
+        }
+    }
+
+    /// Why `operand` cannot be a value of the `needed` kind: a fault of its
+    /// own comes first, as it aborts before the kind is judged.
+    fn operand_fault(&self, operand: &Expr, needed: StaticKind) -> Option<TextFormFault> {
+        self.text_form_fault(operand).or_else(|| {
+            let kind = self.static_kind(operand)?;
+            (kind != needed).then_some(match needed {
+                StaticKind::Text => TextFormFault::OperandNotText,
+                StaticKind::Integer => TextFormFault::LengthNotInteger,
+            })
+        })
+    }
+
     /// The kind `expr` always resolves to, or `None` when the program does
     /// not declare enough to know it.
     fn static_kind(&self, expr: &Expr) -> Option<StaticKind> {
@@ -150,7 +213,7 @@ impl<'a> FunctionScope<'a> {
                 .iter()
                 .find(|parameter| &parameter.name == name)
                 .map(|parameter| parameter.kind.into()),
-            Expr::Projection { .. } => None,
+            Expr::Projection { slot, column } => self.projection_kind(*slot, column),
             Expr::Arithmetic(..) => Some(StaticKind::Integer),
             Expr::Concat(..) | Expr::Truncate { .. } => Some(StaticKind::Text),
             Expr::Conditional {
@@ -162,6 +225,20 @@ impl<'a> FunctionScope<'a> {
                 (self.static_kind(when_false)? == kind).then_some(kind)
             }
         }
+    }
+
+    /// The kind of column `name` in every table `slot` can hold, when they
+    /// all agree.
+    fn projection_kind(&self, slot: Slot, name: &ColumnName) -> Option<StaticKind> {
+        let kind_in = |table: &Option<&TableName>| {
+            let column = self.schema.table((*table)?)?.column(name)?;
+            Some(StaticKind::from(column.kind))
+        };
+        let mut tables = self.slot_tables.get(&slot)?.iter();
+        let kind = kind_in(tables.next()?)?;
+        tables
+            .all(|table| kind_in(table) == Some(kind))
+            .then_some(kind)
     }
 }
 

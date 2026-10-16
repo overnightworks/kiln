@@ -34,5 +34,5 @@ pub use schema::{
     CheckConstraint, ClampDomain, Column, ColumnType, Comparison, ForeignKey, Index, IntegerWidth,
     KeyColumn, KeyComponentFault, KeyDeclaration, Schema, SchemaError, Table, UniqueConstraint,
 };
-pub use validation::{FunctionFault, ProgramError};
+pub use validation::{FunctionFault, ProgramError, TextFormFault};
 pub use value::{Key, Row, Value};

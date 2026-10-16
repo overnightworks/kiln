@@ -63,6 +63,10 @@ pub const INVENTORY: &str = "inventory";
 /// `name` and an integer column `size`.
 pub const LABELS: &str = "labels";
 
+/// A table keyed by the text column [`KEY_COLUMN`] whose `name` column is
+/// an integer, where [`LABELS`] has a text one.
+pub const TAGS: &str = "tags";
+
 /// The key of [`LINES`] in declared order.
 pub const LINE_KEY: [&str; 3] = ["w_id", "d_id", "o_id"];
 
@@ -255,20 +259,31 @@ fn keyed_table(name: &str, key: &[&str], other_columns: &[&str]) -> Table {
     }
 }
 
-fn labels_table() -> Table {
-    let text_column = |name: &str| Column {
-        name: ColumnName(name.to_owned()),
+fn text_keyed_table(name: &str, name_column: Column, other_columns: Vec<Column>) -> Table {
+    let key_column = Column {
+        name: ColumnName(KEY_COLUMN.to_owned()),
         kind: ColumnType::Text,
     };
     Table {
-        name: table(LABELS),
-        columns: vec![
-            text_column(KEY_COLUMN),
-            text_column("name"),
-            integer_column("size"),
-        ],
+        name: table(name),
+        columns: [key_column, name_column]
+            .into_iter()
+            .chain(other_columns)
+            .collect(),
         key: KeyDeclaration::Columns(vec![ColumnName(KEY_COLUMN.to_owned())]),
     }
+}
+
+fn labels_table() -> Table {
+    let name = Column {
+        name: ColumnName("name".to_owned()),
+        kind: ColumnType::Text,
+    };
+    text_keyed_table(LABELS, name, vec![integer_column("size")])
+}
+
+fn tags_table() -> Table {
+    text_keyed_table(TAGS, integer_column("name"), vec![])
 }
 
 /// Orders reference customers and products, customers reference regions; the
@@ -316,6 +331,7 @@ pub fn schema() -> Schema {
             keyed_table(SHIPMENTS, &[KEY_COLUMN], &LINE_KEY),
             keyed_table(INVENTORY, &["w_id", "item_id"], &[]),
             labels_table(),
+            tags_table(),
         ],
         foreign_keys: vec![
             foreign_key("orders", &["customer_id"], "customers"),

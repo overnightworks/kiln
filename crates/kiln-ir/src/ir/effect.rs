@@ -86,6 +86,26 @@ pub enum Effect {
     },
 }
 
+impl Effect {
+    /// The expressions this effect resolves itself, not those of an
+    /// iteration's body.
+    pub(super) fn expressions(&self) -> Vec<&Expr> {
+        match self {
+            Self::Read { key, .. } | Self::Delete { key, .. } => key.iter().collect(),
+            Self::Insert { key, columns, .. } | Self::Update { key, columns, .. } => {
+                key.iter().chain(columns.values()).collect()
+            }
+            Self::ReadRange {
+                start, end, bound, ..
+            }
+            | Self::ReadIndexRange {
+                start, end, bound, ..
+            } => start.iter().chain(end).chain([bound]).collect(),
+            Self::Iterate { .. } => Vec::new(),
+        }
+    }
+}
+
 /// The slots an [`Effect::Iterate`] with row slot `row` and this `body`
 /// releases when its loop ends: the row slot and every slot the body binds,
 /// at any depth, so nothing an iteration read outlives it. After the loop a
