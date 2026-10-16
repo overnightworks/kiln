@@ -39,8 +39,9 @@ pub enum Effect {
     /// `into` — empty if the interval is reversed or no row's key matches
     /// (`docs/concept.md` §2.2 D6, "an empty range reads as an empty
     /// sequence"; D8). `prefix` has fewer components than the key; an empty one
-    /// reads the whole table, and an omitted `interval` matches every value of
-    /// the next component.
+    /// with an omitted `interval` reads the whole table (with an `interval`,
+    /// the first key component is still restricted to it), and an omitted
+    /// `interval` matches every value of the next component.
     ///
     /// Always bounded (§2.1, "never an open-ended loop"): if more rows
     /// match than `bound` resolves to, the call aborts with

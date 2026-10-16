@@ -1,6 +1,10 @@
-use kiln_e1::UnknownCause;
-use kiln_ir::Effect;
+use kiln_e1::{Classification, UnknownCause};
+use kiln_ir::{
+    Column, ColumnName, ColumnType, Effect, Expr, Function, FunctionName, IntegerWidth,
+    KeyDeclaration, Program, Schema, Table, Value,
+};
 
+use super::keys::kiln_e1_27::{classification_of, table_keyed_by};
 use super::programs::*;
 
 /// A district's orders of `LINES`: the prefix `(w, d)`, the interval on `o_id`.
@@ -53,6 +57,117 @@ mod kiln_e1_42 {
             let body = returns(vec![read("orders", param("id"), 3), range]);
             assert_unknown(body, UnknownCause::PrimaryRangeBoundedByRead);
         }
+    }
+
+    #[test]
+    fn an_interval_bound_of_the_wrong_kind_for_the_column_after_the_prefix_ends_the_path_before_the_range(
+    ) {
+        let text = || Expr::Literal(Value::Text("t".to_owned()));
+        let from_slot = || column_of(2, "c");
+        for interval in [(from_slot(), text()), (text(), from_slot())] {
+            let program = interval_bounds_from_slot_two("t2", interval);
+            let Classification::Unknown { evidence, .. } = classification_of(&program) else {
+                panic!("a text interval bound taken from an integer column must not classify");
+            };
+            assert_eq!(
+                evidence.unwrap().paths(),
+                [
+                    "f/body/effects[0]",
+                    "f/body/terminal/when_present/effects[0]",
+                    "f/body/terminal/when_present/effects[1]",
+                    "f/body/terminal/when_present/effects[2]",
+                    "f/body/terminal/when_absent/effects[0]",
+                    "f/body/terminal/when_absent/effects[1]"
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn an_interval_bound_of_the_right_kind_for_the_column_after_the_prefix_keeps_the_range() {
+        let text = || Expr::Literal(Value::Text("t".to_owned()));
+        let from_slot = || column_of(2, "c");
+        for interval in [(from_slot(), text()), (text(), from_slot())] {
+            let program = interval_bounds_from_slot_two("t1", interval);
+            let Classification::Proven { evidence, .. } = classification_of(&program) else {
+                panic!("a text interval bound taken from a text column classifies");
+            };
+            assert_eq!(
+                evidence.paths(),
+                [
+                    "f/body/effects[0]",
+                    "f/body/terminal/when_present/effects[0]",
+                    "f/body/terminal/when_present/effects[1]",
+                    "f/body/terminal/when_present/effects[2]",
+                    "f/body/terminal/when_present/effects[3]",
+                    "f/body/terminal/when_present/effects[4]",
+                    "f/body/terminal/when_absent/effects[0]",
+                    "f/body/terminal/when_absent/effects[1]",
+                    "f/body/terminal/when_present/terminal",
+                    "f/body/terminal/when_absent/terminal"
+                ]
+            );
+        }
+    }
+}
+
+/// `pairs` has an integer first and a text second key column, so a prefix of
+/// one integer is followed by an interval over text.
+fn pairs_table() -> Table {
+    let column = |name: &str, kind| Column {
+        name: ColumnName(name.to_owned()),
+        kind,
+    };
+    let (first, second) = (column("first", INTEGER), column("second", ColumnType::Text));
+    Table {
+        name: table("pairs"),
+        key: KeyDeclaration::Columns(vec![first.name.clone(), second.name.clone()]),
+        columns: vec![first, second],
+    }
+}
+
+const INTEGER: ColumnType = ColumnType::Integer {
+    width: IntegerWidth::I64,
+    domain: None,
+};
+
+/// Slot 2 is read from `t1`, keyed by text, on one arm and from `t2`, keyed by
+/// an integer, on the other, so validation cannot tell what its column `c`
+/// is; on the present arm it is read from `bound_on_path`. The present arm then
+/// reads `pairs` below the prefix `(1)` with the interval `(from, to)`, and
+/// afterwards `b`.
+fn interval_bounds_from_slot_two(bound_on_path: &str, interval: (Expr, Expr)) -> Program {
+    let plain = |name| table_keyed_by(name, "k", INTEGER);
+    let reading = |name: &str, into| match name {
+        "t1" => read("t1", Expr::Literal(Value::Text("k".to_owned())), into),
+        _ => read("t2", literal(1), into),
+    };
+    let other = if bound_on_path == "t1" { "t2" } else { "t1" };
+    let present = returns(vec![
+        read("a", literal(1), 1),
+        reading(bound_on_path, 2),
+        reading(other, 5),
+        read_prefix_range("pairs", vec![literal(1)], Some(interval), 6),
+        read("b", literal(1), 4),
+    ]);
+    let absent = returns(vec![reading(other, 2), read("b", literal(1), 4)]);
+    Program {
+        schema: Schema {
+            tables: vec![
+                plain("sel"),
+                plain("a"),
+                plain("b"),
+                pairs_table(),
+                table_keyed_by("t1", "c", ColumnType::Text),
+                table_keyed_by("t2", "c", INTEGER),
+            ],
+            ..Schema::default()
+        },
+        functions: vec![Function {
+            name: FunctionName(FUNCTION.to_owned()),
+            parameters: Vec::new(),
+            body: branch_on_presence(vec![read("sel", literal(1), 0)], 0, present, absent),
+        }],
     }
 }
 
