@@ -285,16 +285,59 @@ mod kiln_ir_96 {
     }
 
     #[test]
-    fn a_failing_form_in_an_arm_of_a_conditional_is_left_to_the_run() {
-        let unchosen = concat(integer_literal(1), text_literal("x"));
-        let response = when(
-            contains(argument("s"), text_literal("a")),
-            argument("s"),
-            unchosen,
+    fn a_failing_form_is_rejected_in_either_arm_of_a_conditional_whichever_a_call_chooses() {
+        let failures = [
+            (
+                truncate(argument("s"), integer_literal(-1)),
+                TextFormFault::NegativeLength,
+            ),
+            (
+                concat(integer_literal(1), text_literal("x")),
+                TextFormFault::OperandNotText,
+            ),
+            (
+                truncate(argument("s"), text_literal("2")),
+                TextFormFault::LengthNotInteger,
+            ),
+        ];
+        for (failing, fault) in failures {
+            let condition = || contains(argument("s"), text_literal("a"));
+            let responses = [
+                when(condition(), argument("s"), failing.clone()),
+                when(condition(), failing.clone(), argument("s")),
+            ];
+            for response in responses {
+                let result = response_result(vec![text_parameter("s")], vec![text("a")], response);
+
+                assert_eq!(result, rejected(fault), "{failing:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_failing_form_on_a_branch_arm_no_call_reaches_is_still_rejected() {
+        let decided_true = contains(text_literal("x"), text_literal("x"));
+        let program = single_function_program(
+            vec![],
+            vec![],
+            Terminal::Branch {
+                condition: decided_true,
+                when_present: Box::new(kiln_ir::Block {
+                    effects: vec![],
+                    terminal: Terminal::Return(text_literal("ok")),
+                }),
+                when_absent: Box::new(kiln_ir::Block {
+                    effects: vec![],
+                    terminal: Terminal::Return(truncate(text_literal("x"), integer_literal(-1))),
+                }),
+            },
         );
 
-        let outcome = response_with(vec![text_parameter("s")], vec![text("a")], response);
+        let result = run(&program, &call_under_test(vec![]), &Store::empty());
 
-        assert_eq!(outcome, committed_text("a"));
+        assert_eq!(
+            result.map(|execution| execution.outcome),
+            rejected(TextFormFault::NegativeLength)
+        );
     }
 }

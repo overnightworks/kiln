@@ -477,9 +477,13 @@ impl<'a> Walker<'a> {
         terminal: &Terminal,
         at: &NodePath,
     ) -> Result<Vec<Operand>, Halt> {
-        let reads = read_by(terminal);
-        self.passes(facts, unkeyed(reads.iter().copied()), at)?;
-        self.operands_of(facts, reads, at)
+        let evaluation = Evaluation {
+            schema: self.schema,
+            facts,
+            at,
+        };
+        Self::halt_unless_past(evaluation.terminal_aborts(terminal)?, at)?;
+        self.operands_of(facts, read_by(terminal), at)
     }
 
     /// Whether the evaluator gets past resolving `resolved` at `at`. A
@@ -497,7 +501,11 @@ impl<'a> Walker<'a> {
             facts,
             at,
         };
-        match evaluation.aborts(resolved)? {
+        Self::halt_unless_past(evaluation.aborts(resolved)?, at)
+    }
+
+    fn halt_unless_past(aborts: Aborts, at: &NodePath) -> Result<(), Halt> {
+        match aborts {
             Aborts::Never => Ok(()),
             Aborts::Always => Err(Halt::aborting_at(at)),
             Aborts::OnOneArm => Err(Halt::Refuses { at: at.clone() }),

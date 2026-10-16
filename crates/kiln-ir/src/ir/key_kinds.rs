@@ -142,9 +142,9 @@ impl<'a> FunctionScope<'a> {
     }
 
     /// The first fault, in the order the evaluator resolves them, of a text
-    /// form that `expr` always evaluates and no call can get past. An arm of
-    /// a conditional is evaluated only when chosen, so only its condition is
-    /// examined.
+    /// form in `expr` that no call can get past. Like a key component's kind
+    /// (`KILN-IR-82`), it is a typing check that ignores which arm of a
+    /// conditional a call chooses.
     pub(super) fn check_text_forms(&self, expr: &Expr) -> Result<(), FunctionFault> {
         self.text_form_fault(expr)
             .map_or(Ok(()), |fault| Err(FunctionFault::TextForm(fault)))
@@ -174,7 +174,14 @@ impl<'a> FunctionScope<'a> {
                     matches!(**length, Expr::Literal(Value::Integer(n)) if n < 0)
                         .then_some(TextFormFault::NegativeLength)
                 }),
-            Expr::Conditional { condition, .. } => self.condition_fault(condition),
+            Expr::Conditional {
+                condition,
+                when_true,
+                when_false,
+            } => self
+                .condition_fault(condition)
+                .or_else(|| self.text_form_fault(when_true))
+                .or_else(|| self.text_form_fault(when_false)),
         }
     }
 

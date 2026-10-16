@@ -3,7 +3,7 @@
 //! runs its chosen arm alone, so nothing in the other arm is asked. What an
 //! expression is made of is the operand's question, never this one's.
 
-use kiln_ir::{Column, ColumnName, ColumnType, Condition, Expr, Schema, Value};
+use kiln_ir::{Column, ColumnName, ColumnType, Condition, Expr, Schema, Terminal, Value};
 
 use super::facts::PathFacts;
 use super::node_path::NodePath;
@@ -99,6 +99,16 @@ impl Evaluation<'_> {
             }
         }
         Ok(aborts)
+    }
+
+    /// Whether a block's terminal certainly aborts while resolving what it
+    /// reads: a response, or the operands of a branch condition.
+    pub fn terminal_aborts(&self, terminal: &Terminal) -> Result<Aborts, ClassifyError> {
+        match terminal {
+            Terminal::Return(response) => self.aborts([(response, None)]),
+            Terminal::Branch { condition, .. } => self.condition_aborts(condition),
+            Terminal::Abort(_) => Ok(Aborts::Never),
+        }
     }
 
     fn expression_aborts(

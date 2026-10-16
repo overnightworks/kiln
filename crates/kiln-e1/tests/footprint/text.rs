@@ -264,6 +264,29 @@ mod kiln_e1_44 {
         assert_eq!(arms_reaching_b(label_or_tag_then(value)), [false, true]);
     }
 
+    /// Slot 0 is a label on the present arm and a tag on the absent one, whose
+    /// branch on a containment of the tag's integer `name` and a slot no read
+    /// ever binds is the terminal under test.
+    #[test]
+    fn a_containment_branch_aborts_on_its_first_operand_before_its_second_is_resolved() {
+        let slot_never_bound = column_of(5, "name");
+        let body = branch_on(
+            vec![],
+            contains(param("s"), text("A")),
+            returns(vec![read(LABELS, param("p"), 0)]),
+            branch_on(
+                vec![read(TAGS, param("p"), 0)],
+                contains(name_of_slot_0(), slot_never_bound),
+                returns(vec![update("a", param("y"), &[])]),
+                returns(vec![update("b", param("y"), &[])]),
+            ),
+        );
+
+        let classified = classify_function(&program(body), &FunctionName(FUNCTION.to_owned()));
+
+        assert!(classified.is_ok(), "{classified:?}");
+    }
+
     #[test]
     fn a_projection_of_the_wrong_kind_on_one_arm_of_an_undecided_conditional_is_unknown() {
         let value = concat(
@@ -436,6 +459,14 @@ mod kiln_e1_44 {
         rejected_as(
             after_label(concat(literal(1), text("x"))),
             TextFormFault::OperandNotText,
+        );
+        rejected_as(
+            after_label(when(
+                contains(text("x"), text("x")),
+                text("x"),
+                truncate(text("x"), literal(-1)),
+            )),
+            TextFormFault::NegativeLength,
         );
     }
 }
