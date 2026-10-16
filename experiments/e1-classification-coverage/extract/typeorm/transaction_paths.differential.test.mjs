@@ -1,5 +1,5 @@
 // The extractor's S2 units against a tiny oracle that applies the ruled definition literally to
-// small generated programs of the supported constructs (if/else, switch with fall-through and with
+// small generated programs of the supported constructs (if/else, ternary, switch with fall-through and with
 // or without default, try/catch/finally, return, throw): enumerate the paths, drop those that end
 // in `throw`, run a stack per path, and match a start when no path leaves it open and some path
 // pops it.
@@ -30,10 +30,13 @@ function generatedBlock(random, depth, minLength = 1) {
   return Array.from({ length: minLength + random(3) }, () => (depth < MAX_DEPTH && random(3) === 0 ? generatedComposite(random, depth + 1) : { kind: LEAF_KINDS[random(LEAF_KINDS.length)] }));
 }
 
+const EXPRESSION_KINDS = ["start", "commit", "rollback", "write"];
+
 const maybe = (random, make) => (random(2) === 0 ? make() : undefined);
 
 function generatedComposite(random, depth) {
-  const kind = ["if", "switch", "try"][random(3)];
+  const kind = ["if", "ternary", "switch", "try"][random(4)];
+  if (kind === "ternary") return { kind, whenTrue: [{ kind: EXPRESSION_KINDS[random(4)] }], whenFalse: [{ kind: EXPRESSION_KINDS[random(4)] }] };
   if (kind === "if") return { kind, then: generatedBlock(random, depth), otherwise: maybe(random, () => generatedBlock(random, depth)) };
   if (kind === "switch") {
     const clauses = Array.from({ length: 1 + random(3) }, () => ({ body: generatedBlock(random, depth, 0), breaks: random(2) === 0 }));
@@ -69,6 +72,10 @@ function rendered(program) {
         block(statement.otherwise);
       }
       emit("}");
+    } else if (statement.kind === "ternary") {
+      emit("flag", statement);
+      emit(`? ${LEAF_TEXT[statement.whenTrue[0].kind].replace(/;$/, "")}`, statement.whenTrue[0]);
+      emit(`: ${LEAF_TEXT[statement.whenFalse[0].kind]}`, statement.whenFalse[0]);
     } else if (statement.kind === "switch") {
       emit("switch (flag) {", statement);
       statement.clauses.forEach((clause, index) => {
@@ -112,6 +119,7 @@ function pathsOfStatement(statement) {
   if (statement.kind === "write") return onward();
   if (statement.kind === "return") return [{ events: [], ending: "return" }];
   if (statement.kind === "throw") return [];
+  if (statement.kind === "ternary") return [...pathsOf(statement.whenTrue), ...pathsOf(statement.whenFalse)];
   if (statement.kind === "switch") return [...statement.clauses.flatMap((_, entry) => pathsFromClause(statement.clauses.slice(entry))), ...(statement.defaultAt === undefined ? onward() : [])];
   if (statement.kind === "try") return pathsOfTry(statement);
   return [...pathsOf(statement.then), ...(statement.otherwise ? pathsOf(statement.otherwise) : onward())];
@@ -151,7 +159,7 @@ function matchedStarts(program, startLines) {
   return { matched: new Map(startLines.filter((line) => popped.has(line) && !left.has(line)).map((line) => [line, popped.get(line)])), unmatched: startLines.filter((line) => !popped.has(line) || left.has(line)) };
 }
 
-const nestedBlocks = (statement) => [statement.then, statement.otherwise, statement.body, statement.caught, statement.finalized, ...(statement.clauses ?? []).map(({ body }) => body)].filter(Boolean);
+const nestedBlocks = (statement) => [statement.then, statement.otherwise, statement.whenTrue, statement.whenFalse, statement.body, statement.caught, statement.finalized, ...(statement.clauses ?? []).map(({ body }) => body)].filter(Boolean);
 
 function linesOf(statements, kind) {
   return statements.flatMap((statement) => [...(statement.kind === kind ? [statement.line] : []), ...nestedBlocks(statement).flatMap((nested) => linesOf(nested, kind))]);
@@ -183,12 +191,13 @@ function extractedFrom(source) {
 
 const containsStatement = (statements, matches) => statements.some((statement) => matches(statement) || nestedBlocks(statement).some((nested) => containsStatement(nested, matches)));
 const isSwitchWithoutDefault = (statement) => statement.kind === "switch" && statement.defaultAt === undefined;
+const isTernary = (statement) => statement.kind === "ternary";
 const isFallThroughSwitch = (statement) => statement.kind === "switch" && statement.clauses.slice(0, -1).some(({ breaks }) => !breaks);
 const isTryFinallyWithReturn = (statement) => statement.kind === "try" && statement.finalized !== undefined && containsStatement(statement.body, ({ kind }) => kind === "return");
 
 test("KILN-E1TO-10 the extractor agrees with the definition applied literally on generated programs", () => {
   const random = randomSource(SEED);
-  const seen = { matched: 0, unmatched: 0, programs: 0, matchedWithSwitchWithoutDefault: 0, matchedWithFallThrough: 0, matchedWithTryFinallyReturn: 0 };
+  const seen = { matched: 0, unmatched: 0, programs: 0, matchedWithSwitchWithoutDefault: 0, matchedWithFallThrough: 0, matchedWithTernary: 0, matchedWithTryFinallyReturn: 0 };
   for (let attempt = 0; seen.programs < PROGRAM_COUNT; attempt += 1) {
     const program = generatedBlock(random, 1);
     const source = rendered(program);
@@ -201,9 +210,10 @@ test("KILN-E1TO-10 the extractor agrees with the definition applied literally on
     seen.unmatched += expected.unmatched.length > 0 ? 1 : 0;
     seen.matchedWithSwitchWithoutDefault += hasUnit && containsStatement(program, isSwitchWithoutDefault) ? 1 : 0;
     seen.matchedWithFallThrough += hasUnit && containsStatement(program, isFallThroughSwitch) ? 1 : 0;
+    seen.matchedWithTernary += hasUnit && containsStatement(program, isTernary) ? 1 : 0;
     seen.matchedWithTryFinallyReturn += hasUnit && containsStatement(program, isTryFinallyWithReturn) ? 1 : 0;
   }
   assert.ok(seen.matched > 100 && seen.unmatched > 200, `the generated programs must exercise both outcomes: ${JSON.stringify(seen)}`);
-  const exercised = [seen.matchedWithSwitchWithoutDefault, seen.matchedWithFallThrough, seen.matchedWithTryFinallyReturn];
+  const exercised = [seen.matchedWithSwitchWithoutDefault, seen.matchedWithFallThrough, seen.matchedWithTernary, seen.matchedWithTryFinallyReturn];
   assert.ok(exercised.every((count) => count > 10), `the generated programs must match starts around switch and try/finally: ${JSON.stringify(seen)}`);
 });
