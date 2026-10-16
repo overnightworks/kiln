@@ -1,3 +1,4 @@
+use super::structure::AppliedInput;
 use super::walker::{Checked, Walker};
 use crate::malformed::{Binding, Malformed, Path};
 use crate::sort::{Expected, Sort};
@@ -19,44 +20,38 @@ impl Walker<'_> {
             Term::Lit(_) => Ok(Sort::Int),
             Term::True | Term::False => Ok(Sort::Bool),
             Term::Absent => Ok(Sort::Opt),
-            Term::Param(name) => self.parameter(name),
-            Term::Key if self.is_function() && self.in_entry() => Ok(Sort::Int),
+            Term::Param(_) => Ok(Sort::Int),
+            Term::Key if self.key_bound() => Ok(Sort::Int),
             Term::Key => Err(self.not_bound(Binding::Key)),
-            Term::State(name) => self.state_kind(name),
-            Term::Applied => self
-                .applied_to()
-                .cloned()
-                .ok_or_else(|| self.not_bound(Binding::Applied)),
+            Term::State(name) => match self.state_kind(name)? {
+                Sort::Keyed(category) => Err(self.no_production(Sort::Keyed(category))),
+                scalar => Ok(scalar),
+            },
+            Term::Applied => match self.applied() {
+                Some(AppliedInput::Value(sort)) => Ok(sort.clone()),
+                Some(AppliedInput::Rows(_)) | None => Err(self.not_bound(Binding::Applied)),
+            },
             Term::Field { operand, field } => self.field(*operand, field),
-            Term::CategoryValue { category, code } => self.category_value(category, *code),
-            Term::Name(reason) => self.name(reason),
+            Term::CategoryValue { category, .. } => Ok(Sort::Cat(category.clone())),
+            Term::Name(_) => Ok(Sort::Name),
             _ => unreachable!("{NOT_DISPATCHED}"),
         }
     }
 
-    fn parameter(&self, name: &str) -> Checked<Sort> {
-        if self
-            .parameters()
-            .iter()
-            .any(|parameter| parameter.name.0 == name)
-        {
-            Ok(Sort::Int)
-        } else {
-            Err(Malformed::UnknownParameter {
-                path: self.here(),
-                name: name.to_owned(),
-            })
+    pub(super) fn no_production(&self, sort: Sort) -> Malformed {
+        Malformed::NoProduction {
+            path: self.here(),
+            sort,
         }
     }
 
     fn state_kind(&self, name: &str) -> Checked<Sort> {
-        let component = self.family.signature().component(name).ok_or_else(|| {
-            Malformed::UnknownStateComponent {
-                path: self.here(),
-                name: name.to_owned(),
-            }
-        })?;
-        if self.is_function() {
+        let component = self
+            .family
+            .signature()
+            .component(name)
+            .expect("check 1 ran first");
+        if self.state_bound() {
             Ok(component.kind.clone())
         } else {
             Err(self.not_bound(Binding::State))
@@ -75,29 +70,6 @@ impl Walker<'_> {
                 path: self.here(),
                 name: name.to_owned(),
             })
-    }
-
-    fn category_value(&self, category: &str, code: usize) -> Checked<Sort> {
-        if code < self.category_size(category)? {
-            Ok(Sort::Cat(category.to_owned()))
-        } else {
-            Err(Malformed::CategoryValueOutOfRange {
-                path: self.here(),
-                category: category.to_owned(),
-                code,
-            })
-        }
-    }
-
-    fn name(&self, reason: &kiln_ir::AbortReason) -> Checked<Sort> {
-        if self.family.names().contains(reason) {
-            Ok(Sort::Name)
-        } else {
-            Err(Malformed::UnknownName {
-                path: self.here(),
-                name: Box::new(reason.clone()),
-            })
-        }
     }
 
     pub(super) fn integer_operation(&mut self, term: &Term) -> Checked<Sort> {
@@ -153,7 +125,6 @@ impl Walker<'_> {
                 Ok(Sort::Cat(category))
             }
             Term::Of { category, code } => {
-                self.category_size(category)?;
                 self.expect(0, code, &Sort::Int)?;
                 Ok(Sort::Cat(category.clone()))
             }
@@ -165,13 +136,16 @@ impl Walker<'_> {
                 let kind = self.state_kind(component)?;
                 self.keyed_row(kind, key)
             }
-            Term::AppliedRow(key) => {
-                let kind = self
-                    .applied_to()
-                    .cloned()
-                    .ok_or_else(|| self.not_bound(Binding::Applied))?;
-                self.keyed_row(kind, key)
-            }
+            Term::AppliedRow(key) => match self.applied() {
+                Some(AppliedInput::Rows(category)) => {
+                    self.expect(0, key, &Sort::Cat(category.clone()))?;
+                    Ok(Sort::Opt)
+                }
+                Some(AppliedInput::Value(sort)) => {
+                    Err(self.mismatch(Expected::Keyed, sort.clone()))
+                }
+                None => Err(self.not_bound(Binding::Applied)),
+            },
             Term::Keyed { category, rows } => {
                 self.parts(category, rows, &Sort::Opt, |path, expected, found| {
                     Malformed::KeyedRowCountMismatch {
@@ -213,9 +187,9 @@ impl Walker<'_> {
         part: &Sort,
         count_mismatch: fn(Path, usize, usize) -> Malformed,
     ) -> Checked<()> {
-        let size = self.category_size(category)?;
+        let size = self.category_size(category);
         if terms.len() != size {
-            return Err(count_mismatch(self.here(), size, terms.len()));
+            self.defer(count_mismatch(self.here(), size, terms.len()));
         }
         for (index, term) in terms.iter().enumerate() {
             self.expect(index, term, part)?;
@@ -228,6 +202,9 @@ impl Walker<'_> {
             Term::Ite(condition, when_true, when_false) => {
                 self.expect(0, condition, &Sort::Bool)?;
                 let sort = self.child(1, when_true)?;
+                if !matches!(sort, Sort::Int | Sort::Cat(_) | Sort::Opt | Sort::Outcome) {
+                    return Err(self.no_production(sort));
+                }
                 self.expect(2, when_false, &sort)?;
                 Ok(sort)
             }
@@ -242,33 +219,21 @@ impl Walker<'_> {
                 Ok(Sort::Carrier)
             }
             Term::Whole(operand) => self.whole(*operand),
-            Term::When(condition, parts) => self.entry(|walker| {
-                walker.expect(0, condition, &Sort::Bool)?;
-                walker.each_child(1, parts)?;
-                Ok(Sort::Carrier)
-            }),
+            Term::When(..) => Err(self.not_bound(Binding::Entry)),
             _ => unreachable!("{NOT_DISPATCHED}"),
         }
     }
 
     fn abort(&mut self, reason: &Term) -> Checked<Sort> {
-        if let Term::Name(name) = reason {
-            if !self.family.names().contains(name) {
-                return Err(Malformed::AbortOutsideNameSet {
-                    path: self.here(),
-                    name: Box::new(name.clone()),
-                });
-            }
-        }
         self.expect(0, reason, &Sort::Name)?;
         Ok(Sort::Outcome)
     }
 
     fn case(&mut self, scrutinee: &Term, arms: &[Term]) -> Checked<Sort> {
         let category = self.category_of(0, scrutinee)?;
-        let size = self.category_size(&category)?;
+        let size = self.category_size(&category);
         if arms.len() != size {
-            return Err(Malformed::ArmCountMismatch {
+            self.defer(Malformed::ArmCountMismatch {
                 path: self.here(),
                 expected: size,
                 found: arms.len(),

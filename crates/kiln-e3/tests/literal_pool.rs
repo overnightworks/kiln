@@ -2,9 +2,8 @@ use std::collections::BTreeMap;
 
 use kiln_e3::{Family, Signature};
 use kiln_ir::{
-    AbortReason, Block, ClampDomain, Column, ColumnName, ColumnType, Effect, Expr, Function,
-    FunctionName, IntegerWidth, Key, KeyDeclaration, OverflowReason, Program, Row, Schema, Slot,
-    Store, Table, TableName, Terminal, Value,
+    Block, ClampDomain, Column, ColumnName, ColumnType, Effect, Expr, Function, FunctionName,
+    IntegerWidth, KeyDeclaration, Program, Schema, Slot, Table, TableName, Terminal, Value,
 };
 
 fn name(text: &str) -> String {
@@ -78,17 +77,12 @@ fn program_touching_every_column_kind() -> Program {
     }
 }
 
-fn family_over_stored_row(key: i64) -> Family {
-    let store = Store::containing([(
-        TableName(name("t")),
-        Key(vec![Value::Integer(key)]),
-        Row::default(),
-    )]);
+fn family() -> Family {
     let signature = Signature {
         components: Vec::new(),
         categories: Vec::new(),
     };
-    Family::new(program_touching_every_column_kind(), signature, &store)
+    Family::new(program_touching_every_column_kind(), signature, Vec::new())
 }
 
 mod kiln_e3_01 {
@@ -96,24 +90,25 @@ mod kiln_e3_01 {
 
     #[test]
     fn literal_pool_holds_literals_of_every_effect_kind() {
-        let pool = family_over_stored_row(9).literal_pool().clone();
+        let pool = family().literal_pool().clone();
 
-        for number in [2, 3, 4, 5, 6, 7, 8, 9, -128, 127, 0, 1] {
+        for number in [2, 3, 4, 5, 6, 7, 8, -128, 127, 0, 1] {
             assert!(pool.contains(&number), "missing {number}");
         }
     }
 
     #[test]
-    fn width_overflow_names_only_unclamped_integer_columns_that_are_not_keys() {
-        let family = family_over_stored_row(9);
+    fn literal_pool_leaves_out_the_width_bounds_of_key_columns() {
+        let pool = family().literal_pool().clone();
 
-        assert_eq!(
-            family.names(),
-            [AbortReason::Overflow(OverflowReason::Width {
-                table: TableName(name("t")),
-                column: ColumnName(name("count")),
-                key: Key(vec![Value::Integer(9)]),
-            })]
-        );
+        assert!(!pool.contains(&i64::MIN));
+        assert!(!pool.contains(&i64::MAX));
+    }
+
+    #[test]
+    fn literal_pool_holds_both_bounds_of_a_clamp_domain() {
+        let pool = family().literal_pool().clone();
+
+        assert!(pool.contains(&0) && pool.contains(&9));
     }
 }

@@ -1,22 +1,18 @@
 use std::collections::BTreeSet;
 
 use kiln_ir::{
-    AbortName, AbortReason, Block, ColumnType, Condition, Effect, Expr, Key, KeyDeclaration,
-    OverflowReason, ParameterType, Program, Store, Terminal, Value,
+    Block, ColumnType, Condition, Effect, Expr, KeyDeclaration, ParameterType, Program, Terminal,
+    Value,
 };
 
-/// What the grammar reads from a `Program` (grammar §1.2, §1.5).
-pub(crate) struct ProgramFacts {
-    pub literal_pool: BTreeSet<i64>,
-    pub names: Vec<AbortReason>,
-}
-
-/// The facts of `program`, whose stored keys are read from `store`.
-/// Keys are assumed to be one integer component.
-pub(crate) fn scan(program: &Program, store: &Store) -> ProgramFacts {
+/// The constant pool `P` of grammar §1.5: the body literals, the check
+/// operands, the width bounds of non-key value columns and of parameters, and
+/// `0` and `1`. Key columns are left out: their `I64` width is a
+/// representation convention, not part of the family.
+pub(crate) fn of(program: &Program) -> BTreeSet<i64> {
     let mut scan = Scan::default();
     scan.literals.extend([0, 1]);
-    scan.declared_column_bounds(program);
+    scan.value_column_bounds(program);
     for function in &program.functions {
         for parameter in &function.parameters {
             if let ParameterType::Integer(width) = parameter.kind {
@@ -28,11 +24,7 @@ pub(crate) fn scan(program: &Program, store: &Store) -> ProgramFacts {
     for constraint in &program.schema.check_constraints {
         scan.value(&constraint.operand);
     }
-    scan.width_overflows(program, store);
-    ProgramFacts {
-        literal_pool: scan.literals,
-        names: scan.names,
-    }
+    scan.literals
 }
 
 fn bounds((low, high): (i64, i64)) -> [i64; 2] {
@@ -42,63 +34,29 @@ fn bounds((low, high): (i64, i64)) -> [i64; 2] {
 #[derive(Default)]
 struct Scan {
     literals: BTreeSet<i64>,
-    names: Vec<AbortReason>,
 }
 
 impl Scan {
-    fn name(&mut self, reason: AbortReason) {
-        if !self.names.contains(&reason) {
-            self.names.push(reason);
-        }
-    }
-
     fn value(&mut self, value: &Value) {
         if let Value::Integer(number) = value {
             self.literals.insert(*number);
         }
     }
 
-    fn declared_column_bounds(&mut self, program: &Program) {
-        for table in &program.schema.tables {
-            for column in &table.columns {
-                if let ColumnType::Integer { width, domain } = &column.kind {
-                    self.literals.extend(bounds(width.range()));
-                    if let Some(domain) = domain {
-                        self.literals.extend([domain.min, domain.max]);
-                    }
-                }
-            }
-        }
-    }
-
-    fn width_overflows(&mut self, program: &Program, store: &Store) {
-        let all_keys = (
-            Key(vec![Value::Integer(i64::MIN)]),
-            Key(vec![Value::Integer(i64::MAX)]),
-        );
+    fn value_column_bounds(&mut self, program: &Program) {
         for table in &program.schema.tables {
             let key_columns = match &table.key {
                 KeyDeclaration::Columns(columns) => columns.as_slice(),
                 KeyDeclaration::Keyless => &[],
             };
-            let stored = store.rows_in_range(&table.name, &all_keys.0, &all_keys.1);
             for column in &table.columns {
-                let clamps = matches!(
-                    column.kind,
-                    ColumnType::Integer {
-                        domain: Some(_),
-                        ..
-                    }
-                );
-                let unclamped_integer =
-                    matches!(column.kind, ColumnType::Integer { .. }) && !clamps;
-                if unclamped_integer && !key_columns.contains(&column.name) {
-                    for row in &stored {
-                        self.name(AbortReason::Overflow(OverflowReason::Width {
-                            table: table.name.clone(),
-                            column: column.name.clone(),
-                            key: row.key.clone(),
-                        }));
+                if key_columns.contains(&column.name) {
+                    continue;
+                }
+                if let ColumnType::Integer { width, domain } = &column.kind {
+                    self.literals.extend(bounds(width.range()));
+                    if let Some(domain) = domain {
+                        self.literals.extend([domain.min, domain.max]);
                     }
                 }
             }
@@ -111,9 +69,7 @@ impl Scan {
         }
         match &block.terminal {
             Terminal::Return(expr) => self.expr(expr),
-            Terminal::Abort(AbortName(name)) => {
-                self.name(AbortReason::Declared(AbortName(name.clone())));
-            }
+            Terminal::Abort(_) => {}
             Terminal::Branch {
                 condition,
                 when_present,

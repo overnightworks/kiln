@@ -1,9 +1,12 @@
 use std::collections::BTreeSet;
 
-use kiln_e2::quota::{self, QuotaState};
-use kiln_ir::{AbortReason, Program, Store};
+use kiln_e2::quota::{self, QuotaAbort};
+use kiln_ir::{
+    AbortName, AbortReason, CheckConstraint, ColumnName, Comparison, Key, OverflowReason, Program,
+    TableName, Value,
+};
 
-use crate::scan::scan;
+use crate::literal_pool;
 use crate::sort::Sort;
 
 /// A named state component and the kind of value it holds (grammar §1.1).
@@ -41,35 +44,55 @@ impl Signature {
     }
 }
 
+/// One name of a family's frozen `Name` list (grammar §1.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrozenName {
+    pub reason: AbortReason,
+    /// The width and check-violation names (†) occur only in checker form,
+    /// never in a hole.
+    pub checker_only: bool,
+}
+
+impl FrozenName {
+    fn in_holes(reason: AbortReason) -> Self {
+        Self {
+            reason,
+            checker_only: false,
+        }
+    }
+
+    fn checker_only(reason: AbortReason) -> Self {
+        Self {
+            reason,
+            checker_only: true,
+        }
+    }
+}
+
 /// The family context a checker form is validated against: the `Program`,
-/// its signature, the literal pool and the `Name` set, the last two read from
-/// the `Program`.
+/// its signature, the literal pool read from the `Program` and the frozen
+/// `Name` list.
 #[derive(Debug, Clone)]
 pub struct Family {
     program: Program,
     signature: Signature,
     literal_pool: BTreeSet<i64>,
-    names: Vec<AbortReason>,
+    names: Vec<FrozenName>,
 }
 
 impl Family {
-    /// `store` is any store of the family; its keys decide which width
-    /// overflows the `Name` set holds.
-    pub fn new(program: Program, signature: Signature, store: &Store) -> Self {
-        let facts = scan(&program, store);
+    /// `names` is the family's frozen list, copied from grammar §1.2; nothing
+    /// is derived from the `Program`.
+    pub fn new(program: Program, signature: Signature, names: Vec<FrozenName>) -> Self {
         Self {
+            literal_pool: literal_pool::of(&program),
             program,
             signature,
-            literal_pool: facts.literal_pool,
-            names: facts.names,
+            names,
         }
     }
 
     /// Quota allocation (grammar §1.1): one `Int` component, `remaining`.
-    ///
-    /// The `Name` set is the three declared aborts and the width overflow of
-    /// `quota.remaining`, as the item fixes it; grammar §1.2 also lists
-    /// `Overflow(Arithmetic)` and `CheckViolation`, which a later slice owns.
     pub fn quota() -> Self {
         let signature = Signature {
             components: vec![StateComponent {
@@ -78,11 +101,7 @@ impl Family {
             }],
             categories: Vec::new(),
         };
-        Self::new(
-            quota::program(),
-            signature,
-            &QuotaState { remaining: 0 }.to_store(),
-        )
+        Self::new(quota::program(), signature, quota_names())
     }
 
     pub fn program(&self) -> &Program {
@@ -97,7 +116,44 @@ impl Family {
         &self.literal_pool
     }
 
-    pub fn names(&self) -> &[AbortReason] {
+    pub fn names(&self) -> &[FrozenName] {
         &self.names
     }
+
+    pub(crate) fn has_name(&self, reason: &AbortReason) -> bool {
+        self.names.iter().any(|name| name.reason == *reason)
+    }
+}
+
+/// Grammar §1.2, "Quota": the declared aborts, `Overflow(Arithmetic)`, and
+/// the † width and check-violation names.
+fn quota_names() -> Vec<FrozenName> {
+    let quota_table = || TableName("quota".to_owned());
+    let remaining = || ColumnName("remaining".to_owned());
+    let hot_key = || Key(vec![Value::Integer(0)]);
+    let check = |comparison, operand| AbortReason::CheckViolation {
+        constraint: CheckConstraint {
+            table: quota_table(),
+            column: remaining(),
+            comparison,
+            operand: Value::Integer(operand),
+        },
+        key: hot_key(),
+    };
+    let declared = |abort: QuotaAbort| {
+        FrozenName::in_holes(AbortReason::Declared(AbortName(abort.name().to_owned())))
+    };
+    vec![
+        declared(QuotaAbort::InvalidQuantity),
+        declared(QuotaAbort::QuotaExhausted),
+        declared(QuotaAbort::QuotaFull),
+        FrozenName::in_holes(AbortReason::Overflow(OverflowReason::Arithmetic)),
+        FrozenName::checker_only(AbortReason::Overflow(OverflowReason::Width {
+            table: quota_table(),
+            column: remaining(),
+            key: hot_key(),
+        })),
+        FrozenName::checker_only(check(Comparison::AtLeast, 0)),
+        FrozenName::checker_only(check(Comparison::AtMost, 1000)),
+    ]
 }

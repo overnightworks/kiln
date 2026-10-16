@@ -1,11 +1,11 @@
 //! Hand-written quota checker forms and the term builders they use.
 #![allow(dead_code)]
 
+use kiln_e2::quota::program;
 use kiln_e2::quota::QuotaAbort;
-use kiln_e2::quota::{program, QuotaState};
 use kiln_e3::{
-    validate, Category, CheckerForm, ComponentDef, Family, Field, FunctionDef, Malformed, Operand,
-    Path, Signature, Sort, StateComponent, Step, Term,
+    validate, Category, CheckerForm, ComponentDef, ComponentShape, Family, Field, FunctionDef,
+    Malformed, Operand, Path, Signature, Sort, StateComponent, Step, Term,
 };
 use kiln_ir::{AbortName, AbortReason, Relation};
 
@@ -94,6 +94,7 @@ pub enum Variant {
 fn shift_component() -> ComponentDef {
     ComponentDef {
         carrier_fields: vec![int_field("a")],
+        shape: ComponentShape::Whole,
         combine: Some(Term::Tuple(vec![add(
             field(Operand::Left, "a"),
             field(Operand::Right, "a"),
@@ -112,6 +113,7 @@ fn clamp_shift_component() -> ComponentDef {
     };
     ComponentDef {
         carrier_fields: vec![int_field("a"), int_field("l"), int_field("u")],
+        shape: ComponentShape::Whole,
         combine: Some(Term::Tuple(vec![
             add(field(Operand::Left, "a"), field(Operand::Right, "a")),
             shifted_bound("l"),
@@ -184,22 +186,45 @@ pub fn quota_form(variant: Variant) -> CheckerForm {
     }
 }
 
+/// Quota's program and frozen names over another signature.
+pub fn family_with_signature(signature: Signature) -> Family {
+    Family::new(program(), signature, Family::quota().names().to_vec())
+}
+
+pub fn remaining_component(kind: Sort) -> StateComponent {
+    StateComponent {
+        name: "remaining".to_owned(),
+        kind,
+    }
+}
+
+pub fn category(name: &str, size: usize) -> Category {
+    Category {
+        name: name.to_owned(),
+        size,
+    }
+}
+
 pub fn family_with_phase_category() -> Family {
-    let signature = Signature {
-        components: vec![StateComponent {
-            name: "remaining".to_owned(),
-            kind: Sort::Int,
-        }],
-        categories: vec![Category {
-            name: "phase".to_owned(),
-            size: 3,
-        }],
-    };
-    Family::new(
-        program(),
-        signature,
-        &QuotaState { remaining: 0 }.to_store(),
-    )
+    family_with_signature(Signature {
+        components: vec![remaining_component(Sort::Int)],
+        categories: vec![category("phase", 3)],
+    })
+}
+
+/// `remaining` keyed by a two-valued category `phase`.
+pub fn family_with_keyed_component() -> Family {
+    family_with_signature(Signature {
+        components: vec![remaining_component(Sort::Keyed("phase".to_owned()))],
+        categories: vec![category("phase", 2)],
+    })
+}
+
+pub fn phase(code: usize) -> Term {
+    Term::CategoryValue {
+        category: "phase".to_owned(),
+        code,
+    }
 }
 
 pub fn path(steps: &[Step]) -> Path {

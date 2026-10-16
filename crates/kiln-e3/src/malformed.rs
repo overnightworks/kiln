@@ -25,6 +25,8 @@ pub struct Path(pub Vec<Step>);
 pub enum Binding {
     Key,
     State,
+    /// `when`, which only a keyed component's atom may use.
+    Entry,
     Applied,
     LeftOperand,
     RightOperand,
@@ -48,6 +50,9 @@ pub enum Malformed {
     UnsupportedFieldSort {
         path: Path,
         sort: Sort,
+    },
+    PerKeyOnUnkeyedComponent {
+        path: Path,
     },
     MissingCombine {
         path: Path,
@@ -103,6 +108,12 @@ pub enum Malformed {
         path: Path,
         expected: Expected,
         found: Sort,
+    },
+    /// The grammar has no production of this sort for the term, for example
+    /// an `ite` over names or `state(c)` of a keyed component.
+    NoProduction {
+        path: Path,
+        sort: Sort,
     },
     TupleArityMismatch {
         path: Path,

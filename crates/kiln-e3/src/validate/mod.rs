@@ -1,4 +1,5 @@
 mod operations;
+mod references;
 mod structure;
 mod walker;
 
@@ -16,13 +17,13 @@ impl ValidCheckerForm {
     }
 }
 
-/// Protocol §3.1's checker-form checks, stopping at the first failure:
-/// every part is declared, then every term is well-typed and total.
-///
-/// Within one term a node's declaredness is checked before its type, but the
-/// two are not separate passes over the whole form.
+/// Protocol §3.1's checker-form checks in order, stopping at the first check
+/// that fails: 1, every part and every name a term mentions is declared; 2,
+/// every term is well-typed; 3, every operation is total. The failure is that
+/// check's first defect in the order the form is written.
 pub fn validate(family: &Family, form: &CheckerForm) -> Result<ValidCheckerForm, Malformed> {
     let layout = structure::declared(family, form)?;
+    references::declared(family, &layout)?;
     walker::well_typed_and_total(family, &layout)?;
     Ok(ValidCheckerForm(form.clone()))
 }

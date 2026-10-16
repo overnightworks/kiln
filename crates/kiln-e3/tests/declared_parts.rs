@@ -1,6 +1,8 @@
 mod support;
 
-use kiln_e3::{validate, Family, Malformed, Path, Sort, Step};
+use kiln_e3::{
+    validate, ComponentShape, Family, Field, Malformed, Operand, Path, Sort, Step, Term,
+};
 
 use support::*;
 
@@ -130,23 +132,62 @@ mod kiln_e3_03 {
     }
 
     #[test]
-    fn accepts_carrier_fields_of_every_supported_sort() {
+    fn accepts_a_carrier_with_a_field_of_every_supported_sort() {
+        let table = Term::Table {
+            category: "phase".to_owned(),
+            entries: vec![phase(1), phase(2), phase(0)],
+        };
+        let fields = [
+            ("i", Sort::Int),
+            ("b", Sort::Bool),
+            ("o", Sort::Opt),
+            ("c", Sort::Cat("phase".to_owned())),
+            ("m", Sort::Map("phase".to_owned())),
+        ];
         let form = with_form(|form| {
-            let fields = &mut form.components[0].carrier_fields;
-            fields[0].sort = Sort::Opt;
-            fields[1].sort = Sort::Bool;
-            fields[2].sort = Sort::Map("phase".to_owned());
-            form.components[0].carrier_fields.push(kiln_e3::Field {
-                name: "c".to_owned(),
-                sort: Sort::Cat("phase".to_owned()),
-            });
+            let component = &mut form.components[0];
+            component.carrier_fields = fields
+                .iter()
+                .map(|(name, sort)| Field {
+                    name: (*name).to_owned(),
+                    sort: sort.clone(),
+                })
+                .collect();
+            let operands = |operand| {
+                Term::Tuple(
+                    fields
+                        .iter()
+                        .map(|(name, _)| field(operand, name))
+                        .collect(),
+                )
+            };
+            component.combine = Some(operands(Operand::Left));
+            component.apply = Some(Term::Applied);
+            for function in &mut form.functions {
+                function.atom = vec![Term::Tuple(vec![
+                    lit(0),
+                    Term::True,
+                    Term::Absent,
+                    phase(0),
+                    table.clone(),
+                ])];
+            }
         });
 
-        let rejected = validate(&family_with_phase_category(), &form).unwrap_err();
+        let result = validate(&family_with_phase_category(), &form);
 
-        assert!(!matches!(
-            rejected,
-            Malformed::UnsupportedFieldSort { .. } | Malformed::UnknownCategory { .. }
-        ));
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn rejects_per_key_over_a_component_that_is_not_keyed() {
+        let form = with_form(|form| form.components[0].shape = ComponentShape::PerKey);
+
+        assert_eq!(
+            rejection(&Family::quota(), &form),
+            Malformed::PerKeyOnUnkeyedComponent {
+                path: path(&[Step::Component(0)])
+            }
+        );
     }
 }

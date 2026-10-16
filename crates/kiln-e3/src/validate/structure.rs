@@ -1,5 +1,5 @@
 use crate::family::Family;
-use crate::form::{CheckerForm, Field};
+use crate::form::{CheckerForm, ComponentShape, Field};
 use crate::malformed::{Malformed, Path, Step};
 use crate::sort::Sort;
 use crate::term::Term;
@@ -12,9 +12,39 @@ pub(super) struct Layout<'a> {
 
 pub(super) struct ComponentLayout<'a> {
     pub fields: &'a [Field],
-    pub kind: &'a Sort,
+    pub shape: ComponentShape,
+    pub applied: AppliedInput,
     pub combine: &'a Term,
     pub apply: &'a Term,
+}
+
+/// What `x` is in a component's apply (grammar §1.3, "the apply input is
+/// typed").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum AppliedInput {
+    /// `x` is a value of this sort.
+    Value(Sort),
+    /// Over a whole keyed state `x` exists only as `x(v)`, one row at a
+    /// time, and the result is a `keyed` literal of this category.
+    Rows(String),
+}
+
+impl AppliedInput {
+    pub(super) fn result_sort(&self) -> Sort {
+        match self {
+            Self::Value(sort) => sort.clone(),
+            Self::Rows(category) => Sort::Keyed(category.clone()),
+        }
+    }
+
+    fn of(kind: &Sort, shape: ComponentShape, path: Path) -> Result<Self, Malformed> {
+        match (shape, kind) {
+            (ComponentShape::Whole, Sort::Keyed(category)) => Ok(Self::Rows(category.clone())),
+            (ComponentShape::Whole, other) => Ok(Self::Value(other.clone())),
+            (ComponentShape::PerKey, Sort::Keyed(_)) => Ok(Self::Value(Sort::Opt)),
+            (ComponentShape::PerKey, _) => Err(Malformed::PerKeyOnUnkeyedComponent { path }),
+        }
+    }
 }
 
 pub(super) struct FunctionLayout<'a> {
@@ -66,6 +96,7 @@ fn component_layouts<'a>(
         .map(|(index, (component, state))| {
             let here = Step::Component(index);
             check_field_sorts(family, &component.carrier_fields, here)?;
+            let applied = AppliedInput::of(&state.kind, component.shape, at(&[here]))?;
             let combine = component
                 .combine
                 .as_ref()
@@ -80,7 +111,8 @@ fn component_layouts<'a>(
                 })?;
             Ok(ComponentLayout {
                 fields: &component.carrier_fields,
-                kind: &state.kind,
+                shape: component.shape,
+                applied,
                 combine,
                 apply,
             })

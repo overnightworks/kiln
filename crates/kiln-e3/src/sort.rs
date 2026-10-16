@@ -20,4 +20,6 @@ pub enum Expected {
     AnyCategory,
     AnyMap,
     Keyed,
+    /// A `per-key` atom is an `Entry`.
+    Entry,
 }

@@ -1,10 +1,6 @@
 mod support;
 
-use kiln_e2::quota::{program, QuotaState};
-use kiln_e3::{
-    validate, Category, CheckerForm, Expected, Family, Malformed, Path, Signature, Sort,
-    StateComponent, Step, Term,
-};
+use kiln_e3::{validate, CheckerForm, Expected, Malformed, Path, Sort, Step, Term};
 use support::*;
 
 mod kiln_e3_04 {
@@ -14,24 +10,6 @@ mod kiln_e3_04 {
         let mut steps = vec![Step::Function(0), Step::Respond];
         steps.extend(child_steps.iter().copied().map(Step::Child));
         Path(steps)
-    }
-
-    fn family_with_keyed_component() -> Family {
-        let signature = Signature {
-            components: vec![StateComponent {
-                name: "remaining".to_owned(),
-                kind: Sort::Keyed("phase".to_owned()),
-            }],
-            categories: vec![Category {
-                name: "phase".to_owned(),
-                size: 2,
-            }],
-        };
-        Family::new(
-            program(),
-            signature,
-            &QuotaState { remaining: 0 }.to_store(),
-        )
     }
 
     fn keyed_apply(apply: Term) -> CheckerForm {
@@ -44,13 +22,6 @@ mod kiln_e3_04 {
                 function.respond = Some(commit(lit(0)));
             }
         })
-    }
-
-    fn phase(code: usize) -> Term {
-        Term::CategoryValue {
-            category: "phase".to_owned(),
-            code,
-        }
     }
 
     fn keyed_literal(rows: usize) -> Term {

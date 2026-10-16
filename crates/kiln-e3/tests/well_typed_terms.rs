@@ -1,11 +1,10 @@
 mod support;
 
-use kiln_e2::quota::{program, QuotaState};
 use kiln_e3::{
-    validate, Binding, Category, CheckerForm, Expected, Family, Malformed, Operand, Path, Sort,
+    validate, Binding, CheckerForm, Expected, Family, Malformed, Operand, Path, Signature, Sort,
     Step, Term,
 };
-use kiln_ir::{AbortName, AbortReason, OverflowReason, Relation};
+use kiln_ir::{AbortName, AbortReason};
 use support::*;
 
 mod kiln_e3_04 {
@@ -117,18 +116,13 @@ mod kiln_e3_04 {
     }
 
     #[test]
-    fn accepts_abort_of_the_width_overflow_name() {
+    fn accepts_abort_of_every_name_of_the_family() {
         let family = Family::quota();
-        let width_overflow = family
-            .names()
-            .iter()
-            .find(|name| matches!(name, AbortReason::Overflow(OverflowReason::Width { .. })))
-            .cloned()
-            .expect("quota has a width overflow name");
+        for name in family.names() {
+            let result = validate(&family, &with_respond(abort(name.reason.clone())));
 
-        let result = validate(&family, &with_respond(abort(width_overflow)));
-
-        assert!(result.is_ok());
+            assert!(result.is_ok(), "{name:?}");
+        }
     }
 
     #[test]
@@ -358,7 +352,7 @@ mod kiln_e3_04 {
     }
 
     #[test]
-    fn validates_carrier_choices_and_entries_in_an_atom_and_a_combine() {
+    fn validates_carrier_choices_in_an_atom_and_a_combine() {
         let selected = |left: Term, right: Term| {
             ite(
                 Term::True,
@@ -373,10 +367,6 @@ mod kiln_e3_04 {
                 Term::Whole(Operand::Right),
             ));
             form.functions[0].atom = vec![selected(lit(1), lit(2))];
-            form.functions[1].atom = vec![Term::When(
-                boxed(compare(Term::Key, Relation::Equal, lit(0))),
-                vec![lit(1), lit(0), lit(0)],
-            )];
         });
 
         assert!(validate(&Family::quota(), &form).is_ok());
@@ -552,16 +542,9 @@ mod kiln_e3_04 {
     #[test]
     fn rejects_comparing_values_of_two_categories() {
         let family = {
-            let mut signature = family_with_phase_category().signature().clone();
-            signature.categories.push(Category {
-                name: "stage".to_owned(),
-                size: 2,
-            });
-            Family::new(
-                program(),
-                signature,
-                &QuotaState { remaining: 0 }.to_store(),
-            )
+            let mut signature: Signature = family_with_phase_category().signature().clone();
+            signature.categories.push(category("stage", 2));
+            family_with_signature(signature)
         };
         let compared = Term::CategoryEqual(
             boxed(Term::CategoryValue {
@@ -650,32 +633,6 @@ mod kiln_e3_04 {
                 path: respond_path(&[0, 0, 0]),
                 expected: Expected::AnyMap,
                 found: Sort::Int
-            }
-        );
-    }
-
-    fn clamp_shift_atom(first: Term, second: Term) -> CheckerForm {
-        with_form(|form| form.functions[0].atom = vec![ite(Term::True, first, second)])
-    }
-
-    fn entry_of_zeros() -> Term {
-        Term::When(boxed(Term::True), vec![lit(0), lit(0), lit(0)])
-    }
-
-    #[test]
-    fn leaves_the_entry_when_it_ends_so_a_later_key_is_not_bound() {
-        let later = Term::Tuple(vec![Term::Key, lit(0), lit(0)]);
-
-        assert_eq!(
-            rejection(&Family::quota(), &clamp_shift_atom(entry_of_zeros(), later)),
-            Malformed::NotBound {
-                path: path(&[
-                    Step::Function(0),
-                    Step::Atom(0),
-                    Step::Child(2),
-                    Step::Child(0)
-                ]),
-                term: Binding::Key
             }
         );
     }

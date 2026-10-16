@@ -1,13 +1,22 @@
-use kiln_ir::Parameter;
-
-use super::structure::{ComponentLayout, FunctionLayout, Layout};
+use super::structure::{AppliedInput, ComponentLayout, FunctionLayout, Layout};
 use crate::family::Family;
-use crate::form::Field;
+use crate::form::{ComponentShape, Field};
 use crate::malformed::{Binding, Malformed, Path, Step};
 use crate::sort::{Expected, Sort};
 use crate::term::{Operand, Term};
 
 pub(super) type Checked<T> = Result<T, Malformed>;
+
+/// Check 1 already holds, so every name a term mentions resolves.
+const DECLARED: &str = "check 1 ran first";
+
+/// Which term of a function is being walked: each binds different names.
+#[derive(Clone, Copy)]
+enum FunctionTerm {
+    Valid,
+    Atom,
+    Respond,
+}
 
 /// Where a term is written, which decides what it may refer to.
 #[derive(Clone, Copy)]
@@ -17,42 +26,47 @@ enum Place<'a> {
     },
     Apply {
         fields: &'a [Field],
-        applied_to: &'a Sort,
+        applied: &'a AppliedInput,
     },
-    Function {
-        parameters: &'a [Parameter],
-    },
+    Function(FunctionTerm),
 }
 
-/// Checks 2 and 3 of protocol §3.1 over every term of the layout.
-pub(super) fn well_typed_and_total<'a>(family: &'a Family, layout: &Layout<'a>) -> Checked<()> {
+/// Checks 2 and 3 of protocol §3.1 over every term of the layout, with check
+/// 2's first defect winning over check 3's: a count that is not total is
+/// kept aside while the walk goes on looking for a type error.
+pub(super) fn well_typed_and_total<'a>(family: &'a Family, layout: &'a Layout<'a>) -> Checked<()> {
+    let mut walker = Walker::new(family);
     for (index, component) in layout.components.iter().enumerate() {
-        Walker::new(family, Step::Component(index)).component(component)?;
+        walker.at(Step::Component(index), |walker| walker.component(component))?;
     }
     for (index, function) in layout.functions.iter().enumerate() {
-        Walker::new(family, Step::Function(index)).function(function, layout)?;
+        walker.at(Step::Function(index), |walker| {
+            walker.function(function, layout)
+        })?;
     }
-    Ok(())
+    walker.deferred.map_or(Ok(()), Err)
 }
 
 pub(super) struct Walker<'a> {
     pub(super) family: &'a Family,
     place: Place<'a>,
     path: Vec<Step>,
-    entry_depth: usize,
+    in_entry: bool,
+    deferred: Option<Malformed>,
 }
 
 impl<'a> Walker<'a> {
-    fn new(family: &'a Family, root: Step) -> Self {
+    fn new(family: &'a Family) -> Self {
         Self {
             family,
-            place: Place::Function { parameters: &[] },
-            path: vec![root],
-            entry_depth: 0,
+            place: Place::Function(FunctionTerm::Valid),
+            path: Vec::new(),
+            in_entry: false,
+            deferred: None,
         }
     }
 
-    fn component(&mut self, component: &ComponentLayout<'a>) -> Checked<()> {
+    fn component(&mut self, component: &'a ComponentLayout<'a>) -> Checked<()> {
         self.place = Place::Combine {
             fields: component.fields,
         };
@@ -61,30 +75,36 @@ impl<'a> Walker<'a> {
         })?;
         self.place = Place::Apply {
             fields: component.fields,
-            applied_to: component.kind,
+            applied: &component.applied,
         };
         self.at(Step::Apply, |walker| {
             let found = walker.infer(component.apply)?;
-            walker.require(&Expected::Sort(component.kind.clone()), found)
+            walker.require(&Expected::Sort(component.applied.result_sort()), found)
         })
     }
 
     fn function(&mut self, function: &FunctionLayout<'a>, layout: &Layout<'a>) -> Checked<()> {
-        self.place = Place::Function {
-            parameters: function.parameters,
-        };
+        self.place = Place::Function(FunctionTerm::Valid);
         self.at(Step::Valid, |walker| {
             walker.expect_here(function.valid, &Sort::Bool)
         })?;
         for (index, (atom, component)) in function.atoms.iter().zip(&layout.components).enumerate()
         {
-            self.at(Step::Atom(index), |walker| {
-                walker.carrier(atom, component.fields)
+            self.place = Place::Function(FunctionTerm::Atom);
+            self.at(Step::Atom(index), |walker| match component.shape {
+                ComponentShape::Whole => walker.carrier(atom, component.fields),
+                ComponentShape::PerKey => walker.entry(atom, component.fields),
             })?;
         }
+        self.place = Place::Function(FunctionTerm::Respond);
         self.at(Step::Respond, |walker| {
             walker.expect_here(function.respond, &Sort::Outcome)
         })
+    }
+
+    /// A defect of check 3, kept unless an earlier one is.
+    pub(super) fn defer(&mut self, defect: Malformed) {
+        self.deferred.get_or_insert(defect);
     }
 
     pub(super) fn here(&self) -> Path {
@@ -108,6 +128,7 @@ impl<'a> Walker<'a> {
             Expected::AnyCategory => matches!(found, Sort::Cat(_)),
             Expected::AnyMap => matches!(found, Sort::Map(_)),
             Expected::Keyed => matches!(found, Sort::Keyed(_)),
+            Expected::Entry => false,
         };
         if holds {
             Ok(())
@@ -168,36 +189,26 @@ impl<'a> Walker<'a> {
         }
     }
 
-    pub(super) fn category_size(&self, name: &str) -> Checked<usize> {
+    pub(super) fn category_size(&self, name: &str) -> usize {
         self.family
             .signature()
             .category(name)
             .map(|category| category.size)
-            .ok_or_else(|| Malformed::UnknownCategory {
-                path: self.here(),
-                name: name.to_owned(),
-            })
+            .expect(DECLARED)
     }
 
-    pub(super) fn parameters(&self) -> &'a [Parameter] {
+    pub(super) fn state_bound(&self) -> bool {
+        matches!(self.place, Place::Function(FunctionTerm::Respond))
+    }
+
+    pub(super) fn key_bound(&self) -> bool {
+        self.in_entry
+    }
+
+    pub(super) fn applied(&self) -> Option<&'a AppliedInput> {
         match self.place {
-            Place::Function { parameters } => parameters,
-            Place::Combine { .. } | Place::Apply { .. } => &[],
-        }
-    }
-
-    pub(super) fn is_function(&self) -> bool {
-        matches!(self.place, Place::Function { .. })
-    }
-
-    pub(super) fn in_entry(&self) -> bool {
-        self.entry_depth > 0
-    }
-
-    pub(super) fn applied_to(&self) -> Option<&'a Sort> {
-        match self.place {
-            Place::Apply { applied_to, .. } => Some(applied_to),
-            Place::Combine { .. } | Place::Function { .. } => None,
+            Place::Apply { applied, .. } => Some(applied),
+            Place::Combine { .. } | Place::Function(_) => None,
         }
     }
 
@@ -210,13 +221,6 @@ impl<'a> Walker<'a> {
         }
     }
 
-    pub(super) fn entry<T>(&mut self, check: impl FnOnce(&mut Self) -> T) -> T {
-        self.entry_depth += 1;
-        let result = check(self);
-        self.entry_depth -= 1;
-        result
-    }
-
     /// A term in a carrier position: it must be a carrier value of `fields`.
     fn carrier(&mut self, term: &Term, fields: &[Field]) -> Checked<()> {
         match term {
@@ -226,15 +230,26 @@ impl<'a> Walker<'a> {
                 self.at(Step::Child(1), |walker| walker.carrier(when_true, fields))?;
                 self.at(Step::Child(2), |walker| walker.carrier(when_false, fields))
             }
-            Term::When(condition, parts) => self.entry(|walker| {
-                walker.expect(0, condition, &Sort::Bool)?;
-                walker.fields_of(parts, fields, 1)
-            }),
             other => {
                 let found = self.infer(other)?;
                 self.require(&Expected::Sort(Sort::Carrier), found)
             }
         }
+    }
+
+    /// The atom of a `per-key` component: an `Entry`, the one place `when`
+    /// and the `key` it binds belong to.
+    fn entry(&mut self, term: &Term, fields: &[Field]) -> Checked<()> {
+        let Term::When(condition, parts) = term else {
+            let found = self.infer(term)?;
+            return Err(self.mismatch(Expected::Entry, found));
+        };
+        self.in_entry = true;
+        let checked = self
+            .expect(0, condition, &Sort::Bool)
+            .and_then(|()| self.fields_of(parts, fields, 1));
+        self.in_entry = false;
+        checked
     }
 
     fn fields_of(&mut self, parts: &[Term], fields: &[Field], first_child: usize) -> Checked<()> {

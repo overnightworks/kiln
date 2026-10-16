@@ -2,30 +2,56 @@ mod support;
 
 use kiln_e2::quota::QuotaAbort;
 use kiln_e3::{validate, Family, Sort, Term};
-use kiln_ir::{AbortReason, OverflowReason};
+use kiln_ir::{
+    AbortReason, CheckConstraint, ColumnName, Comparison, Key, OverflowReason, TableName, Value,
+};
 
 use support::*;
 
 mod kiln_e3_01 {
     use super::*;
 
-    #[test]
-    fn quota_family_names_its_declared_aborts_and_the_width_overflow_of_remaining() {
-        let names = Family::quota().names().to_vec();
+    fn quota_check(comparison: Comparison, operand: i64) -> AbortReason {
+        AbortReason::CheckViolation {
+            constraint: CheckConstraint {
+                table: TableName("quota".to_owned()),
+                column: ColumnName("remaining".to_owned()),
+                comparison,
+                operand: Value::Integer(operand),
+            },
+            key: Key(vec![Value::Integer(0)]),
+        }
+    }
 
-        let mut expected: Vec<AbortReason> = [
+    #[test]
+    fn quota_names_are_the_frozen_table_of_grammar_1_2_with_the_checker_only_ones_marked() {
+        let names: Vec<(AbortReason, bool)> = Family::quota()
+            .names()
+            .iter()
+            .map(|name| (name.reason.clone(), name.checker_only))
+            .collect();
+
+        let mut expected: Vec<(AbortReason, bool)> = [
             QuotaAbort::InvalidQuantity,
             QuotaAbort::QuotaExhausted,
             QuotaAbort::QuotaFull,
         ]
         .into_iter()
-        .map(declared)
+        .map(|abort| (declared(abort), false))
         .collect();
-        expected.push(AbortReason::Overflow(OverflowReason::Width {
-            table: kiln_ir::TableName("quota".to_owned()),
-            column: kiln_ir::ColumnName("remaining".to_owned()),
-            key: kiln_ir::Key(vec![kiln_ir::Value::Integer(0)]),
-        }));
+        expected.extend([
+            (AbortReason::Overflow(OverflowReason::Arithmetic), false),
+            (
+                AbortReason::Overflow(OverflowReason::Width {
+                    table: TableName("quota".to_owned()),
+                    column: ColumnName("remaining".to_owned()),
+                    key: Key(vec![Value::Integer(0)]),
+                }),
+                true,
+            ),
+            (quota_check(Comparison::AtLeast, 0), true),
+            (quota_check(Comparison::AtMost, 1000), true),
+        ]);
         assert_eq!(names.len(), expected.len());
         for name in expected {
             assert!(names.contains(&name), "missing {name:?}");
@@ -43,21 +69,13 @@ mod kiln_e3_01 {
     }
 
     #[test]
-    fn quota_literal_pool_holds_program_literals_and_width_bounds_and_nothing_else() {
+    fn quota_literal_pool_holds_program_literals_and_value_width_bounds_and_nothing_else() {
         let pool = Family::quota().literal_pool().clone();
 
-        let expected: std::collections::BTreeSet<i64> = [
-            0,
-            1,
-            50,
-            1000,
-            i64::from(i32::MIN),
-            i64::from(i32::MAX),
-            i64::MIN,
-            i64::MAX,
-        ]
-        .into_iter()
-        .collect();
+        let expected: std::collections::BTreeSet<i64> =
+            [0, 1, 50, 1000, i64::from(i32::MIN), i64::from(i32::MAX)]
+                .into_iter()
+                .collect();
         assert_eq!(pool, expected);
     }
 }

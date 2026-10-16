@@ -6,14 +6,14 @@
 
 mod family;
 mod form;
+mod literal_pool;
 mod malformed;
-mod scan;
 mod sort;
 mod term;
 mod validate;
 
-pub use family::{Category, Family, Signature, StateComponent};
-pub use form::{CheckerForm, ComponentDef, Field, FunctionDef};
+pub use family::{Category, Family, FrozenName, Signature, StateComponent};
+pub use form::{CheckerForm, ComponentDef, ComponentShape, Field, FunctionDef};
 pub use malformed::{Binding, Malformed, Path, Step};
 pub use sort::{Expected, Sort};
 pub use term::{Operand, Term};

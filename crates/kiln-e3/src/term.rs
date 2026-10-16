@@ -87,3 +87,54 @@ pub enum Term {
     // Name
     Name(AbortReason),
 }
+
+impl Term {
+    /// The sub-terms, in the order `Step::Child` counts them.
+    pub(crate) fn children(&self) -> Vec<&Term> {
+        match self {
+            Term::Lit(_)
+            | Term::Param(_)
+            | Term::Key
+            | Term::State(_)
+            | Term::Applied
+            | Term::Field { .. }
+            | Term::True
+            | Term::False
+            | Term::CategoryValue { .. }
+            | Term::Absent
+            | Term::Whole(_)
+            | Term::Name(_) => Vec::new(),
+            Term::Code(only)
+            | Term::Not(only)
+            | Term::IsPresent(only)
+            | Term::Held(only)
+            | Term::AppliedRow(only)
+            | Term::Commit(only)
+            | Term::Abort(only)
+            | Term::Mod(only, _)
+            | Term::Of { code: only, .. }
+            | Term::StateRow { key: only, .. } => vec![only.as_ref()],
+            Term::Get(first, second)
+            | Term::Add(first, second)
+            | Term::Sub(first, second)
+            | Term::Min(first, second)
+            | Term::Max(first, second)
+            | Term::And(first, second)
+            | Term::Or(first, second)
+            | Term::Compare(first, _, second)
+            | Term::CategoryEqual(first, second)
+            | Term::Lookup(first, second) => vec![first.as_ref(), second.as_ref()],
+            Term::Clamp(first, second, third) | Term::Ite(first, second, third) => {
+                vec![first.as_ref(), second.as_ref(), third.as_ref()]
+            }
+            Term::Keyed { rows: parts, .. }
+            | Term::Table { entries: parts, .. }
+            | Term::Tuple(parts) => parts.iter().collect(),
+            Term::When(head, parts)
+            | Term::Case {
+                scrutinee: head,
+                arms: parts,
+            } => std::iter::once(head.as_ref()).chain(parts).collect(),
+        }
+    }
+}
