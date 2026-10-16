@@ -1,7 +1,0 @@
-claim_id = "e0f061e528b34dff90db9628bf6a9918"
-agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
-role = "builder"
-base = "c722dff240c93efa56fedd5a03eb69f701c59df7"
-branch = "claude/issue-70-e2-freeze-families"
-scope = ["experiments/e2-parallel-ordered-transactions"]
-opened_commit = "889e647cff2db637827b142f17b458454bf22d72"
