@@ -1,0 +1,8 @@
+claim_id = "e7379a91054448908ff5248322557af9"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "d5dcbae5cc0b209a93899acf2ce433aa2f42c9db"
+branch = "claude/issue-107-s7-static-typing"
+scope = ["crates/kiln-e1/src/footprint/abort.rs", "crates/kiln-e1/tests", "crates/kiln-ir/src/ir", "crates/kiln-ir/tests", "specs/kiln-e1.spec.md", "specs/kiln-ir.spec.md"]
+opened_commit = "c1518297387c33b59d048e013b151211c05c39b4"
+whole_reason = "typing spans the IR's expression, kind inference and validation plus the classifier's abort analysis for per-path kind misfits"
