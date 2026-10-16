@@ -1,9 +1,9 @@
 # E3 — frozen part B: candidate language, component library, checker and manifest
 
-Status: proposed, not yet frozen. Record: drafted in #83 by an author other
-than the one who froze the families, as `docs/experiments.md` ("Freeze order
-and authorship") requires; it becomes frozen when an independent reviewer of
-a different provider has passed it. Part A is `inputs.md` (the six families,
+Status: frozen. Record: drafted in #83 by an author other than the one who
+froze the families, as `docs/experiments.md` ("Freeze order and
+authorship") requires, and passed by an independent reviewer of a different
+provider on 2026-10-16. Part A is `inputs.md` (the six families,
 their checking domains, the 52 mutants); this file and `grammar.md` are
 part B. Nothing in either
 changes after a synthesis attempt has run; a change re-freezes this part and
