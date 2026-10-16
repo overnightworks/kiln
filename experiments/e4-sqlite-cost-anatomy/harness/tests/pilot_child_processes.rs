@@ -138,12 +138,24 @@ fn stand_in(directory: &Path, name: &str, body: &str) -> PathBuf {
     path
 }
 
-/// How many running processes were started with exactly these arguments
-/// (after the program name).
-fn processes_started_with(arguments: &[&str]) -> usize {
+/// How many running children of this test process were started with exactly
+/// these arguments (after the program name). Other invocations of the suite
+/// on the same machine have other parents and are never counted.
+fn children_started_with(arguments: &[&str]) -> usize {
+    let own_pid = std::process::id().to_string();
     fs::read_dir("/proc")
         .expect("/proc")
-        .filter_map(|entry| fs::read(entry.ok()?.path().join("cmdline")).ok())
+        .filter_map(|entry| {
+            let process = entry.ok()?.path();
+            let stat = fs::read_to_string(process.join("stat")).ok()?;
+            let parent_pid = stat
+                .rsplit_once(')')?
+                .1
+                .split_whitespace()
+                .nth(1)?
+                .to_owned();
+            (parent_pid == own_pid).then(|| fs::read(process.join("cmdline")).ok())?
+        })
         .filter(|cmdline| {
             let parts: Vec<&[u8]> = cmdline
                 .split(|byte| *byte == 0)
@@ -276,7 +288,7 @@ mod kiln_e4_07 {
             .to_string();
 
         assert!(message.contains("exited with"), "{message}");
-        assert_eq!(processes_started_with(&["monitor-stream", "52"]), 0);
+        assert_eq!(children_started_with(&["monitor-stream", "52"]), 0);
     }
 
     #[test]
@@ -306,7 +318,7 @@ mod kiln_e4_07 {
 
         assert!(message.contains("monitor"), "{message}");
         assert_eq!(
-            processes_started_with(&["sleep", &own_duration]),
+            children_started_with(&["sleep", &own_duration]),
             0,
             "the child left waiting for go must not outlive the failed half"
         );
@@ -523,7 +535,7 @@ mod kiln_e4_24 {
             ))
             .expect("a half");
 
-        assert_eq!(processes_started_with(&["monitor-stream", "51"]), 0);
+        assert_eq!(children_started_with(&["monitor-stream", "51"]), 0);
     }
 
     #[test]

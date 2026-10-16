@@ -27,36 +27,15 @@ commit="$(git -C "$repository" rev-parse --verify --quiet "$2^{commit}")" \
   || { echo "run-topology-tests.sh: '$2' is not a commit of $repository" >&2; exit 1; }
 
 work_dir="$(mktemp -d)"
-tests_pid=""
-group_teardown_seconds=10
-
-# A member that has exited but is not yet reaped (a zombie) is gone.
-group_is_alive() { ps -o stat= --pgid "$tests_pid" | grep -qv '^Z'; }
-
-stop_tests() {
-  # The tests run in a process group of their own (setsid), so a signal
-  # aimed at this script alone still has to end cargo, the compilers and
-  # the test processes, every member, before their directory goes away.
-  [[ -n "$tests_pid" ]] || return 0
-  kill -TERM -- "-$tests_pid" 2>/dev/null || true
-  for ((waited = 0; waited < group_teardown_seconds * 10; waited++)); do
-    group_is_alive || break
-    sleep 0.1
-  done
-  kill -KILL -- "-$tests_pid" 2>/dev/null || true
-  while group_is_alive; do sleep 0.1; done
-  wait "$tests_pid" 2>/dev/null || true
-}
-trap 'stop_tests; rm -rf "$work_dir"' EXIT
+# Cargo runs in the foreground, in this script's own process group: Bash holds
+# a trapped signal until it returns, so the directory is never removed under
+# a running test, and Ctrl-C or a unit stop reaches cargo directly.
+trap 'rm -rf "$work_dir"' EXIT
 trap 'exit 143' INT TERM
 
 git clone --quiet --no-checkout "$repository" "$work_dir/source"
 git -C "$work_dir/source" checkout --quiet --detach "$commit"
 
-CARGO_TARGET_DIR="$work_dir/target" setsid cargo test --locked \
+CARGO_TARGET_DIR="$work_dir/target" cargo test --locked \
   --manifest-path "$work_dir/source/experiments/e4-sqlite-cost-anatomy/harness/Cargo.toml" \
-  -- --ignored &
-tests_pid=$!
-tests_status=0
-wait "$tests_pid" || tests_status=$?
-exit "$tests_status"
+  -- --ignored
