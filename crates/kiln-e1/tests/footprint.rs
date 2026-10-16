@@ -20,6 +20,9 @@ mod iterations;
 #[path = "footprint/keys.rs"]
 mod keys;
 
+#[path = "footprint/values.rs"]
+mod values;
+
 mod kiln_e1_18 {
     use super::*;
 

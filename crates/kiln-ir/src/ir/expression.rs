@@ -16,6 +16,7 @@ pub struct Slot(pub u32);
 pub enum ArithmeticOp {
     Add,
     Subtract,
+    Multiply,
 }
 
 /// A value computable without touching the store: one of the call's own
@@ -41,8 +42,19 @@ pub enum ArithmeticOp {
 pub enum Expr {
     Literal(Value),
     Parameter(ParameterName),
-    Projection { slot: Slot, column: ColumnName },
+    Projection {
+        slot: Slot,
+        column: ColumnName,
+    },
     Arithmetic(ArithmeticOp, Box<Expr>, Box<Expr>),
+    /// Evaluates `condition`, then only the chosen arm (`docs/concept.md`
+    /// §2.2 D9, "Values"): a failing projection in the other arm never runs
+    /// and so never aborts.
+    Conditional {
+        condition: Box<Condition>,
+        when_true: Box<Expr>,
+        when_false: Box<Expr>,
+    },
 }
 
 /// How a [`Condition::Compare`] relates its left operand to its right one.

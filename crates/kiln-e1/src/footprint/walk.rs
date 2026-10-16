@@ -8,12 +8,13 @@ use kiln_ir::{
     Schema, Slot, TableName, Terminal,
 };
 
+use super::abort::{Aborts, Evaluation, Resolved};
 use super::carried::first_carried_slot;
 use super::cause::UnknownCause;
 use super::dependency::{track_access, AccessRole};
-use super::facts::{Binding, BindingKind, PathFacts, RangeBounds, Target};
+use super::facts::{Binding, BindingKind, Obstacle, PathFacts, RangeBounds, Target};
 use super::node_path::NodePath;
-use super::operand::{operand_of, Operand, ReadRef, Unresolvable};
+use super::operand::{operand_of, Operand, ReadRef};
 use super::ClassifyError;
 
 pub struct FeasiblePath {
@@ -43,14 +44,20 @@ struct RangeRead<'e> {
 
 /// Why walking a block stopped short of deciding its terminal.
 enum Halt {
-    /// The evaluator aborts at `at`, which projects a slot holding no row or
-    /// a column its key column cannot take.
+    /// The evaluator certainly aborts at `at`, which projects a slot holding
+    /// no row or a column its key column cannot take.
     /// Inside the body of an iteration whose range may hold no row, it aborts
     /// only when that range holds one: `unless_empty` is the read that bound
     /// the range.
     Aborts {
         at: NodePath,
         unless_empty: Option<ReadRef>,
+    },
+    /// What the evaluator does at `at` depends on the data, in a way that
+    /// hides the targets after it from the comparison of paths: the path
+    /// ends there unknown (`KILN-E1-39`).
+    Refuses {
+        at: NodePath,
     },
     Fault(ClassifyError),
 }
@@ -60,13 +67,6 @@ impl Halt {
         Self::Aborts {
             at: node.clone(),
             unless_empty: None,
-        }
-    }
-
-    fn at(node: &NodePath) -> impl Fn(Unresolvable) -> Self + '_ {
-        move |unresolvable| match unresolvable {
-            Unresolvable::AbsentSource => Self::aborting_at(node),
-            Unresolvable::Fault(error) => Self::Fault(error),
         }
     }
 
@@ -97,7 +97,7 @@ struct Walker<'a> {
     schema: &'a Schema,
 }
 
-impl Walker<'_> {
+impl<'a> Walker<'a> {
     /// The paths through `block`: its effects, then what its terminal reads,
     /// then the terminal. One that reaches an abort ends there, with the
     /// accesses before it (`KILN-IR-15`); an abort an iteration's body reaches
@@ -113,10 +113,20 @@ impl Walker<'_> {
         let terminal = at.terminal();
         let reached = self
             .effects(&block.effects, at, &mut walked)
-            .and_then(|()| self.operands_of(&walked, read_by(&block.terminal), &terminal));
+            .and_then(|()| self.terminal_operands(&walked, &block.terminal, &terminal));
         match reached {
             Ok(operands) => self.terminal(&block.terminal, terminal, &operands, walked),
             Err(Halt::Fault(error)) => Err(error),
+            Err(Halt::Refuses { at: conditional }) => {
+                walked.obstacles.push(Obstacle {
+                    node: conditional,
+                    cause: UnknownCause::ConditionalAbortsOnOneArm,
+                });
+                Ok(vec![FeasiblePath {
+                    facts: walked,
+                    terminal,
+                }])
+            }
             Err(Halt::Aborts {
                 at: abort,
                 unless_empty: None,
@@ -294,8 +304,8 @@ impl Walker<'_> {
 
     /// Walks the body once for the rows `source` bound, as their first
     /// iteration, so a body that carries a slot from one iteration to the next
-    /// is refused at that slot's use. A body that would abort never runs over
-    /// a range the path knows holds no row.
+    /// is refused at that slot's use. A body never runs over a range the path
+    /// knows holds no row, so it neither aborts nor refuses there.
     fn iterate(
         &self,
         source: Slot,
@@ -313,7 +323,8 @@ impl Walker<'_> {
         inside.enter_iteration(row, rows.clone(), &node);
         match self.effects(body, &node.iteration_body(), &mut inside) {
             Ok(()) => *facts = inside,
-            Err(Halt::Aborts { .. }) if facts.presence_of(&rows) == Some(false) => {}
+            Err(Halt::Aborts { .. } | Halt::Refuses { .. })
+                if facts.presence_of(&rows) == Some(false) => {}
             Err(halt) => {
                 *facts = inside;
                 return Err(halt.beyond_iteration_over(&rows, facts));
@@ -348,15 +359,15 @@ impl Walker<'_> {
         node: NodePath,
         facts: &mut PathFacts,
     ) -> Result<(), Halt> {
+        let mut resolved = self.range_components(&range.over, range.start);
+        resolved.extend(self.range_components(&range.over, range.end));
+        resolved.push((range.bound, None));
+        self.passes(facts, resolved, &node)?;
         let bounds = RangeBounds {
             start: self.operands_of(facts, range.start, &node)?,
             end: self.operands_of(facts, range.end, &node)?,
-            bound: self.operand(facts, range.bound, &node)?,
+            bound: operand_of(self.schema, facts, range.bound, &node)?,
         };
-        if let RangeOver::PrimaryKeys(table) = range.over {
-            self.abort_on_misfit_key(facts, table, range.start, &node)?;
-            self.abort_on_misfit_key(facts, table, range.end, &node)?;
-        }
         let (role, kind, target) = match range.over {
             RangeOver::PrimaryKeys(table) => (
                 AccessRole::PrimaryRangeBound,
@@ -403,8 +414,8 @@ impl Walker<'_> {
         key: &[Expr],
         node: &NodePath,
     ) -> Result<KeyedAccess, Halt> {
+        self.passes(facts, self.key_components(table, key), node)?;
         let operands = self.operands_of(facts, key, node)?;
-        self.abort_on_misfit_key(facts, table, key, node)?;
         let depends_on = track_access(facts, self.schema, &role, &operands, node);
         let target = Target::Row {
             table: table.clone(),
@@ -417,36 +428,32 @@ impl Walker<'_> {
         })
     }
 
-    /// A key component projecting a column whose declared kind its key column
-    /// cannot take aborts the call before it logs the access: on this path the
-    /// slot's table is the one its binding read (`KILN-IR-82`).
-    fn abort_on_misfit_key(
-        &self,
-        facts: &PathFacts,
-        table: &TableName,
-        key: &[Expr],
-        node: &NodePath,
-    ) -> Result<(), Halt> {
-        let Some(declared) = self.schema.table(table) else {
-            return Ok(());
+    /// Each component of `key` with the key column of `table` it fills.
+    fn key_components<'e>(&self, table: &TableName, key: &'e [Expr]) -> Vec<Resolved<'e>>
+    where
+        'a: 'e,
+    {
+        let declared = self.schema.table(table);
+        let key_column = |position: usize| {
+            let declared = declared?;
+            declared.column(declared.key_columns().get(position)?)
         };
-        for (key_column, component) in declared.key_columns().iter().zip(key) {
-            let Expr::Projection { slot, column } = component else {
-                continue;
-            };
-            let read = facts.read_of(*slot, node)?;
-            let source = facts
-                .binding_of(&read)
-                .and_then(|binding| binding.kind.table())
-                .and_then(|source| self.schema.column(source, column));
-            let key_column = declared.column(key_column);
-            if let (Some(source), Some(key_column)) = (source, key_column) {
-                if key_column.key_component_fault_from(source).is_some() {
-                    return Err(Halt::aborting_at(node));
-                }
-            }
+        key.iter()
+            .enumerate()
+            .map(|(position, component)| (component, key_column(position)))
+            .collect()
+    }
+
+    /// A primary-key range's start or end fills its table's key columns; an
+    /// index range's components are left to the run.
+    fn range_components<'e>(&self, over: &RangeOver, components: &'e [Expr]) -> Vec<Resolved<'e>>
+    where
+        'a: 'e,
+    {
+        match over {
+            RangeOver::PrimaryKeys(table) => self.key_components(table, components),
+            RangeOver::Index(_) => unkeyed(components),
         }
-        Ok(())
     }
 
     /// The evaluator logs a write before it resolves the written columns, so a
@@ -457,10 +464,45 @@ impl Walker<'_> {
         columns: &BTreeMap<ColumnName, Expr>,
         node: &NodePath,
     ) -> Result<(), Halt> {
+        self.passes(facts, unkeyed(columns.values()), node)?;
         self.operands_of(facts, columns.values(), node)?;
         Ok(())
     }
 
+    fn terminal_operands(
+        &self,
+        facts: &PathFacts,
+        terminal: &Terminal,
+        at: &NodePath,
+    ) -> Result<Vec<Operand>, Halt> {
+        let reads = read_by(terminal);
+        self.passes(facts, unkeyed(reads.iter().copied()), at)?;
+        self.operands_of(facts, reads, at)
+    }
+
+    /// Whether the evaluator gets past resolving `resolved` at `at`. A
+    /// certain abort ends the path there; one the data decides refuses it
+    /// (`KILN-E1-39`). Every place the evaluator reads a slot passes here
+    /// before the walk asks what it read.
+    fn passes<'e>(
+        &self,
+        facts: &PathFacts,
+        resolved: impl IntoIterator<Item = Resolved<'e>>,
+        at: &NodePath,
+    ) -> Result<(), Halt> {
+        let evaluation = Evaluation {
+            schema: self.schema,
+            facts,
+            at,
+        };
+        match evaluation.aborts(resolved)? {
+            Aborts::Never => Ok(()),
+            Aborts::Always => Err(Halt::aborting_at(at)),
+            Aborts::OnOneArm => Err(Halt::Refuses { at: at.clone() }),
+        }
+    }
+
+    /// What `expressions` are made of, which a place asks once it `passes`.
     fn operands_of<'e>(
         &self,
         facts: &PathFacts,
@@ -469,20 +511,17 @@ impl Walker<'_> {
     ) -> Result<Vec<Operand>, Halt> {
         expressions
             .into_iter()
-            .map(|expression| self.operand(facts, expression, at))
+            .map(|expression| Ok(operand_of(self.schema, facts, expression, at)?))
             .collect()
     }
+}
 
-    /// The operand of what `at` reads. Every place the evaluator reads a slot
-    /// resolves through here, so each one aborts alike on a slot holding no row.
-    fn operand(
-        &self,
-        facts: &PathFacts,
-        expression: &Expr,
-        at: &NodePath,
-    ) -> Result<Operand, Halt> {
-        operand_of(self.schema, facts, expression, at).map_err(Halt::at(at))
-    }
+/// Expressions that fill no key column.
+fn unkeyed<'e>(expressions: impl IntoIterator<Item = &'e Expr>) -> Vec<Resolved<'e>> {
+    expressions
+        .into_iter()
+        .map(|expression| (expression, None))
+        .collect()
 }
 
 /// What `terminal` reads before it returns or branches.

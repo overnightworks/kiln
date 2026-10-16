@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 
-use kiln_ir::{slots_released_by_iteration, Effect, Expr, Slot};
+use kiln_ir::{slots_released_by_iteration, Condition, Effect, Expr, Slot};
 
 use super::node_path::NodePath;
 
@@ -88,6 +88,23 @@ fn projected_slots(expression: &Expr) -> Vec<Slot> {
         Expr::Arithmetic(_, left, right) => {
             let mut slots = projected_slots(left);
             slots.extend(projected_slots(right));
+            slots
+        }
+        Expr::Conditional {
+            condition,
+            when_true,
+            when_false,
+        } => {
+            let mut slots = match &**condition {
+                Condition::RowPresent(slot) => vec![*slot],
+                Condition::Compare { left, right, .. } => {
+                    let mut slots = projected_slots(left);
+                    slots.extend(projected_slots(right));
+                    slots
+                }
+            };
+            slots.extend(projected_slots(when_true));
+            slots.extend(projected_slots(when_false));
             slots
         }
     }
