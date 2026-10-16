@@ -8,9 +8,10 @@ mod support;
 
 use kiln_ir::{
     run, AbortReason, ArithmeticOp, ClampDomain, Column, ColumnName, ColumnType, Expr,
-    IntegerWidth, Outcome, OverflowReason, SchemaError, Store, TableName, Terminal, Value,
+    IntegerWidth, Outcome, OverflowReason, ProgramError, SchemaError, Store, TableName, Terminal,
+    Value,
 };
-use support::{call_under_test, column, run_write, table, WriteVia};
+use support::{call_under_test, column, keyed_by_id, one_part, run_write, table, WriteVia};
 
 fn arithmetic(op: ArithmeticOp, lhs: i64, rhs: i64) -> Expr {
     Expr::Arithmetic(
@@ -199,7 +200,7 @@ mod kiln_ir_23 {
                     Expected::Committed(value) => {
                         let row = execution
                             .store
-                            .row(&table("t"), &Value::Integer(1))
+                            .row(&table("t"), &one_part(1))
                             .unwrap_or_else(|| {
                                 panic!("case {} ({via:?}): expected a commit", case.name)
                             });
@@ -217,7 +218,7 @@ mod kiln_ir_23 {
                                 reason: AbortReason::Overflow(OverflowReason::Width {
                                     table: table("t"),
                                     column: column("c"),
-                                    key: Value::Integer(1),
+                                    key: one_part(1),
                                 }),
                             },
                             "case {} ({via:?})",
@@ -254,16 +255,16 @@ fn column_name() -> ColumnName {
 
 fn schema_with_domain(width: IntegerWidth, domain: ClampDomain) -> kiln_ir::Schema {
     kiln_ir::Schema {
-        tables: vec![kiln_ir::Table {
-            name: table_name(),
-            columns: vec![Column {
+        tables: vec![keyed_by_id(
+            "t",
+            vec![Column {
                 name: column_name(),
                 kind: ColumnType::Integer {
                     width,
                     domain: Some(domain),
                 },
             }],
-        }],
+        )],
         ..Default::default()
     }
 }
@@ -390,10 +391,10 @@ mod kiln_ir_03 {
 
         assert_eq!(
             result,
-            Err(SchemaError::DomainExceedsWidth {
+            Err(ProgramError::Schema(SchemaError::DomainExceedsWidth {
                 table: table_name(),
                 column: column_name(),
-            })
+            }))
         );
     }
 }

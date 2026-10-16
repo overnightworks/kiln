@@ -4,14 +4,14 @@ use kiln_ir::{
 };
 
 use super::{
-    HOT_KEY, ORDER_QUANTITY_MAX, QUANTITY_COLUMN, RESTOCK_AMOUNT, STOCK_MAX, STOCK_MIN,
-    STOCK_TABLE, THRESHOLD_MAX, THRESHOLD_MIN,
+    InventoryAbort, HOT_KEY, ORDER_QUANTITY_MAX, QUANTITY_COLUMN, RESTOCK_AMOUNT, STOCK_MAX,
+    STOCK_MIN, STOCK_TABLE, THRESHOLD_MAX, THRESHOLD_MIN,
 };
 use crate::builders::{
     abort_unless_in_range, argument, branch, field, holds, integer_parameter, minus, number, plus,
     read, returning, sequence, update, Step,
 };
-use crate::rows::{column, key_literal, table};
+use crate::rows::{column, key_column, key_declaration, key_literal, table};
 
 pub fn program() -> Program {
     Program {
@@ -30,13 +30,17 @@ fn schema() -> Schema {
     Schema {
         tables: vec![Table {
             name: table(STOCK_TABLE),
-            columns: vec![Column {
-                name: column(QUANTITY_COLUMN),
-                kind: ColumnType::Integer {
-                    width: IntegerWidth::I16,
-                    domain: None,
+            columns: vec![
+                key_column(),
+                Column {
+                    name: column(QUANTITY_COLUMN),
+                    kind: ColumnType::Integer {
+                        width: IntegerWidth::I16,
+                        domain: None,
+                    },
                 },
-            }],
+            ],
+            key: key_declaration(),
         }],
         check_constraints: vec![
             quantity_bound(Comparison::AtLeast, STOCK_MIN),
@@ -68,7 +72,12 @@ fn function(
 }
 
 fn order_line() -> Function {
-    let steps = abort_unless_in_range("quantity", 1, ORDER_QUANTITY_MAX, "invalid_quantity");
+    let steps = abort_unless_in_range(
+        "quantity",
+        1,
+        ORDER_QUANTITY_MAX,
+        InventoryAbort::InvalidQuantity.name(),
+    );
     let remainder = minus(stock(), argument("quantity"));
     let set_quantity = |value| update(STOCK_TABLE, key_literal(HOT_KEY), QUANTITY_COLUMN, value);
     let keeps_the_margin = returning(vec![set_quantity(remainder.clone())], stock());
@@ -93,7 +102,7 @@ fn stock_check() -> Function {
         "threshold",
         THRESHOLD_MIN,
         THRESHOLD_MAX,
-        "invalid_threshold",
+        InventoryAbort::InvalidThreshold.name(),
     );
     let finish = branch(
         vec![read_stock()],

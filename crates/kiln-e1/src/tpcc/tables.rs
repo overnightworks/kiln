@@ -2,7 +2,10 @@
 //! to. The specification declares primary keys and foreign keys, and no
 //! secondary index, so the schema declares none (`inputs.md` §5, Q2.1).
 
-use kiln_ir::{Column, ColumnName, ColumnType, ForeignKey, IntegerWidth, Schema, Table, TableName};
+use kiln_ir::{
+    Column, ColumnName, ColumnType, ForeignKey, IntegerWidth, KeyDeclaration, Schema, Table,
+    TableName,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TpccTable {
@@ -324,7 +327,7 @@ impl TpccTable {
         self.spec().name
     }
 
-    /// The foreign keys of several columns, which the schema cannot declare.
+    /// The foreign keys of several columns.
     pub fn composite_foreign_keys(self) -> Vec<String> {
         self.spec()
             .foreign_keys
@@ -344,11 +347,9 @@ impl TpccTable {
     }
 }
 
-/// The schema of Clause 1.3.1 as far as `kiln-ir` states it.
-///
-/// The IR keys a row by one value outside its columns, so a table keyed by one
-/// column leaves that column out, and a composite primary key or foreign key
-/// has no declaration: nothing here encodes several columns into one key.
+/// The schema of Clause 1.3.1 as far as `kiln-ir` states it: every table
+/// declares its primary key (HISTORY has none and is keyless) and every
+/// foreign key. The clause declares no unique constraint besides the keys.
 pub fn tpcc_schema() -> Schema {
     Schema {
         tables: TpccTable::ALL.map(table_of).to_vec(),
@@ -367,13 +368,25 @@ fn table_of(table: TpccTable) -> Table {
         columns: spec
             .columns
             .iter()
-            .filter(|column| spec.primary_key != [column.name])
             .map(|column| Column {
                 name: ColumnName(column.name.to_owned()),
                 kind: column_type(column.domain),
             })
             .collect(),
+        key: key_of(spec),
     }
+}
+
+fn key_of(spec: &TableSpec) -> KeyDeclaration {
+    if spec.primary_key.is_empty() {
+        return KeyDeclaration::Keyless;
+    }
+    KeyDeclaration::Columns(
+        spec.primary_key
+            .iter()
+            .map(|column| ColumnName((*column).to_owned()))
+            .collect(),
+    )
 }
 
 fn foreign_keys_of(table: TpccTable) -> Vec<ForeignKey> {
@@ -381,13 +394,14 @@ fn foreign_keys_of(table: TpccTable) -> Vec<ForeignKey> {
         .spec()
         .foreign_keys
         .iter()
-        .filter_map(|foreign_key| match foreign_key.columns {
-            [column] => Some(ForeignKey {
-                table: table.ir_name(),
-                column: ColumnName((*column).to_owned()),
-                references: foreign_key.references.ir_name(),
-            }),
-            _ => None,
+        .map(|foreign_key| ForeignKey {
+            table: table.ir_name(),
+            columns: foreign_key
+                .columns
+                .iter()
+                .map(|column| ColumnName((*column).to_owned()))
+                .collect(),
+            references: foreign_key.references.ir_name(),
         })
         .collect()
 }

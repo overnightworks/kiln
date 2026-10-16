@@ -4,7 +4,7 @@
 observable behavior of that crate: what `run` and `replay` return for a given
 program, call, and store, and what the schema check, store, and access log
 expose. It cites the reference meaning `docs/concept.md` §2.1-§2.2
-(decisions D1-D7) owns rather than restating it. A test claims a criterion by
+(decisions D1-D9) owns rather than restating it. A test claims a criterion by
 living in the module named for it: `mod kiln_ir_07 { #[test] fn
 absent_key_is_branchable() {...} }` claims `KILN-IR-07`. One criterion per
 module; several tests may share it.
@@ -25,7 +25,7 @@ module; several tests may share it.
 
 - [KILN-IR-07] A read sees the transaction's own earlier writes, and write effects apply in program order. Example: a write of 5 followed by a write of 9 to the same key leaves 9, and a read between them sees 5.
 - [KILN-IR-08] A point read of an absent key is a value the transaction can branch on, like any other value.
-- [KILN-IR-09] A range read returns every row whose key lies within its inclusive bounds, in key order, including a range that holds a single row, whether the store returns it or a call iterates it.
+- [KILN-IR-09] A range read returns every row whose key lies within its inclusive bounds, comparing keys component by component, in key order, including a range that holds a single row, whether the store returns it or a call iterates it.
 - [KILN-IR-10] A range read whose start sorts after its end, or over a table with no rows, reads as an empty sequence, and iterating it runs the body zero times.
 - [KILN-IR-11] A range read that matches no row is branchable as an absence, the same as a point read of an absent key.
 - [KILN-IR-12] A range read that exceeds its declared bound, or whose declared bound is negative even when no row matches, aborts the call and discards every effect the call produced before it.
@@ -37,7 +37,7 @@ module; several tests may share it.
 ## Writing
 
 - [KILN-IR-17] An update or delete that targets an absent row aborts; there is no implicit insert or no-op.
-- [KILN-IR-18] Inserting an already existing key aborts.
+- [KILN-IR-18] Inserting an already existing key aborts; two keys are the same when every component is.
 - [KILN-IR-19] A successful delete removes the row, so a row inserted and then deleted leaves the store equal to the store before the insert.
 - [KILN-IR-20] An update changes only the columns it names and preserves the row's other columns.
 - [KILN-IR-21] An abort discards every effect the call produced before it, not only the operation that triggered it.
@@ -60,7 +60,7 @@ module; several tests may share it.
 ## Access log
 
 - [KILN-IR-34] The access log records every attempted access, including the one that aborts the call.
-- [KILN-IR-35] Each access log entry carries its table, key or range bounds, and touched columns, and origin (transaction logic or constraint check), for every access kind: point read, range read, insert, update and delete.
+- [KILN-IR-35] Each access log entry carries its table, key (every component) or range bounds, and touched columns, and origin (transaction logic or constraint check), for every access kind: point read, range read, insert, update and delete. An insert's touched columns are the non-key columns it names; its key is in its target.
 - [KILN-IR-36] A range read logs its bounds, including when the range turns out empty.
 - [KILN-IR-43] Every access the transaction's own effects make is logged with logic origin.
 - [KILN-IR-44] A constraint check logs its accesses with constraint origin; they stay in the log when the check aborts the call.
@@ -72,19 +72,19 @@ module; several tests may share it.
 
 ## Unique constraints
 
-- [KILN-IR-39] A unique constraint is declared in the schema on one column of one table. A schema that declares one on an undeclared table or column is rejected with a typed schema error.
-- [KILN-IR-40] A duplicate value that exists only in the middle of a transaction and is gone from its final state commits.
-- [KILN-IR-41] A duplicate value in a transaction's final state aborts the call with a typed reason naming the constraint and the value; the call changes no state and publishes no response.
-- [KILN-IR-42] The unique check runs once at the end of the transaction and logs exactly one point read on the unique value per row the transaction wrote that column on, however often it wrote the row; a row the transaction deleted, or wrote without that column, is not checked. The check's logged footprint is those point reads, never a range read or table scan.
+- [KILN-IR-39] A unique constraint is declared in the schema on an ordered list of one or more columns of one table (`KILN-IR-89`; a single column is the list of one). A schema that declares one on an undeclared table or column is rejected with a typed schema error.
+- [KILN-IR-40] A duplicate tuple that exists only in the middle of a transaction and is gone from its final state commits.
+- [KILN-IR-41] A duplicate tuple in a transaction's final state aborts the call with a typed reason naming the constraint and the tuple; the call changes no state and publishes no response.
+- [KILN-IR-42] The unique check runs once at the end of the transaction and logs exactly one constraint lookup, naming the constraint and the unique tuple, per row the transaction wrote any of the constraint's columns on, however often it wrote the row; a row the transaction deleted, or wrote without any of those columns, or that lacks one of them in its final state, is not checked. The check's logged footprint is those constraint lookups, never a point read, range read or table scan.
 
 ## Foreign keys
 
-- [KILN-IR-45] A foreign key is declared in the schema on one column of one table and references another declared table's key. A schema that declares one on an undeclared table or column, or that references an undeclared table, is rejected with a typed schema error.
-- [KILN-IR-46] A row the transaction wrote the foreign-key column on, whose final state names a key that no row of the referenced table holds aborts the call with a typed reason naming the foreign key and the dangling value; the call changes no state.
+- [KILN-IR-45] A foreign key is declared in the schema on an ordered list of one or more columns of one table (a single column is the list of one) and references another declared table's whole primary key (`KILN-IR-87`). A schema that declares one on an undeclared table or column, that references an undeclared table, or whose column count differs from the referenced table's primary key's, a keyless table having none, is rejected with a typed schema error.
+- [KILN-IR-46] A row the transaction wrote any of the foreign key's columns on, whose final state holds all of them and names a key tuple that no row of the referenced table holds aborts the call with a typed reason naming the foreign key and the dangling tuple; the call changes no state.
 - [KILN-IR-47] A reference that is dangling only in the middle of a transaction, because the parent is inserted or the child is repointed or removed before the end, commits.
 - [KILN-IR-48] A parent row the transaction deleted, while a row of the final state still references its key, aborts the call with a typed reason naming the foreign key and the key; the call changes no state.
 - [KILN-IR-49] A parent row the transaction deleted commits when no row of the final state references its key any more, including when the transaction removed or repointed the children first, and when the transaction inserted the parent again.
-- [KILN-IR-50] A child check logs one constraint-origin point read, touching no column, on the referenced table at the referenced key per child row the transaction wrote the foreign-key column on, however often it wrote the row; a child row written without that column is not checked. A parent-deletion check logs one constraint-origin lookup on the child table by the deleted key (the representation the unique check uses) per deleted parent key absent from the final state. Neither logs a range read or table scan.
+- [KILN-IR-50] A child check logs one constraint-origin point read, touching no column, on the referenced table at the referenced key per child row the transaction wrote any of the foreign key's columns on, however often it wrote the row; a child row lacking any of those columns in its final state is not checked. A parent-deletion check logs one constraint-origin constraint lookup on the child table, naming the foreign key and the deleted key's tuple (the representation the unique check uses), per deleted parent key absent from the final state. Neither logs a range read or table scan.
 
 ## Check constraints
 
@@ -100,7 +100,7 @@ module; several tests may share it.
 ## Typed constraint declarations
 
 - [KILN-IR-56] A check constraint whose operand is an integer on an integer column, or text on a text column, is accepted. An operand of the other type is rejected with a typed schema error, because such a comparison would hold or fail for every row regardless of the data.
-- [KILN-IR-57] Tables are keyed by integers, so a foreign key on an integer column is accepted and one on a text column is rejected with a typed schema error: no row's key could ever equal its value.
+- [KILN-IR-57] Each column of a foreign key must have the kind of the referenced primary key's column at its position: an integer column onto an integer key and a text column onto a text key are accepted, any other pairing is rejected with a typed schema error, because no row's key could ever equal its value.
 
 ## Replay
 
@@ -123,11 +123,35 @@ module; several tests may share it.
 - [KILN-IR-68] An indexed range read sees the transaction's own earlier writes, and a bounded iteration over it visits its rows in index order.
 - [KILN-IR-69] An indexed range read matching more rows than its bound aborts with the typed bound-exceeded reason and binds nothing.
 - [KILN-IR-70] An indexed range read logs one transaction-logic entry of a distinct indexed-range kind naming the table, the index and both bounds, including for an empty or reversed range and for a call that then aborts; it logs no point read or primary-key range read.
-- [KILN-IR-71] Rows reached through an indexed range read expose only the indexed columns and their primary key, so a column outside the index cannot be projected from them (typed missing-column abort); a base row is reached by a point read at the projected key, so a call that stops at the index leaves only the indexed-range entry and one that follows it to base rows leaves that entry plus one point read per row accessed.
-- [KILN-IR-72] Every row a read binds carries its primary key, and a primary-key projection yields the key the point read used or the store key of the range or index row; projecting the key from an absent row aborts with the typed projection-source-absent reason.
+- [KILN-IR-71] Rows reached through an indexed range read expose only the indexed columns and their key, so a column outside the index that is no key column cannot be projected from them (typed missing-column abort); a base row is reached by a point read at the projected key, so a call that stops at the index leaves only the indexed-range entry and one that follows it to base rows leaves that entry plus one point read per row accessed.
+- [KILN-IR-72] Every row a read binds carries its key, and projecting a key column yields that component of the key the point read used or of the store key of the range or index row; projecting a key column from an absent row aborts with the typed projection-source-absent reason.
 
 ## Comparison conditions
 
-- [KILN-IR-73] A branch can compare two expressions (arguments, literals, projections, primary keys, arithmetic) by equal, not equal, less, less or equal, greater or greater or equal, and takes its first arm when the comparison holds and its second otherwise. Integers compare numerically and text compares by its bytes.
+- [KILN-IR-73] A branch can compare two expressions (arguments, literals, projections including key columns, arithmetic) by equal, not equal, less, less or equal, greater or greater or equal, and takes its first arm when the comparison holds and its second otherwise. Integers compare numerically and text compares by its bytes.
 - [KILN-IR-74] A comparison of an integer with a text value aborts the call with a typed reason and changes no state; it never holds or fails by accident.
 - [KILN-IR-75] An operand of a comparison that cannot be resolved (a projection from an absent row, an overflowing sum) aborts the call with that operand's own typed reason, and a comparison logs no access.
+
+## Compound keys
+
+- [KILN-IR-76] A table declares its primary key as an ordered, non-empty list of its own columns, or declares itself keyless. A schema whose key list is empty, names an undeclared column or repeats a column, or that declares a secondary index on a keyless table, is rejected with a typed schema error.
+- [KILN-IR-77] A table keyed by three columns supports read, insert, update and delete by a key of three components: keys are equal when every component is, and a row is found only by its whole key.
+- [KILN-IR-78] Key columns live only in the key: a stored row holds none of them, and projecting a key column from a row bound by a point read, a range read or an indexed range read yields the matching component of that row's key, also when an index names the key column.
+- [KILN-IR-79] A key expression of a read, insert, update or delete, or a range read's bound, with a component count other than its table's key column count is rejected with a typed program error before any call runs: nothing is logged, no state changes, and the error is the same whichever function the call names.
+- [KILN-IR-80] An update that names a key column, and an insert whose columns name one, is rejected with a typed program error before any call runs, so a row never moves.
+- [KILN-IR-81] An effect that names an undeclared table, or a keyless one, is rejected with a typed program error before any call runs.
+- [KILN-IR-82] A key component whose kind differs from its column's, or that lies outside the column's declared width, aborts with a typed reason naming the table and the component's column and never clamps, even where the column declares a clamping domain; the store is unchanged. A component that can never fit, whatever the call: a literal of another kind or outside the width, or a parameter, projected column or arithmetic whose static kind differs from the column's, is rejected with a typed program error before any call runs; a projection counts only when every table its slot can hold anywhere in the function (an iteration's row slot holds those of its source slot) has a column it can never fit, so a program the evaluator can run without an abort is never rejected; a component known only at run time stays an abort.
+- [KILN-IR-83] An insert writes its key columns through its key: a unique, foreign-key or check constraint on a key column is checked for the inserted row against the component of its key, and an update, which cannot write a key column, never checks a constraint none of whose columns it writes: a constraint over a key column and a column the update writes is checked, with the key column's component taken from the row's key.
+
+## Values
+
+- [KILN-IR-84] An integer expression can multiply two integer expressions, checked like addition (D3): a product beyond the integer range aborts with the typed arithmetic overflow, and a product written to a column beyond its declared width aborts with the typed width overflow unless the column clamps; it never wraps. A scaled decimal is an integer at a declared scale and multiplying adds the scales, so the product is exact (a quantity times a price at scale 2 is the price total at scale 2).
+- [KILN-IR-85] A conditional value evaluates its condition, then only the chosen arm: a failing projection in the other arm never runs and never aborts, while the chosen arm aborts with its own typed reason. Its condition is any branch condition and aborts the same way a branch on it does.
+- [KILN-IR-86] A multiplication has the static kind integer, and a conditional the kind both its arms share, or none when they differ. A key component of a kind its column cannot take is rejected as in `KILN-IR-82`; a conditional whose arms differ in kind is left to the run.
+
+## Composite constraints
+
+- [KILN-IR-87] A foreign key maps an ordered list of one or more of the referencing table's columns, in order, onto the referenced table's whole primary key (a one-column key is the list of one). Each row the call inserted or wrote any of those columns on is checked at the transaction's end against the key formed from its final values of all of them, with one constraint-origin point read of the parent that touches no column. A row lacking any of the columns references nothing; a full tuple that names no row of the referenced table aborts with a typed reason naming the foreign key and the tuple, also when all but one component match. A key column of the child is read from its key (`KILN-IR-83`).
+- [KILN-IR-88] Deleting a row of the referenced table aborts with a typed reason naming the foreign key and the deleted key when a row of the referencing table still holds that tuple in the foreign key's columns at the transaction's end, after one logged constraint lookup of the referencing table by that tuple. A call that repoints or deletes the child before the end, in any order with the delete, commits.
+- [KILN-IR-89] A unique constraint names an ordered list of one or more columns: a row binds it only when it holds every one, and two rows holding the same tuple at the transaction's end abort the call with a typed reason naming the constraint and the tuple, after one logged constraint lookup by that tuple. Tuples differing in any component are distinct.
+- [KILN-IR-90] A schema whose foreign key names an undeclared table or column, names no column or a column count other than its referenced table's primary key's, or has a column of another kind (integer or text) than the referenced key column at its position, or whose unique constraint names no column or an undeclared one, is rejected with a typed schema error before any call runs.

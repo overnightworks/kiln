@@ -2,20 +2,20 @@
 
 use crate::call::Call;
 use crate::evaluator::{run, Execution};
-use crate::ir::{Program, SchemaError};
+use crate::ir::{Program, ProgramError};
 use crate::store::Store;
 
 /// Runs `calls` in order against `program`, each against the store the
 /// previous call left. An aborted call leaves the store as it found it and
 /// never stops the calls after it; every call's [`Execution`] sits at its
-/// call's position. An invalid schema is rejected even for an empty
+/// call's position. An invalid program is rejected even for an empty
 /// sequence.
 pub fn replay(
     program: &Program,
     calls: &[Call],
     store: &Store,
-) -> Result<Vec<Execution>, SchemaError> {
-    program.schema.validate()?;
+) -> Result<Vec<Execution>, ProgramError> {
+    program.validate()?;
     let mut current = store.clone();
     calls
         .iter()

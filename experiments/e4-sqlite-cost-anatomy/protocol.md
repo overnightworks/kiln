@@ -604,6 +604,11 @@ failing skips §7 alone (logged), the rest proceeds.
 After freezing, before the result-bearing run, a pilot checks mechanics
 only — never the quantities §10 judges.
 
+The night script (`run-pilot-night.sh`) first runs the harness tests
+that need the measuring machine's CPU topology (§9's CPU 2, sibling 8 and
+a monitor CPU), which CI's smaller runner skips, and stops before
+preflight if any fails.
+
 **What it measures.** Per-operation `wall` for instrumented and
 uninstrumented builds (§5's overhead bound); run duration; monitor
 sample coverage (200 ms samples §9 expects versus written); and, if §7

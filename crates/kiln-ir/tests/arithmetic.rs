@@ -13,8 +13,8 @@ use kiln_ir::{
 };
 use proptest::prelude::*;
 use support::{
-    call_under_test, column, columns_of, program_with_column, run_ok, run_write, table,
-    typed_parameter, WriteVia,
+    call_under_test, column, columns_of, key_expr, literal_key, one_part, program_with_column,
+    run_ok, run_write, table, typed_parameter, WriteVia,
 };
 
 fn add(lhs: i64, rhs: i64) -> Expr {
@@ -44,7 +44,7 @@ mod kiln_ir_24 {
             if (i8::MIN as i64..=i8::MAX as i64).contains(&sum) {
                 let row = execution
                     .store
-                    .row(&table("t"), &Value::Integer(1))
+                    .row(&table("t"), &one_part(1))
                     .expect("a sum within the declared width commits");
                 prop_assert_eq!(row.columns.get(&column("c")), Some(&Value::Integer(sum)));
             } else {
@@ -54,7 +54,7 @@ mod kiln_ir_24 {
                         reason: AbortReason::Overflow(OverflowReason::Width {
                             table: table("t"),
                             column: column("c"),
-                            key: Value::Integer(1),
+                            key: one_part(1),
                         }),
                     }
                 );
@@ -160,7 +160,7 @@ mod kiln_ir_27 {
 
         let row = execution
             .store
-            .row(&table("t"), &Value::Integer(1))
+            .row(&table("t"), &one_part(1))
             .expect("the final value is within the declared width");
         assert_eq!(row.columns.get(&column("c")), Some(&Value::Integer(127)));
     }
@@ -184,12 +184,12 @@ mod kiln_ir_29 {
             vec![
                 Effect::Insert {
                     table: table("t"),
-                    key: Expr::Literal(Value::Integer(1)),
+                    key: literal_key(1),
                     columns: columns_of([("c", Expr::Literal(Value::Integer(10)))]),
                 },
                 Effect::Insert {
                     table: table("t"),
-                    key: Expr::Literal(Value::Integer(2)),
+                    key: literal_key(2),
                     columns: columns_of([("c", add(100, 100))]),
                 },
             ],
@@ -205,7 +205,7 @@ mod kiln_ir_29 {
                 reason: AbortReason::Overflow(OverflowReason::Width {
                     table: table("t"),
                     column: column("c"),
-                    key: Value::Integer(2),
+                    key: one_part(2),
                 }),
             }
         );
@@ -216,11 +216,11 @@ mod kiln_ir_29 {
         assert_eq!(execution.access_log.len(), 2);
         assert_eq!(
             execution.access_log[0].target,
-            AccessTarget::Point(Value::Integer(1))
+            AccessTarget::Point(one_part(1))
         );
         assert_eq!(
             execution.access_log[1].target,
-            AccessTarget::Point(Value::Integer(2))
+            AccessTarget::Point(one_part(2))
         );
     }
 }
@@ -344,7 +344,7 @@ mod kiln_ir_30 {
             prop_assert!(committed);
             let row = execution
                 .store
-                .row(&table("t"), &Value::Integer(1))
+                .row(&table("t"), &one_part(1))
                 .expect("a clamped write always commits");
             let expected = raw_value.clamp(domain_min, domain_max);
             prop_assert_eq!(row.columns.get(&column("c")), Some(&Value::Integer(expected)));
@@ -374,7 +374,7 @@ mod kiln_ir_31 {
         assert!(matches!(execution.outcome, Outcome::Committed { .. }));
         let row = execution
             .store
-            .row(&table("t"), &Value::Integer(1))
+            .row(&table("t"), &one_part(1))
             .expect("row committed");
         assert_eq!(row.columns.get(&column("c")), Some(&Value::Integer(42)));
     }
@@ -409,7 +409,7 @@ mod kiln_ir_32 {
             );
             let row = execution
                 .store
-                .row(&table("t"), &Value::Integer(1))
+                .row(&table("t"), &one_part(1))
                 .expect("a clamped write always commits");
             assert_eq!(
                 row.columns.get(&column("c")),
@@ -432,7 +432,7 @@ mod kiln_ir_33 {
             vec![],
             vec![Effect::Insert {
                 table: table("t"),
-                key: Expr::Literal(Value::Integer(1)),
+                key: literal_key(1),
                 columns: columns_of([("c", Expr::Literal(Value::Integer(i64::MAX)))]),
             }],
             Terminal::Return(Expr::Literal(Value::Integer(0))),
@@ -444,7 +444,7 @@ mod kiln_ir_33 {
         assert!(matches!(execution.outcome, Outcome::Committed { .. }));
         let row = execution
             .store
-            .row(&table("t"), &Value::Integer(1))
+            .row(&table("t"), &one_part(1))
             .expect("row committed");
         assert_eq!(
             row.columns.get(&column("c")),
@@ -461,7 +461,7 @@ mod kiln_ir_13 {
 
     #[test]
     fn arithmetic_can_use_a_value_projected_from_an_earlier_read() {
-        let key = Value::Integer(1);
+        let key = one_part(1);
         let store = Store::containing([(
             table("t"),
             key.clone(),
@@ -483,12 +483,12 @@ mod kiln_ir_13 {
             vec![
                 Effect::Read {
                     table: table("t"),
-                    key: Expr::Literal(key.clone()),
+                    key: key_expr(&key),
                     into: kiln_ir::Slot(0),
                 },
                 Effect::Update {
                     table: table("t"),
-                    key: Expr::Literal(key.clone()),
+                    key: key_expr(&key),
                     columns: columns_of([(
                         "balance",
                         Expr::Arithmetic(

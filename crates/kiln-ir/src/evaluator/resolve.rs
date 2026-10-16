@@ -6,10 +6,11 @@
 use std::collections::HashMap;
 
 use crate::identifiers::ColumnName;
-use crate::ir::{ArithmeticOp, ClampDomain, Column, ColumnType, Expr, IntegerWidth, Slot, Value};
-use crate::store::KeyedRow;
+use crate::ir::{
+    ArithmeticOp, ClampDomain, Column, ColumnType, Condition, Expr, IntegerWidth, Slot, Value,
+};
 
-use super::{AbortReason, Binding, CallContext, OverflowReason};
+use super::{AbortReason, Binding, BoundRow, CallContext, OverflowReason};
 
 /// Why [`resolve`] could not produce a value for an expression: `i64`
 /// arithmetic overflowed before any column or argument was reached (D3), an
@@ -23,6 +24,7 @@ use super::{AbortReason, Binding, CallContext, OverflowReason};
 pub(super) enum ResolveError {
     Overflow(OverflowReason),
     NonIntegerOperand,
+    ComparisonTypeMismatch,
     ProjectionSourceAbsent { slot: Slot },
     MissingColumn { slot: Slot, column: ColumnName },
 }
@@ -32,6 +34,7 @@ impl From<ResolveError> for AbortReason {
         match error {
             ResolveError::Overflow(reason) => AbortReason::Overflow(reason),
             ResolveError::NonIntegerOperand => AbortReason::NonIntegerOperand,
+            ResolveError::ComparisonTypeMismatch => AbortReason::ComparisonTypeMismatch,
             ResolveError::ProjectionSourceAbsent { slot } => {
                 AbortReason::ProjectionSourceAbsent { slot }
             }
@@ -44,9 +47,8 @@ impl From<ResolveError> for AbortReason {
 
 /// Resolves an expression to a concrete value: a constant, the argument
 /// bound to a declared parameter (its arity was checked before the call ran),
-/// a column or the primary key projected from an earlier read's row, or an
-/// arithmetic operation
-/// over two such values.
+/// a column or key column projected from an earlier read's row, or an
+/// arithmetic operation over two such values.
 ///
 /// Arithmetic here is checked at `i64`'s own width and returns
 /// [`ResolveError::Overflow`] if it overflows — true outside any column
@@ -76,18 +78,17 @@ pub(super) fn resolve(
             Ok(ctx.args[index].clone())
         }
         Expr::Projection { slot, column } => {
-            let keyed = bound_row(*slot, bindings)?;
-            keyed
-                .row
-                .columns
-                .get(column)
+            let bound = bound_row(*slot, bindings)?;
+            let keyed = &bound.keyed;
+            ctx.schema
+                .table(&bound.table)
+                .and_then(|table| table.column_value(&keyed.key, &keyed.row, column))
                 .cloned()
                 .ok_or_else(|| ResolveError::MissingColumn {
                     slot: *slot,
                     column: column.clone(),
                 })
         }
-        Expr::PrimaryKey { slot } => Ok(bound_row(*slot, bindings)?.key.clone()),
         Expr::Arithmetic(op, lhs, rhs) => {
             let lhs = as_integer(resolve(lhs, ctx, bindings)?)?;
             let rhs = as_integer(resolve(rhs, ctx, bindings)?)?;
@@ -95,14 +96,49 @@ pub(super) fn resolve(
                 .ok_or(ResolveError::Overflow(OverflowReason::Arithmetic))?;
             Ok(Value::Integer(result))
         }
+        Expr::Conditional {
+            condition,
+            when_true,
+            when_false,
+        } => {
+            let chosen = if condition_holds(condition, ctx, bindings)? {
+                when_true
+            } else {
+                when_false
+            };
+            resolve(chosen, ctx, bindings)
+        }
+    }
+}
+
+/// Whether `condition` holds against what this call has read so far; a
+/// comparison resolves both operands and logs no access.
+pub(super) fn condition_holds(
+    condition: &Condition,
+    ctx: &CallContext,
+    bindings: &HashMap<Slot, Binding>,
+) -> Result<bool, ResolveError> {
+    match condition {
+        Condition::RowPresent(slot) => Ok(bindings.get(slot).is_some_and(Binding::is_present)),
+        Condition::Compare {
+            left,
+            relation,
+            right,
+        } => {
+            let left = resolve(left, ctx, bindings)?;
+            let right = resolve(right, ctx, bindings)?;
+            relation
+                .holds(&left, &right)
+                .ok_or(ResolveError::ComparisonTypeMismatch)
+        }
     }
 }
 
 /// The row `slot` currently holds; a slot with no present row is an absent
 /// projection source.
-fn bound_row(slot: Slot, bindings: &HashMap<Slot, Binding>) -> Result<&KeyedRow, ResolveError> {
+fn bound_row(slot: Slot, bindings: &HashMap<Slot, Binding>) -> Result<&BoundRow, ResolveError> {
     match bindings.get(&slot) {
-        Some(Binding::Row(Some(keyed))) => Ok(keyed),
+        Some(Binding::Row(Some(bound))) => Ok(bound),
         _ => Err(ResolveError::ProjectionSourceAbsent { slot }),
     }
 }
@@ -177,6 +213,7 @@ fn checked_apply(op: ArithmeticOp, lhs: i64, rhs: i64) -> Option<i64> {
     match op {
         ArithmeticOp::Add => lhs.checked_add(rhs),
         ArithmeticOp::Subtract => lhs.checked_sub(rhs),
+        ArithmeticOp::Multiply => lhs.checked_mul(rhs),
     }
 }
 

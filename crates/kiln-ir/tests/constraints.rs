@@ -5,11 +5,12 @@ mod support;
 
 use kiln_ir::{
     AbortReason, AccessKind, AccessLogEntry, AccessOrigin, AccessTarget, AccessedColumns, Column,
-    ColumnType, Effect, Execution, Expr, IntegerWidth, Outcome, Program, Row, Schema, SchemaError,
-    Store, Table, Terminal, UniqueConstraint, Value,
+    ColumnType, ConstraintRef, Effect, Execution, Expr, IntegerWidth, Outcome, Program, Row,
+    Schema, SchemaError, Store, Terminal, UniqueConstraint, Value,
 };
 use support::{
-    call_under_test, column, columns_of, columns_of_values, program_with_schema, run_ok, table,
+    call_under_test, column, columns_of, columns_of_values, keyed_by_id, literal_key, one_part,
+    program_with_schema, run_ok, table,
 };
 
 fn text(value: &str) -> Value {
@@ -23,7 +24,7 @@ fn literal(value: Value) -> Expr {
 fn accounts_email_unique() -> UniqueConstraint {
     UniqueConstraint {
         table: table("accounts"),
-        column: column("email"),
+        columns: vec![column("email")],
     }
 }
 
@@ -33,9 +34,9 @@ fn accounts_schema(unique_constraints: Vec<UniqueConstraint>) -> Schema {
         kind: ColumnType::Text,
     };
     Schema {
-        tables: vec![Table {
-            name: table("accounts"),
-            columns: vec![
+        tables: vec![keyed_by_id(
+            "accounts",
+            vec![
                 text_column("email"),
                 text_column("name"),
                 Column {
@@ -46,7 +47,7 @@ fn accounts_schema(unique_constraints: Vec<UniqueConstraint>) -> Schema {
                     },
                 },
             ],
-        }],
+        )],
         unique_constraints,
         ..Default::default()
     }
@@ -64,7 +65,7 @@ fn accounts_program(effects: Vec<Effect>) -> Program {
 fn insert_account(key: i64, name: &'static str, value: Value) -> Effect {
     Effect::Insert {
         table: table("accounts"),
-        key: literal(Value::Integer(key)),
+        key: literal_key(key),
         columns: columns_of([(name, literal(value))]),
     }
 }
@@ -72,7 +73,7 @@ fn insert_account(key: i64, name: &'static str, value: Value) -> Effect {
 fn update_account(key: i64, name: &'static str, value: Value) -> Effect {
     Effect::Update {
         table: table("accounts"),
-        key: literal(Value::Integer(key)),
+        key: literal_key(key),
         columns: columns_of([(name, literal(value))]),
     }
 }
@@ -80,7 +81,7 @@ fn update_account(key: i64, name: &'static str, value: Value) -> Effect {
 fn delete_account(key: i64) -> Effect {
     Effect::Delete {
         table: table("accounts"),
-        key: literal(Value::Integer(key)),
+        key: literal_key(key),
     }
 }
 
@@ -91,13 +92,11 @@ fn account_with_email(email: &str) -> Row {
 }
 
 fn store_of_accounts(accounts: &[(i64, &str)]) -> Store {
-    Store::containing(accounts.iter().map(|(key, email)| {
-        (
-            table("accounts"),
-            Value::Integer(*key),
-            account_with_email(email),
-        )
-    }))
+    Store::containing(
+        accounts
+            .iter()
+            .map(|(key, email)| (table("accounts"), one_part(*key), account_with_email(email))),
+    )
 }
 
 fn run_accounts(effects: Vec<Effect>, store: &Store) -> Execution {
@@ -107,8 +106,11 @@ fn run_accounts(effects: Vec<Effect>, store: &Store) -> Execution {
 fn email_check(email: &str) -> AccessLogEntry {
     AccessLogEntry {
         table: table("accounts"),
-        kind: AccessKind::PointRead,
-        target: AccessTarget::Point(text(email)),
+        kind: AccessKind::ConstraintLookup,
+        target: AccessTarget::ConstraintLookup {
+            constraint: ConstraintRef::Unique(accounts_email_unique()),
+            tuple: vec![text(email)],
+        },
         columns: AccessedColumns::Named(vec![column("email")]),
         origin: AccessOrigin::ConstraintCheck,
     }
@@ -158,7 +160,7 @@ mod kiln_ir_38 {
                     reason: AbortReason::NonTextValue {
                         table: table("accounts"),
                         column: column("email"),
-                        key: Value::Integer(key),
+                        key: one_part(key),
                     }
                 }
             );
@@ -174,7 +176,7 @@ mod kiln_ir_39 {
     fn unique_constraint_must_name_a_declared_table_and_column() {
         let declared = accounts_email_unique();
         let undeclared_column = UniqueConstraint {
-            column: column("nickname"),
+            columns: vec![column("nickname")],
             ..declared.clone()
         };
         let undeclared_table = UniqueConstraint {
@@ -247,7 +249,7 @@ mod kiln_ir_41 {
                 Outcome::Aborted {
                     reason: AbortReason::UniqueViolation {
                         constraint: accounts_email_unique(),
-                        value: text("a@x"),
+                        tuple: vec![text("a@x")],
                     }
                 }
             );
@@ -260,7 +262,7 @@ mod kiln_ir_42 {
     use super::*;
 
     #[test]
-    fn check_logs_one_point_read_per_row_written_on_the_unique_column() {
+    fn check_logs_one_constraint_lookup_per_row_written_on_the_unique_column() {
         let store = store_of_accounts(&[(1, "a@x")]);
         let cases = [
             (
@@ -314,13 +316,13 @@ mod kiln_ir_43 {
         let body = vec![
             Effect::Read {
                 table: table("accounts"),
-                key: literal(Value::Integer(1)),
+                key: literal_key(1),
                 into: kiln_ir::Slot(0),
             },
             Effect::ReadRange {
                 table: table("accounts"),
-                start: literal(Value::Integer(0)),
-                end: literal(Value::Integer(9)),
+                start: literal_key(0),
+                end: literal_key(9),
                 bound: literal(Value::Integer(9)),
                 into: kiln_ir::Slot(1),
             },

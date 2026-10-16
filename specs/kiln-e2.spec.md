@@ -8,8 +8,8 @@ cites the freeze rather than restating it:
 `experiments/e2-parallel-ordered-transactions/inputs.md` (sections 1 to 5). A
 test claims a criterion by living in the module named for it: `mod kiln_e2_03
 { #[test] fn ... }` claims `KILN-E2-03`. One criterion per module; several
-tests may share it. The crate times nothing, runs nothing in parallel and
-builds no summaries.
+tests may share it. The crate times nothing and runs nothing in parallel; the only summary algebra
+it builds is quota's.
 
 ## Quota allocation
 
@@ -51,3 +51,22 @@ builds no summaries.
 - [KILN-E2-24] The accounts generator draws each account's balance then status, then per call the kind and the arguments in the listed order and the malformed share, with the frozen mix and ranges; it never produces `same_account` or an absent account in a money operation, and its malformed calls carry amount 0 or account 4.
 - [KILN-E2-25] Within generated accounts batches, every balance at every point of the replay lies in 0 to `BALANCE_BOUND` = 50 000 + 256 x 10 000 = 2 610 000, and the worst-case batch reaches that bound exactly.
 - [KILN-E2-26] On the listed small batches (sizes 4, 12 and 16) the generated calls replay on the oracle to the full ordered responses and abort names and the final state of an independent reference model of the frozen outcome tables, and those batches together cover every abort reason the generators can reach (`same_account` is excluded by the generators); on the larger listed batches the replay is checked by aggregate digests and final state.
+
+## Serial folds and the comparator
+
+- [KILN-E2-27] Each family's hand-written serial fold (`serial_fold`) yields, on every prefix of the protocol's corpus (the first 1, 2, 4, 8, 16, 32, 64, 128 and 256 calls of `generate(256, seed)` for seeds 0 to 99, each prefix keeping the batch's initial state) and on batches generated independently at those sizes, the same outcome for every call and the same final state as the oracle's replay, and also on hand-written batches the generators do not produce (`same_account`, absent accounts in every position, quantities far outside their range). Arguments outside the declared parameter widths are outside the folds' domain: the replay reports them as an argument overflow, and the generators never produce them.
+- [KILN-E2-28] Those prefix batches exercise every row of each family's frozen outcome table at least once (`same_account` and an absent account in a money operation excluded, as the generators never produce them): full and partial quota grants and refills, in-place and restocking order lines, both stock-check answers, and every abort.
+- [KILN-E2-29] The comparator reports the first diverging call's index with the expected and the actual outcome and what differs (outcome kind, response, abort reason or abort payload); equal calls with unequal call counts report the counts, and equal calls with unequal final states report both states. An oracle abort the family does not declare, or a declared name it does not know, converts to a structural abort and so diverges from any fold.
+- [KILN-E2-30] A fold that raises the quota ceiling by one is reported at the first refill that reaches the ceiling, with the oracle's and the fold's response.
+
+## Quota summary, scan and counter
+
+- [KILN-E2-31] Quota's `combine` is associative on values (not merely through `apply`): over atomic summaries of consecutive generated calls and over composite summaries of consecutive segments of `generate(256, seed)` for seeds 0 to 99.
+- [KILN-E2-32] `epsilon` (an `invalid_quantity` call, whichever kind) is an identity of `combine` on either side through `apply` on every state in `[0, 1000]`; the laws are checked semantically, never by comparing values.
+- [KILN-E2-33] The sequential scan derives each call's pre-state as `apply(P_{i-1}, x0)` from the prefix summaries and yields the serial fold's response for every call (full and partial grants and refills, both declared aborts) and its final state, on every prefix of the protocol's corpus.
+- [KILN-E2-34] On the protocol's prefix corpus the batch summary is 24 bytes, the largest combine of the balanced pairwise fold executes 5 counted operations (3 additions, 2 clamps; none for a single call) and applying the batch summary executes 2 (1 addition, 1 clamp), counted where they execute; `cost_report` gives these per protocol batch size.
+
+## Inventory summary, scan and counter
+
+- [KILN-E2-35] Inventory's `combine` is associative on values (not merely through `apply`) over atomic summaries of consecutive generated calls, composite summaries of consecutive segments of `generate(256, seed)` for seeds 0 to 99, and every shift mod 91; `combine` adds shifts mod 91 and `apply` translates `stock - 10` by the shift mod 91 on every stock in `[10, 100]`; `epsilon` (a stock check or a malformed order line) is an identity of `combine` on either side through `apply` on every stock in `[10, 100]`.
+- [KILN-E2-36] The sequential scan yields the serial fold's response for every call and its final state on every prefix of the protocol's corpus, on every initial stock for a call list covering each row of the outcome table, and on worked examples I1 to I3; on the corpus the batch summary is 1 byte, the largest combine of the balanced pairwise fold executes 2 counted operations (1 addition, 1 conditional subtraction; none for a single call) and applying the batch summary executes 3 (2 subtractions, 1 conditional addition), each counted once whether or not its condition fires.

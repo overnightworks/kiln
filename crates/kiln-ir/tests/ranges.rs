@@ -13,12 +13,12 @@ use std::collections::BTreeMap;
 
 use kiln_ir::{
     AbortReason, AccessKind, AccessTarget, AccessedColumns, Condition, Effect, Execution, Expr,
-    IntegerWidth, Outcome, OverflowReason, Row, Slot, Store, TableName, Terminal, Value,
+    IntegerWidth, Key, Outcome, OverflowReason, Row, Slot, Store, TableName, Terminal, Value,
 };
 use proptest::prelude::*;
 use support::{
-    call_under_test, column, columns_of_values, committed_response, parameter, run_ok,
-    single_function_program, table, text_parameter, typed_parameter,
+    call_under_test, column, columns_of_values, committed_response, literal_key, one_part,
+    parameter, run_ok, single_function_program, table, text_parameter, typed_parameter,
 };
 
 fn branch_on_slot_present(slot: Slot) -> Terminal {
@@ -36,7 +36,7 @@ fn branch_on_slot_present(slot: Slot) -> Terminal {
 }
 
 /// The keys of `execution`'s logged `kind` accesses on `table_name`, in log order.
-fn logged_keys(execution: &Execution, table_name: &str, kind: AccessKind) -> Vec<Value> {
+fn logged_keys(execution: &Execution, table_name: &str, kind: AccessKind) -> Vec<Key> {
     execution
         .access_log
         .iter()
@@ -51,25 +51,25 @@ fn logged_keys(execution: &Execution, table_name: &str, kind: AccessKind) -> Vec
 fn range_read(table_name: &str, start: i64, end: i64, bound: i64, into: Slot) -> Effect {
     Effect::ReadRange {
         table: table(table_name),
-        start: Expr::Literal(Value::Integer(start)),
-        end: Expr::Literal(Value::Integer(end)),
+        start: literal_key(start),
+        end: literal_key(end),
         bound: Expr::Literal(Value::Integer(bound)),
         into,
     }
 }
 
-/// A store whose table "t" holds one row per id, each carrying its own id as column "id".
+/// A store whose table "t" holds one row per id, keyed by it.
 fn rows_of_t(ids: &[i64]) -> Store {
     Store::containing(t_rows(ids))
 }
 
-fn t_rows(ids: &[i64]) -> impl Iterator<Item = (TableName, Value, Row)> + '_ {
+fn t_rows(ids: &[i64]) -> impl Iterator<Item = (TableName, Key, Row)> + '_ {
     ids.iter().map(|id| {
         (
             table("t"),
-            Value::Integer(*id),
+            one_part(*id),
             Row {
-                columns: columns_of_values([("id", Value::Integer(*id))]),
+                columns: BTreeMap::new(),
             },
         )
     })
@@ -82,7 +82,7 @@ fn visit_range(rows: &[i64], preexisting: &[i64], start: i64, end: i64) -> Execu
         t_rows(rows).chain(
             preexisting
                 .iter()
-                .map(|key| (table("visited"), Value::Integer(*key), Row::default())),
+                .map(|key| (table("visited"), one_part(*key), Row::default())),
         ),
     );
     let program = single_function_program(
@@ -94,10 +94,10 @@ fn visit_range(rows: &[i64], preexisting: &[i64], start: i64, end: i64) -> Execu
                 row: Slot(1),
                 body: vec![Effect::Insert {
                     table: table("visited"),
-                    key: Expr::Projection {
+                    key: vec![Expr::Projection {
                         slot: Slot(1),
                         column: column("id"),
-                    },
+                    }],
                     columns: BTreeMap::new(),
                 }],
             },
@@ -119,10 +119,10 @@ fn looped_program(terminal: Terminal) -> kiln_ir::Program {
                 row: Slot(1),
                 body: vec![Effect::Read {
                     table: table("t"),
-                    key: Expr::Projection {
+                    key: vec![Expr::Projection {
                         slot: Slot(1),
                         column: column("id"),
-                    },
+                    }],
                     into: Slot(2),
                 }],
             },
@@ -131,8 +131,8 @@ fn looped_program(terminal: Terminal) -> kiln_ir::Program {
     )
 }
 
-fn integers(keys: &[i64]) -> Vec<Value> {
-    keys.iter().copied().map(Value::Integer).collect()
+fn one_parts(keys: &[i64]) -> Vec<Key> {
+    keys.iter().copied().map(one_part).collect()
 }
 
 // --- an empty range reads as an empty, branchable sequence, the same as an absent point read
@@ -148,7 +148,7 @@ mod kiln_ir_11 {
             row_present in any::<bool>(),
         ) {
             let store = if row_present {
-                Store::containing([(table("t"), Value::Integer(key), Row::default())])
+                Store::containing([(table("t"), one_part(key), Row::default())])
             } else {
                 Store::empty()
             };
@@ -157,8 +157,8 @@ mod kiln_ir_11 {
                 vec![],
                 vec![Effect::ReadRange {
                     table: table("t"),
-                    start: Expr::Literal(Value::Integer(i64::MIN)),
-                    end: Expr::Literal(Value::Integer(i64::MAX)),
+                    start: literal_key(i64::MIN),
+                    end: literal_key(i64::MAX),
                     bound: Expr::Literal(Value::Integer(1)),
                     into: Slot(0),
                 }],
@@ -186,7 +186,7 @@ mod kiln_ir_12 {
             matched_count in 2i64..8,
         ) {
             let store = Store::containing(
-                (0..matched_count).map(|key| (table("matched"), Value::Integer(key), Row::default())),
+                (0..matched_count).map(|key| (table("matched"), one_part(key), Row::default())),
             );
             let bound = matched_count - 1; // one less than what the range actually matches
 
@@ -195,13 +195,13 @@ mod kiln_ir_12 {
                 vec![
                     Effect::Insert {
                         table: table("other"),
-                        key: Expr::Literal(Value::Integer(0)),
+                        key: literal_key(0),
                         columns: BTreeMap::new(),
                     },
                     Effect::ReadRange {
                         table: table("matched"),
-                        start: Expr::Literal(Value::Integer(0)),
-                        end: Expr::Literal(Value::Integer(matched_count - 1)),
+                        start: literal_key(0),
+                        end: literal_key(matched_count - 1),
                         bound: Expr::Literal(Value::Integer(bound)),
                         into: Slot(0),
                     },
@@ -259,15 +259,15 @@ mod kiln_ir_36 {
     #[test]
     fn access_log_records_a_range_reads_bounds_including_when_the_range_is_empty() {
         for store in [
-            Store::containing([(table("t"), Value::Integer(5), Row::default())]),
+            Store::containing([(table("t"), one_part(5), Row::default())]),
             Store::empty(),
         ] {
             let program = single_function_program(
                 vec![],
                 vec![Effect::ReadRange {
                     table: table("t"),
-                    start: Expr::Literal(Value::Integer(0)),
-                    end: Expr::Literal(Value::Integer(10)),
+                    start: literal_key(0),
+                    end: literal_key(10),
                     bound: Expr::Literal(Value::Integer(10)),
                     into: Slot(0),
                 }],
@@ -283,8 +283,8 @@ mod kiln_ir_36 {
             assert_eq!(
                 entry.target,
                 AccessTarget::Range {
-                    start: Value::Integer(0),
-                    end: Value::Integer(10),
+                    start: one_part(0),
+                    end: one_part(10),
                 }
             );
             assert_eq!(entry.columns, AccessedColumns::EntireRow);
@@ -307,11 +307,11 @@ mod kiln_ir_13 {
         ) {
             let mut rows = vec![(
                 table("source"),
-                Value::Integer(source_key),
+                one_part(source_key),
                 Row { columns: columns_of_values([("linked_key", Value::Integer(linked_key))]) },
             )];
             if linked_row_present {
-                rows.push((table("linked"), Value::Integer(linked_key), Row::default()));
+                rows.push((table("linked"), one_part(linked_key), Row::default()));
             }
             let store = Store::containing(rows);
 
@@ -320,12 +320,12 @@ mod kiln_ir_13 {
                 vec![
                     Effect::Read {
                         table: table("source"),
-                        key: Expr::Literal(Value::Integer(source_key)),
+                        key: literal_key(source_key),
                         into: Slot(0),
                     },
                     Effect::Read {
                         table: table("linked"),
-                        key: Expr::Projection { slot: Slot(0), column: column("linked_key") },
+                        key: vec![Expr::Projection { slot: Slot(0), column: column("linked_key") }],
                         into: Slot(1),
                     },
                 ],
@@ -442,8 +442,8 @@ mod kiln_ir_16 {
             vec![],
             vec![Effect::ReadRange {
                 table: table("t"),
-                start: Expr::Literal(Value::Integer(0)),
-                end: Expr::Literal(Value::Integer(10)),
+                start: literal_key(0),
+                end: literal_key(10),
                 bound: Expr::Literal(Value::Text("not a number".to_owned())),
                 into: Slot(0),
             }],
@@ -471,13 +471,13 @@ mod kiln_ir_15 {
 
     #[test]
     fn projecting_from_a_range_bound_slot_outside_iteration_aborts_with_a_typed_reason() {
-        let store = Store::containing([(table("t"), Value::Integer(5), Row::default())]);
+        let store = Store::containing([(table("t"), one_part(5), Row::default())]);
         let program = single_function_program(
             vec![],
             vec![Effect::ReadRange {
                 table: table("t"),
-                start: Expr::Literal(Value::Integer(0)),
-                end: Expr::Literal(Value::Integer(10)),
+                start: literal_key(0),
+                end: literal_key(10),
                 bound: Expr::Literal(Value::Integer(10)),
                 into: Slot(0),
             }],
@@ -544,18 +544,17 @@ mod kiln_ir_14 {
                 .map(|(id, customer)| {
                     (
                         table("orders"),
-                        Value::Integer(id),
+                        one_part(id),
                         Row {
-                            columns: columns_of_values([
-                                ("id", Value::Integer(id)),
-                                ("customer", Value::Integer(customer)),
-                            ]),
+                            columns: columns_of_values([("customer", Value::Integer(customer))]),
                         },
                     )
                 })
-                .chain(orders.into_iter().map(|(_, customer)| {
-                    (table("customers"), Value::Integer(customer), Row::default())
-                })),
+                .chain(
+                    orders.into_iter().map(|(_, customer)| {
+                        (table("customers"), one_part(customer), Row::default())
+                    }),
+                ),
         );
 
         let program = single_function_program(
@@ -563,8 +562,8 @@ mod kiln_ir_14 {
             vec![
                 Effect::ReadRange {
                     table: table("orders"),
-                    start: Expr::Literal(Value::Integer(1)),
-                    end: Expr::Literal(Value::Integer(3)),
+                    start: literal_key(1),
+                    end: literal_key(3),
                     bound: Expr::Literal(Value::Integer(10)),
                     into: Slot(0),
                 },
@@ -574,18 +573,18 @@ mod kiln_ir_14 {
                     body: vec![
                         Effect::Read {
                             table: table("customers"),
-                            key: Expr::Projection {
+                            key: vec![Expr::Projection {
                                 slot: Slot(1),
                                 column: column("customer"),
-                            },
+                            }],
                             into: Slot(2),
                         },
                         Effect::Insert {
                             table: table("visited"),
-                            key: Expr::Projection {
+                            key: vec![Expr::Projection {
                                 slot: Slot(1),
                                 column: column("id"),
-                            },
+                            }],
                             columns: BTreeMap::new(),
                         },
                     ],
@@ -603,7 +602,7 @@ mod kiln_ir_14 {
             assert!(
                 execution
                     .store
-                    .row(&table("visited"), &Value::Integer(id))
+                    .row(&table("visited"), &one_part(id))
                     .is_some(),
                 "order {id} was not visited"
             );
@@ -613,11 +612,11 @@ mod kiln_ir_14 {
         // key order — the same order `rows_in_range` returns its matches in.
         assert_eq!(
             logged_keys(&execution, "customers", AccessKind::PointRead),
-            vec![Value::Integer(10), Value::Integer(20), Value::Integer(30)]
+            one_parts(&[10, 20, 30])
         );
         assert_eq!(
             logged_keys(&execution, "visited", AccessKind::Insert),
-            vec![Value::Integer(1), Value::Integer(2), Value::Integer(3)]
+            one_parts(&[1, 2, 3])
         );
     }
 
@@ -630,13 +629,13 @@ mod kiln_ir_14 {
             Outcome::Aborted {
                 reason: AbortReason::DuplicateKey {
                     table: table("visited"),
-                    key: Value::Integer(2)
+                    key: one_part(2)
                 },
             }
         );
         assert!(execution
             .store
-            .row(&table("visited"), &Value::Integer(1))
+            .row(&table("visited"), &one_part(1))
             .is_none());
     }
 }
@@ -658,7 +657,7 @@ mod kiln_ir_09 {
 
             assert_eq!(
                 logged_keys(&execution, "visited", AccessKind::Insert),
-                integers(&expected)
+                one_parts(&expected)
             );
         }
     }

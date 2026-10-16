@@ -7,11 +7,11 @@ mod support;
 use kiln_ir::{
     AbortName, AbortReason, ArithmeticOp, Block, Call, CheckConstraint, Column, ColumnType,
     Comparison, Condition, Effect, Execution, Expr, Function, FunctionName, IntegerWidth, Outcome,
-    ParameterName, Program, Schema, Slot, Store, Table, Terminal, UniqueConstraint, Value,
+    ParameterName, Program, Schema, Slot, Store, Terminal, UniqueConstraint, Value,
 };
 use support::{
-    column, columns_of, integer, replayed, store_of_rows, table, text, text_parameter,
-    typed_parameter,
+    column, columns_of, integer, keyed_by_id, one_part, replayed, store_of_rows, table, text,
+    text_parameter, typed_parameter,
 };
 
 fn named_call(function: &str, args: Vec<Value>) -> Call {
@@ -91,17 +91,14 @@ mod kiln_ir_61 {
 
     fn ticket_program() -> Program {
         let schema = Schema {
-            tables: vec![Table {
-                name: table("events"),
-                columns: vec![integer_column("sold")],
-            }],
+            tables: vec![keyed_by_id("events", vec![integer_column("sold")])],
             check_constraints: vec![sold_at_most_quota()],
             ..Default::default()
         };
         let buy = Block {
             effects: vec![Effect::Read {
                 table: table("events"),
-                key: argument("event"),
+                key: vec![argument("event")],
                 into: Slot(0),
             }],
             terminal: Terminal::Branch {
@@ -109,7 +106,7 @@ mod kiln_ir_61 {
                 when_present: Box::new(Block {
                     effects: vec![Effect::Update {
                         table: table("events"),
-                        key: argument("event"),
+                        key: vec![argument("event")],
                         columns: columns_of([("sold", sold_plus_one())]),
                     }],
                     terminal: Terminal::Return(sold_plus_one()),
@@ -155,7 +152,7 @@ mod kiln_ir_61 {
                 Outcome::Aborted {
                     reason: AbortReason::CheckViolation {
                         constraint: sold_at_most_quota(),
-                        key: integer(1),
+                        key: one_part(1),
                     }
                 },
                 committed_with(1),
@@ -174,26 +171,26 @@ mod kiln_ir_62 {
     pub(super) fn email_unique() -> UniqueConstraint {
         UniqueConstraint {
             table: table("users"),
-            column: column("email"),
+            columns: vec![column("email")],
         }
     }
 
     pub(super) fn sign_up_program() -> Program {
         let schema = Schema {
-            tables: vec![Table {
-                name: table("users"),
-                columns: vec![Column {
+            tables: vec![keyed_by_id(
+                "users",
+                vec![Column {
                     name: column("email"),
                     kind: ColumnType::Text,
                 }],
-            }],
+            )],
             unique_constraints: vec![email_unique()],
             ..Default::default()
         };
         let sign_up = Block {
             effects: vec![Effect::Insert {
                 table: table("users"),
-                key: argument("id"),
+                key: vec![argument("id")],
                 columns: columns_of([("email", argument("email"))]),
             }],
             terminal: Terminal::Return(argument("id")),
@@ -232,7 +229,7 @@ mod kiln_ir_62 {
                 Outcome::Aborted {
                     reason: AbortReason::UniqueViolation {
                         constraint: email_unique(),
-                        value: text("ada@example.org"),
+                        tuple: vec![text("ada@example.org")],
                     }
                 },
                 committed_with(3),
@@ -253,8 +250,8 @@ mod kiln_ir_63 {
     fn others_in(start: Expr, end: Expr, into: Slot) -> Effect {
         Effect::ReadRange {
             table: table("on_call"),
-            start,
-            end,
+            start: vec![start],
+            end: vec![end],
             bound: Expr::Literal(integer(100)),
             into,
         }
@@ -272,7 +269,7 @@ mod kiln_ir_63 {
         Block {
             effects: vec![Effect::Delete {
                 table: table("on_call"),
-                key: argument("doctor"),
+                key: vec![argument("doctor")],
             }],
             terminal: Terminal::Return(argument("doctor")),
         }
@@ -315,7 +312,7 @@ mod kiln_ir_63 {
         Block {
             effects: vec![Effect::Insert {
                 table: table("on_call"),
-                key: argument("doctor"),
+                key: vec![argument("doctor")],
                 columns: Default::default(),
             }],
             terminal: Terminal::Return(argument("doctor")),
@@ -326,10 +323,7 @@ mod kiln_ir_63 {
         let doctor = || vec![typed_parameter("doctor", IntegerWidth::I64)];
         Program {
             schema: Schema {
-                tables: vec![Table {
-                    name: table("on_call"),
-                    columns: vec![],
-                }],
+                tables: vec![keyed_by_id("on_call", vec![])],
                 ..Default::default()
             },
             functions: vec![
@@ -406,17 +400,17 @@ mod kiln_ir_64 {
             effects: vec![
                 Effect::Read {
                     table: table("accounts"),
-                    key: argument("from"),
+                    key: vec![argument("from")],
                     into: Slot(0),
                 },
                 Effect::Read {
                     table: table("accounts"),
-                    key: argument("to"),
+                    key: vec![argument("to")],
                     into: Slot(1),
                 },
                 Effect::Update {
                     table: table("accounts"),
-                    key: argument("from"),
+                    key: vec![argument("from")],
                     columns: columns_of([(
                         "balance",
                         balance_moved(Slot(0), ArithmeticOp::Subtract),
@@ -424,7 +418,7 @@ mod kiln_ir_64 {
                 },
                 Effect::Update {
                     table: table("accounts"),
-                    key: argument("to"),
+                    key: vec![argument("to")],
                     columns: columns_of([("balance", balance_moved(Slot(1), ArithmeticOp::Add))]),
                 },
             ],
@@ -443,10 +437,10 @@ mod kiln_ir_64 {
 
     fn bank_with_sign_up() -> Program {
         let mut program = sign_up_program();
-        program.schema.tables.push(Table {
-            name: table("accounts"),
-            columns: vec![integer_column("balance")],
-        });
+        program
+            .schema
+            .tables
+            .push(keyed_by_id("accounts", vec![integer_column("balance")]));
         program.functions.push(transfer());
         program
     }
@@ -468,7 +462,7 @@ mod kiln_ir_64 {
                 Outcome::Aborted {
                     reason: AbortReason::UniqueViolation {
                         constraint: email_unique(),
-                        value: text("ada@example.org"),
+                        tuple: vec![text("ada@example.org")],
                     }
                 },
             ]

@@ -1,0 +1,5 @@
+source_commit = "d2349459ec84170a3b1c236e85e3e862b764cc3c"
+binary_sha256 = "3ef35259c13aaf4b085f7ab43f3b6f7ee7ca730b80bd01dece4363ef0fc3fee8"
+passthrough_binary_sha256 = "76985be0d71869468456f8ae19c470f21fe42072616d5e4c17ffc5724024b232"
+rustc_version = "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+sqlite_version = "3.53.2"

@@ -1,15 +1,29 @@
 //! Quota allocation (inputs.md section 2): one hot row whose partial grants and
 //! capped refills make both responses and state order dependent.
 
+mod fold;
 mod generator;
 mod program;
+mod summary;
 
-use kiln_ir::{Call, Store};
+use kiln_ir::{Call, Program, Store};
 
+use crate::oracle::{calls_of, FamilyBatch};
 use crate::rows::{call, integer_at, integer_row, store_of};
+use crate::run::declared_aborts;
 
+pub use fold::serial_fold;
 pub use generator::generate;
 pub use program::program;
+pub use summary::{cost_report, QuotaSummary, SizeReport};
+
+declared_aborts! {
+    QuotaAbort {
+        InvalidQuantity => "invalid_quantity",
+        QuotaExhausted => "quota_exhausted",
+        QuotaFull => "quota_full",
+    }
+}
 
 const QUOTA_TABLE: &str = "quota";
 const REMAINING_COLUMN: &str = "remaining";
@@ -60,4 +74,29 @@ impl From<QuotaCall> for Call {
 pub struct Batch {
     pub initial: QuotaState,
     pub calls: Vec<QuotaCall>,
+}
+
+impl FamilyBatch for Batch {
+    type Abort = QuotaAbort;
+    type State = QuotaState;
+
+    fn program() -> Program {
+        program()
+    }
+
+    fn initial_state(&self) -> QuotaState {
+        self.initial
+    }
+
+    fn store_of(state: QuotaState) -> Store {
+        state.to_store()
+    }
+
+    fn state_of(store: &Store) -> QuotaState {
+        QuotaState::from_store(store)
+    }
+
+    fn calls(&self) -> Vec<Call> {
+        calls_of(&self.calls)
+    }
 }

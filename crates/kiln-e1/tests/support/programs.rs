@@ -8,8 +8,9 @@ use kiln_e1::{
     UnknownCause,
 };
 use kiln_ir::{
-    ArithmeticOp, Block, ColumnName, Condition, Effect, Expr, ForeignKey, Function, FunctionName,
-    Index, IndexName, ParameterName, Program, Relation, Schema, Slot, TableName, Terminal, Value,
+    ArithmeticOp, Block, Column, ColumnName, ColumnType, Condition, Effect, Expr, ForeignKey,
+    Function, FunctionName, Index, IndexName, IntegerWidth, KeyDeclaration, ParameterName, Program,
+    Relation, Schema, Slot, Table, TableName, Terminal, Value,
 };
 
 pub const FUNCTION: &str = "f";
@@ -37,11 +38,45 @@ pub fn column_of(slot: u32, column: &str) -> Expr {
     }
 }
 
+/// The key column of every table of the shared schema except [`LINES`].
+pub const KEY_COLUMN: &str = "id";
+
+/// The shared schema's table keyed by three columns.
+pub const LINES: &str = "lines";
+
+/// A table keyed by the same column names as [`LINES`].
+pub const ARCHIVE: &str = "lines_archive";
+
+/// A table keyed by [`KEY_COLUMN`] whose other columns carry the names of
+/// [`LINE_KEY`]: a row of it names a line without being one.
+pub const LINE_REFS: &str = "line_refs";
+
+/// A table keyed by [`KEY_COLUMN`] whose rows name a line of [`LINES`] by a
+/// declared foreign key over the columns of [`LINE_KEY`].
+pub const SHIPMENTS: &str = "shipments";
+
+/// A table keyed by `(w_id, item_id)`, which a line names by its
+/// `(customer_id, item_id)` through a declared foreign key.
+pub const INVENTORY: &str = "inventory";
+
+/// The key of [`LINES`] in declared order.
+pub const LINE_KEY: [&str; 3] = ["w_id", "d_id", "o_id"];
+
 pub fn key_of(slot: u32) -> Expr {
-    Expr::PrimaryKey { slot: Slot(slot) }
+    column_of(slot, KEY_COLUMN)
+}
+
+/// The components of a key of [`LINES`] projected from the row in `slot`, in
+/// declared order.
+pub fn line_key_of(slot: u32) -> Vec<Expr> {
+    LINE_KEY.map(|column| column_of(slot, column)).to_vec()
 }
 
 pub fn read(table_name: &str, key: Expr, into: u32) -> Effect {
+    read_at(table_name, vec![key], into)
+}
+
+pub fn read_at(table_name: &str, key: Vec<Expr>, into: u32) -> Effect {
     Effect::Read {
         table: table(table_name),
         key,
@@ -50,6 +85,10 @@ pub fn read(table_name: &str, key: Expr, into: u32) -> Effect {
 }
 
 pub fn insert(table_name: &str, key: Expr) -> Effect {
+    insert_at(table_name, vec![key])
+}
+
+pub fn insert_at(table_name: &str, key: Vec<Expr>) -> Effect {
     Effect::Insert {
         table: table(table_name),
         key,
@@ -57,33 +96,80 @@ pub fn insert(table_name: &str, key: Expr) -> Effect {
     }
 }
 
+pub fn insert_writing(table_name: &str, key: Expr, columns: &[(&str, Expr)]) -> Effect {
+    Effect::Insert {
+        table: table(table_name),
+        key: vec![key],
+        columns: written(columns),
+    }
+}
+
 pub fn update(table_name: &str, key: Expr, columns: &[(&str, Expr)]) -> Effect {
+    update_at(table_name, vec![key], columns)
+}
+
+pub fn update_at(table_name: &str, key: Vec<Expr>, columns: &[(&str, Expr)]) -> Effect {
     Effect::Update {
         table: table(table_name),
         key,
-        columns: columns
-            .iter()
-            .map(|(name, value)| (ColumnName((*name).to_owned()), value.clone()))
-            .collect(),
+        columns: written(columns),
+    }
+}
+
+fn written(columns: &[(&str, Expr)]) -> BTreeMap<ColumnName, Expr> {
+    columns
+        .iter()
+        .map(|(name, value)| (ColumnName((*name).to_owned()), value.clone()))
+        .collect()
+}
+
+pub fn delete(table_name: &str, key: Expr) -> Effect {
+    Effect::Delete {
+        table: table(table_name),
+        key: vec![key],
     }
 }
 
 pub fn read_range(table_name: &str, start: Expr, end: Expr, into: u32) -> Effect {
+    read_range_at(table_name, vec![start], vec![end], into)
+}
+
+pub fn read_range_at(table_name: &str, start: Vec<Expr>, end: Vec<Expr>, into: u32) -> Effect {
+    read_range_bounded(table_name, start, end, literal(10), into)
+}
+
+pub fn read_range_bounded(
+    table_name: &str,
+    start: Vec<Expr>,
+    end: Vec<Expr>,
+    bound: Expr,
+    into: u32,
+) -> Effect {
     Effect::ReadRange {
         table: table(table_name),
         start,
         end,
-        bound: literal(10),
+        bound,
         into: Slot(into),
     }
 }
 
 pub fn read_index(index: &str, start: Vec<Expr>, end: Vec<Expr>, into: u32) -> Effect {
+    read_index_bounded(index, start, end, literal(10), into)
+}
+
+pub fn read_index_bounded(
+    index: &str,
+    start: Vec<Expr>,
+    end: Vec<Expr>,
+    bound: Expr,
+    into: u32,
+) -> Effect {
     Effect::ReadIndexRange {
         index: IndexName(index.to_owned()),
         start,
         end,
-        bound: literal(10),
+        bound,
         into: Slot(into),
     }
 }
@@ -139,12 +225,43 @@ pub fn branch_on_equality(
     }
 }
 
+fn integer_column(name: &str) -> Column {
+    Column {
+        name: ColumnName(name.to_owned()),
+        kind: ColumnType::Integer {
+            width: IntegerWidth::I64,
+            domain: None,
+        },
+    }
+}
+
+fn keyed_table(name: &str, key: &[&str], other_columns: &[&str]) -> Table {
+    Table {
+        name: table(name),
+        columns: key
+            .iter()
+            .chain(other_columns)
+            .map(|column| integer_column(column))
+            .collect(),
+        key: KeyDeclaration::Columns(
+            key.iter()
+                .map(|column| ColumnName((*column).to_owned()))
+                .collect(),
+        ),
+    }
+}
+
 /// Orders reference customers and products, customers reference regions; the
-/// declared indexes are per customer and per tenant.
+/// declared indexes are per customer and per tenant. Every table is keyed by
+/// [`KEY_COLUMN`] but [`LINES`] and [`ARCHIVE`], which have the three-column
+/// [`LINE_KEY`] and are indexed by item.
 pub fn schema() -> Schema {
-    let foreign_key = |from: &str, column: &str, to: &str| ForeignKey {
+    let foreign_key = |from: &str, columns: &[&str], to: &str| ForeignKey {
         table: table(from),
-        column: ColumnName(column.to_owned()),
+        columns: columns
+            .iter()
+            .map(|column| ColumnName((*column).to_owned()))
+            .collect(),
         references: table(to),
     };
     let index = |name: &str, on: &str, columns: &[&str]| Index {
@@ -156,11 +273,37 @@ pub fn schema() -> Schema {
             .collect(),
         unique: false,
     };
+    let single_key =
+        |name: &str, other_columns: &[&str]| keyed_table(name, &[KEY_COLUMN], other_columns);
     Schema {
+        tables: vec![
+            single_key("orders", &["customer_id", "product_id", "tenant_id"]),
+            single_key("customers", &["region_id", "tenant_id"]),
+            single_key("products", &[]),
+            single_key("regions", &[]),
+            single_key("accounts", &[]),
+            single_key("audit", &[]),
+            single_key("ledger", &[]),
+            single_key("log", &[]),
+            single_key("districts", &[]),
+            single_key("order_lines", &[]),
+            single_key("a", &[]),
+            single_key("b", &[]),
+            single_key("shared", &[]),
+            single_key(LINE_REFS, &LINE_KEY),
+            keyed_table(LINES, &LINE_KEY, &["customer_id", "item_id"]),
+            keyed_table(ARCHIVE, &LINE_KEY, &["item_id"]),
+            keyed_table(SHIPMENTS, &[KEY_COLUMN], &LINE_KEY),
+            keyed_table(INVENTORY, &["w_id", "item_id"], &[]),
+        ],
         foreign_keys: vec![
-            foreign_key("orders", "customer_id", "customers"),
-            foreign_key("orders", "product_id", "products"),
-            foreign_key("customers", "region_id", "regions"),
+            foreign_key("orders", &["customer_id"], "customers"),
+            foreign_key("orders", &["product_id"], "products"),
+            foreign_key("customers", &["region_id"], "regions"),
+            foreign_key(LINES, &["customer_id"], "customers"),
+            foreign_key(LINES, &["w_id", "d_id", "customer_id"], ARCHIVE),
+            foreign_key(LINES, &["customer_id", "item_id"], INVENTORY),
+            foreign_key(SHIPMENTS, &LINE_KEY, LINES),
         ],
         indexes: vec![
             index("orders_by_customer", "orders", &["customer_id"]),
@@ -170,6 +313,8 @@ pub fn schema() -> Schema {
                 "customers",
                 &["tenant_id", "region_id"],
             ),
+            index("lines_by_item", LINES, &["item_id"]),
+            index("archive_by_item", ARCHIVE, &["item_id"]),
         ],
         ..Schema::default()
     }

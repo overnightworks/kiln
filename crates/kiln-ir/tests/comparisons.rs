@@ -8,7 +8,7 @@ use kiln_ir::{
     Terminal, Value,
 };
 use support::{
-    aborted_reason, call_under_test, column, committed_response, integer, run_ok,
+    aborted_reason, call_under_test, column, committed_response, integer, literal_key, run_ok,
     single_function_program, store_of_rows, table, text, typed_parameter,
 };
 
@@ -115,7 +115,7 @@ mod kiln_ir_73 {
         let store = store_of_rows(&[("t", 1, vec![("status", integer(7))])]);
         let read = Effect::Read {
             table: table("t"),
-            key: literal(integer(1)),
+            key: literal_key(1),
             into: Slot(0),
         };
         let projected = Expr::Projection {
@@ -127,16 +127,19 @@ mod kiln_ir_73 {
     }
 
     #[test]
-    fn arithmetic_and_primary_keys_are_comparable_operands() {
+    fn arithmetic_and_key_columns_are_comparable_operands() {
         let store = store_of_rows(&[("t", 4, vec![])]);
         let read = Effect::Read {
             table: table("t"),
-            key: literal(integer(4)),
+            key: literal_key(4),
             into: Slot(0),
         };
         let key_plus_one = Expr::Arithmetic(
             ArithmeticOp::Add,
-            Box::new(Expr::PrimaryKey { slot: Slot(0) }),
+            Box::new(Expr::Projection {
+                slot: Slot(0),
+                column: column("id"),
+            }),
             Box::new(literal(integer(1))),
         );
         let terminal = compare(key_plus_one, Relation::Equal, literal(integer(5)));
@@ -195,7 +198,7 @@ mod kiln_ir_75 {
         for (operand, reason) in cases {
             let read = Effect::Read {
                 table: table("t"),
-                key: literal(integer(9)),
+                key: literal_key(9),
                 into: Slot(0),
             };
             let terminal = compare(operand, Relation::Equal, literal(integer(0)));

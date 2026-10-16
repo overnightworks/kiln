@@ -14,6 +14,15 @@ mod branches;
 #[path = "footprint/comparisons.rs"]
 mod comparisons;
 
+#[path = "footprint/iterations.rs"]
+mod iterations;
+
+#[path = "footprint/keys.rs"]
+mod keys;
+
+#[path = "footprint/values.rs"]
+mod values;
+
 mod kiln_e1_18 {
     use super::*;
 
@@ -374,6 +383,31 @@ mod kiln_e1_24 {
     }
 
     #[test]
+    fn accesses_through_the_rows_of_an_undeclared_index_leave_the_undeclared_index_as_the_reason() {
+        let accesses = [
+            read("orders", column_of(1, "customer_id"), 2),
+            read("orders", key_of(1), 2),
+            insert("audit", column_of(1, "customer_id")),
+            update("orders", key_of(1), &[]),
+        ];
+        for access in accesses {
+            let body = returns(vec![
+                read_index(
+                    "orders_by_note",
+                    vec![param("note")],
+                    vec![param("note")],
+                    0,
+                ),
+                iterate(0, 1, vec![access]),
+            ]);
+            assert_unknown(
+                body,
+                UnknownCause::UndeclaredIndex(IndexName("orders_by_note".to_owned())),
+            );
+        }
+    }
+
+    #[test]
     fn a_primary_key_range_is_no_index_and_its_own_rows_cost_no_hop() {
         let body = returns(vec![
             read_range("orders", param("low"), param("high"), 0),
@@ -494,8 +528,14 @@ mod kiln_e1_25 {
     fn a_read_depending_only_on_a_covered_range_is_no_chain() {
         let body = returns(vec![
             read_range("orders", param("low"), param("high"), 0),
-            iterate(0, 1, vec![read("orders", key_of(1), 2)]),
-            read("customers", column_of(2, "customer_id"), 3),
+            iterate(
+                0,
+                1,
+                vec![
+                    read("orders", key_of(1), 2),
+                    read("customers", column_of(2, "customer_id"), 3),
+                ],
+            ),
             read("orders", param("other_order_id"), 4),
             read("products", column_of(4, "product_id"), 5),
         ]);
@@ -603,6 +643,45 @@ mod kiln_e1_27 {
             Err(ClassifyError::UnboundSlot {
                 slot: Slot(4),
                 at: "f/body/effects[0]".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn a_key_projecting_a_slot_an_ended_iteration_released_ends_the_path_before_its_access() {
+        let body = returns(vec![
+            read_range("orders", param("low"), param("high"), 0),
+            iterate(0, 1, vec![read("orders", key_of(1), 2)]),
+            read("customers", column_of(2, "customer_id"), 3),
+            update("audit", param("id"), &[]),
+        ]);
+        assert_eq!(category_of(body.clone()), STATIC);
+        assert_eq!(
+            evidence_of(body),
+            [
+                "f/body/effects[0]",
+                "f/body/effects[1]/body/effects[0]",
+                "f/body/effects[2]"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_iteration_over_a_slot_an_ended_iteration_released_is_reported() {
+        let body = returns(vec![
+            read_range("orders", param("low"), param("high"), 0),
+            iterate(
+                0,
+                1,
+                vec![read_range("accounts", param("low"), param("high"), 2)],
+            ),
+            iterate(2, 3, vec![]),
+        ]);
+        assert_eq!(
+            classify_function(&program(body), &FunctionName(FUNCTION.to_owned())),
+            Err(ClassifyError::UnboundSlot {
+                slot: Slot(2),
+                at: "f/body/effects[2]".to_owned()
             })
         );
     }

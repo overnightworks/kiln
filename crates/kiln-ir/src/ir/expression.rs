@@ -16,6 +16,7 @@ pub struct Slot(pub u32);
 pub enum ArithmeticOp {
     Add,
     Subtract,
+    Multiply,
 }
 
 /// A value computable without touching the store: one of the call's own
@@ -35,7 +36,8 @@ pub enum ArithmeticOp {
 /// [`AbortReason::ProjectionSourceAbsent`](crate::evaluator::AbortReason::ProjectionSourceAbsent),
 /// since which row a compiled program ends up projecting from is a fact
 /// about the data it ran against, not something `run` can rule out ahead of
-/// time.
+/// time. A key column projects the matching component of the row's key: the
+/// key a point read used, or the store key of a range or index row (D8).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Literal(Value),
@@ -44,13 +46,15 @@ pub enum Expr {
         slot: Slot,
         column: ColumnName,
     },
-    /// The primary key of the row bound to `slot`: the key a point read
-    /// used, or the store key of a range or index row. Resolves like a
-    /// projection from an absent slot when no row is bound.
-    PrimaryKey {
-        slot: Slot,
-    },
     Arithmetic(ArithmeticOp, Box<Expr>, Box<Expr>),
+    /// Evaluates `condition`, then only the chosen arm (`docs/concept.md`
+    /// §2.2 D9, "Values"): a failing projection in the other arm never runs
+    /// and so never aborts.
+    Conditional {
+        condition: Box<Condition>,
+        when_true: Box<Expr>,
+        when_false: Box<Expr>,
+    },
 }
 
 /// How a [`Condition::Compare`] relates its left operand to its right one.
@@ -97,8 +101,8 @@ impl Relation {
 ///
 /// `Compare` holds when `left` stands in `relation` to `right` (§2.2 D6,
 /// comparison conditions). Whether it depends on the store is visible from
-/// its operands: one without a projection or primary key is decided by the
-/// call's arguments alone.
+/// its operands: one without a projection is decided by the call's arguments
+/// alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Condition {
     RowPresent(Slot),

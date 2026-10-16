@@ -1,7 +1,10 @@
 //! Row keys and integer rows. The one place that spells how this crate keys
 //! a row, so a change of the IR's key type is local to this file.
 
-use kiln_ir::{Call, ColumnName, Expr, FunctionName, Row, Store, TableName, Value};
+use kiln_ir::{
+    Call, Column, ColumnName, ColumnType, Expr, FunctionName, IntegerWidth, Key, KeyDeclaration,
+    Row, Store, TableName, Value,
+};
 
 pub(crate) fn table(name: &str) -> TableName {
     TableName(name.to_owned())
@@ -11,12 +14,29 @@ pub(crate) fn column(name: &str) -> ColumnName {
     ColumnName(name.to_owned())
 }
 
-fn key(index: i64) -> Value {
-    Value::Integer(index)
+const KEY_COLUMN: &str = "key";
+
+/// The one integer column every table of this crate is keyed by.
+pub(crate) fn key_column() -> Column {
+    Column {
+        name: column(KEY_COLUMN),
+        kind: ColumnType::Integer {
+            width: IntegerWidth::I64,
+            domain: None,
+        },
+    }
 }
 
-pub(crate) fn key_literal(index: i64) -> Expr {
-    Expr::Literal(key(index))
+pub(crate) fn key_declaration() -> KeyDeclaration {
+    KeyDeclaration::Columns(vec![column(KEY_COLUMN)])
+}
+
+fn key(index: i64) -> Key {
+    Key(vec![Value::Integer(index)])
+}
+
+pub(crate) fn key_literal(index: i64) -> Vec<Expr> {
+    vec![Expr::Literal(Value::Integer(index))]
 }
 
 pub(crate) fn integer_row(columns: &[(&str, i64)]) -> Row {

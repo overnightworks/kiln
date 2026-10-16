@@ -1,6 +1,6 @@
 use std::fmt;
 
-use kiln_ir::{ColumnName, IndexName, TableName};
+use kiln_ir::{ColumnName, IndexName, Slot, TableName};
 
 /// Why a function's footprint is none of static, one-hop or domain-bounded.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -26,9 +26,19 @@ pub enum UnknownCause {
     /// A key of `table` is arithmetic over a read result, which no foreign key
     /// or range identifies.
     KeyComputedFromRead { table: TableName },
+    /// A key of `table` has a read-derived component, and the key as a whole
+    /// is no row of a range over `table` and no declared foreign key's target.
+    KeyNotIdentified { table: TableName },
     /// The outcome of the read at `selector` changes which targets the
     /// function accesses, which no index or foreign key identifies (Q3).
     DataSelectedTargets { selector: String },
+    /// A conditional value whose condition the path does not decide aborts on
+    /// one arm and not on the other, so the data decides whether the call goes
+    /// on and with it which targets it accesses.
+    ConditionalAbortsOnOneArm,
+    /// An iteration's body uses `slot` before binding it and also binds or
+    /// releases it, so a later iteration reads what an earlier one left there.
+    SlotCarriedAcrossIterations { slot: Slot },
 }
 
 impl fmt::Display for UnknownCause {
@@ -69,9 +79,25 @@ impl fmt::Display for UnknownCause {
                 "a key of {} is arithmetic over a read result",
                 table.0
             ),
+            Self::KeyNotIdentified { table } => write!(
+                formatter,
+                "a key of {} has read-derived components that no declared foreign key or \
+                 range of {} identifies",
+                table.0, table.0
+            ),
             Self::DataSelectedTargets { selector } => write!(
                 formatter,
                 "the read at {selector} selects between paths that reach different targets"
+            ),
+            Self::ConditionalAbortsOnOneArm => formatter.write_str(
+                "a conditional value aborts on one arm only, so its data decides whether the \
+                 call goes on",
+            ),
+            Self::SlotCarriedAcrossIterations { slot } => write!(
+                formatter,
+                "an iteration's body uses slot {} before binding it and binds or releases it \
+                 too, so a later iteration reads what an earlier one left there",
+                slot.0
             ),
         }
     }

@@ -239,6 +239,33 @@ passthrough!(shim_shm_unmap, xShmUnmap, (delete_flag: c_int) -> c_int);
 passthrough!(shim_fetch, xFetch, (offset: ffi::sqlite3_int64, amt: c_int, out: *mut *mut c_void) -> c_int);
 passthrough!(shim_unfetch, xUnfetch, (offset: ffi::sqlite3_int64, buf: *mut c_void) -> c_int);
 
+/// Times `body`'s call around the real `xWrite`/`xSync` method with
+/// `CLOCK_MONOTONIC`, unless the `passthrough_shim` feature is enabled, in
+/// which case `body` still runs through the exact same call site but the
+/// two `clock_gettime` calls around it are skipped and the recorded
+/// elapsed time is a compile-time constant zero (protocol §5's
+/// overhead-acceptance bound: "A second, identical build with a
+/// passthrough shim (no timer calls) measures what the two
+/// `clock_gettime` calls... cost"). Because `elapsed` is provably zero on
+/// this path, not merely zero at run time, the optimizer is free to fold
+/// away `counters::record`'s duration-to-nanoseconds conversion and its
+/// atomic adds downstream of it too — the passthrough build's measured
+/// overhead removal is therefore the two clock reads *plus* whatever of
+/// that bookkeeping the compiler elides, never the clock reads alone.
+/// Kept as one function so both timed methods below select the same way,
+/// instead of each repeating its own `#[cfg(...)]` pair.
+#[cfg(not(feature = "passthrough_shim"))]
+fn timed<R>(body: impl FnOnce() -> R) -> (R, Duration) {
+    let start = Instant::now();
+    let result = body();
+    (result, start.elapsed())
+}
+
+#[cfg(feature = "passthrough_shim")]
+fn timed<R>(body: impl FnOnce() -> R) -> (R, Duration) {
+    (body(), Duration::ZERO)
+}
+
 unsafe extern "C" fn shim_write(
     file: *mut ffi::sqlite3_file,
     buf: *const c_void,
@@ -249,9 +276,8 @@ unsafe extern "C" fn shim_write(
         let header = file as *mut ShimFileHeader;
         let real = real_file_ptr(file);
         let write = (*(*real).pMethods).xWrite.expect("real file has no xWrite");
-        let start = Instant::now();
-        let rc = write(real, buf, amt, offset);
-        counters::record((*header).kind, Bucket::Write, start.elapsed());
+        let (rc, elapsed) = timed(|| write(real, buf, amt, offset));
+        counters::record((*header).kind, Bucket::Write, elapsed);
         rc
     }
 }
@@ -261,9 +287,8 @@ unsafe extern "C" fn shim_sync(file: *mut ffi::sqlite3_file, flags: c_int) -> c_
         let header = file as *mut ShimFileHeader;
         let real = real_file_ptr(file);
         let sync = (*(*real).pMethods).xSync.expect("real file has no xSync");
-        let start = Instant::now();
-        let rc = sync(real, flags);
-        counters::record((*header).kind, Bucket::Sync, start.elapsed());
+        let (rc, elapsed) = timed(|| sync(real, flags));
+        counters::record((*header).kind, Bucket::Sync, elapsed);
         rc
     }
 }
@@ -684,5 +709,42 @@ mod tests {
                 xwrite: Duration::from_nanos(5),
             }
         );
+    }
+
+    mod kiln_e4_10 {
+        use super::*;
+
+        /// Totals the WAL's timed nanoseconds over one real commit under
+        /// `synchronous=FULL`, where both `xWrite` and `xSync` are called.
+        fn committed_wal_durations() -> (u64, u64) {
+            let _guard = crate::test_support::lock_vfs_counters();
+            let dir = tempfile::tempdir().expect("tempdir");
+            let conn = open_through_shim(&dir.path().join("passthrough-test.db"));
+            conn.execute_batch(
+                "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; CREATE TABLE t (x INTEGER);",
+            )
+            .unwrap();
+            time_operation(|| -> rusqlite::Result<()> {
+                conn.execute_batch("BEGIN IMMEDIATE; INSERT INTO t (x) VALUES (1); COMMIT;")
+            })
+            .unwrap();
+            let wal = counters::snapshot().wal;
+            assert!(wal.xwrite_count > 0 && wal.xsync_count > 0);
+            (wal.xwrite_ns, wal.xsync_ns)
+        }
+
+        #[cfg(not(feature = "passthrough_shim"))]
+        #[test]
+        fn the_instrumented_build_times_the_wal_writes_and_syncs_of_a_commit() {
+            let (write, sync) = committed_wal_durations();
+            assert!(write > 0 && sync > 0);
+        }
+
+        #[cfg(feature = "passthrough_shim")]
+        #[test]
+        fn the_passthrough_build_still_commits_but_records_no_time() {
+            let (write, sync) = committed_wal_durations();
+            assert_eq!((write, sync), (0, 0));
+        }
     }
 }
