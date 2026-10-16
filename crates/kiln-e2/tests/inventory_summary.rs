@@ -113,10 +113,11 @@ mod kiln_e2_35 {
 
     #[test]
     fn combine_is_associative_on_values_over_every_residue_triple() {
-        for first in 0..RESTOCK_AMOUNT {
-            for second in 0..RESTOCK_AMOUNT {
-                for third in (0..RESTOCK_AMOUNT).step_by(7) {
-                    assert_associative(shift_of(first), shift_of(second), shift_of(third));
+        let summaries: Vec<_> = (0..RESTOCK_AMOUNT).map(shift_of).collect();
+        for first in &summaries {
+            for second in &summaries {
+                for third in &summaries {
+                    assert_associative(*first, *second, *third);
                 }
             }
         }
