@@ -237,7 +237,7 @@ pub fn schema() -> Schema {
             single_key("b", &[]),
             single_key("shared", &[]),
             keyed_table(LINES, &LINE_KEY, &["customer_id", "item_id"]),
-            keyed_table(ARCHIVE, &LINE_KEY, &[]),
+            keyed_table(ARCHIVE, &LINE_KEY, &["item_id"]),
         ],
         foreign_keys: vec![
             foreign_key("orders", "customer_id", "customers"),
@@ -254,6 +254,7 @@ pub fn schema() -> Schema {
                 &["tenant_id", "region_id"],
             ),
             index("lines_by_item", LINES, &["item_id"]),
+            index("archive_by_item", ARCHIVE, &["item_id"]),
         ],
         ..Schema::default()
     }
