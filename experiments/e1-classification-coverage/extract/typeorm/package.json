@@ -1,0 +1,15 @@
+{
+  "name": "kiln-e1-typeorm-extractor",
+  "private": true,
+  "type": "module",
+  "description": "TypeORM unit extractor of experiment E1 (inputs.md section 3)",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "typescript": "5.4.3"
+  }
+}
