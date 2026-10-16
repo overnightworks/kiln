@@ -19,7 +19,9 @@ use kiln_e4_harness::build_record::BuildRecord;
 use kiln_e4_harness::builds::{Build, BuildEvidence, BuildReport, SOURCE_COMMIT, hash_file};
 use kiln_e4_harness::cli::ManifestTarget;
 use kiln_e4_harness::manifest::{BuildMismatch, Manifest, write_manifest};
-use kiln_e4_harness::preflight::{CheckResult, PreflightReport, build_manifest, conclude};
+use kiln_e4_harness::preflight::{
+    CheckResult, PreflightReport, build_manifest, conclude, exit_status,
+};
 
 fn harness_binary() -> &'static Path {
     Path::new(env!("CARGO_BIN_EXE_kiln-e4-harness"))
@@ -315,6 +317,26 @@ mod kiln_e4_09 {
                     .contains("FAIL  rustc version: too old")
             );
             assert!(!target.manifest_path.exists());
+        }
+
+        #[test]
+        fn a_preflight_exits_zero_when_it_concluded_and_one_when_it_failed_closed() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let passthrough = stand_in_passthrough(dir.path(), SOURCE_COMMIT, "a");
+            let target = target_in(dir.path(), &passthrough);
+
+            let [passed, failed] = [CheckResult::Pass, CheckResult::Fail("too old".to_string())]
+                .map(|check| {
+                    conclude(
+                        &report_with(check),
+                        Some(&target),
+                        harness_binary(),
+                        std::io::sink(),
+                    )
+                });
+
+            assert_eq!(exit_status(&passed), 0);
+            assert_eq!(exit_status(&failed), 1);
         }
 
         #[test]

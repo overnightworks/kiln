@@ -37,7 +37,9 @@ pub struct HalfRequest {
 /// `CLOCK_MONOTONIC` instants its measured window opened (the parent's
 /// `go`) and closed (the child's own stamp after its last operation), and
 /// every monitor sample taken around it — the first before the window
-/// opened, the last after it closed.
+/// opened, the last (the boundary sample) the first one after it closed,
+/// taken while the child holds still. The child checks and cleans up only
+/// after the monitor stopped, so no sample sees that work.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HalfRun {
     pub mean_wall_ns: f64,
@@ -144,10 +146,13 @@ impl MeasurementHost for ProcessHost {
         monitor.next_sample()?;
         let started_ns = monotonic_ns();
         child.go()?;
-        // The child stamps the end of its last operation and only then
-        // cleans up, so what it does after the stamp is not monitored.
+        // The child stamps the end of its last operation and then holds
+        // still: the monitor takes the sample that covers the stamp, is
+        // stopped, and only then is the child released to check and clean
+        // up, so none of that reaches a judged sample.
         let finished_ns = child.wait_until_done()?;
         let samples = monitor.finish_after(finished_ns)?;
+        child.release()?;
         let mean_wall_ns = child.finish()?;
         Ok(HalfRun {
             mean_wall_ns,
@@ -234,7 +239,8 @@ impl MonitorProcess {
     }
 
     /// Keeps the monitor sampling until a sample is taken after
-    /// `finished_ns`, so the last interval covers the end of the window.
+    /// `finished_ns` — the boundary sample, whose interval covers the end
+    /// of the window — and stops it there.
     fn finish_after(mut self, finished_ns: u64) -> io::Result<Vec<TimedSample>> {
         while self.next_sample()?.at_ns <= finished_ns {}
         Ok(self.stop())
@@ -315,11 +321,15 @@ impl MeasureChild {
     }
 
     fn go(&mut self) -> io::Result<()> {
+        self.write_line(measure_protocol::GO_LINE)
+    }
+
+    fn write_line(&mut self, line: &str) -> io::Result<()> {
         let stdin = self
             .stdin
             .as_mut()
             .ok_or_else(|| io::Error::other("the child's stdin was not piped"))?;
-        writeln!(stdin, "{}", measure_protocol::GO_LINE)?;
+        writeln!(stdin, "{line}")?;
         stdin.flush()
     }
 
@@ -333,6 +343,11 @@ impl MeasureChild {
         }
         measure_protocol::parse_done_ns(&line)
             .ok_or_else(|| self.failure(&format!("wrote no done line, wrote {line:?}")))
+    }
+
+    /// Lets the child out of its hold at the `done` stamp.
+    fn release(&mut self) -> io::Result<()> {
+        self.write_line(measure_protocol::RELEASE_LINE)
     }
 
     /// Reads the child's result and waits for it to exit.

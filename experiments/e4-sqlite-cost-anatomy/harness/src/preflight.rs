@@ -308,6 +308,18 @@ pub fn conclude(
     .map_err(|err| format!("could not report the manifest: {err}"))
 }
 
+/// What the process exits with when the preflight concluded as `conclusion`
+/// says: success only for a preflight that passed and recorded what was
+/// asked of it.
+pub fn exit_status(conclusion: &Result<(), String>) -> u8 {
+    match conclusion {
+        Ok(()) => 0,
+        Err(_) => FAILED_CLOSED_EXIT_STATUS,
+    }
+}
+
+const FAILED_CLOSED_EXIT_STATUS: u8 = 1;
+
 /// Builds the real manifest (protocol §12): the source commit and the
 /// SHA-256 of the instrumented binary and of the passthrough binary it
 /// will be compared with, `rustc --version`'s raw output, and

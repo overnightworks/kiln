@@ -12,7 +12,10 @@
 //! stamped with the monotonic clock, before its correctness checks and
 //! before the working copy is dropped and removed: the parent closes the
 //! monitored window at that stamp, so the window is the warm-up and the
-//! timed operations and nothing else (§9). [`measure_in_process`] and
+//! timed operations and nothing else (§9). The child then holds still
+//! until the parent answers `release`, which the parent writes only once
+//! its monitor has taken a sample covering the stamp — so the checks and
+//! the cleanup never fall inside a judged sample. [`measure_in_process`] and
 //! [`serve_measure_cell`] are tested in-process; the `measure-cell`
 //! subcommand in `main.rs` only wires them to stdin, stdout and the pin.
 
@@ -29,7 +32,7 @@ use crate::generators::{self, InsertParams};
 use crate::interference::monotonic_ns;
 use crate::measure_error::MeasureError;
 use crate::measure_protocol::{
-    DONE_PREFIX, GO_LINE, MEAN_WALL_PREFIX, MeasureCellRequest, READY_LINE,
+    DONE_PREFIX, GO_LINE, MEAN_WALL_PREFIX, MeasureCellRequest, READY_LINE, RELEASE_LINE,
 };
 use crate::repetition_checks::RepetitionChecks;
 use crate::restore;
@@ -233,10 +236,11 @@ fn check_snapshot_rows(conn: &Connection, row_count: u64) -> Result<(), MeasureE
 /// the timed operations' wall times to their mean. `start` runs once the
 /// snapshot is restored and everything prepared, immediately before the
 /// first operation. `finished` runs with the monotonic instant right
-/// after the last operation, before the repetition's correctness checks
-/// (§2.1) and before the connection is dropped and the working copy
-/// removed, which happens on return — none of that is part of the
-/// monitored window.
+/// after the last operation and returns once whoever watches the window
+/// has it covered; only then come the repetition's correctness checks
+/// (§2.1) and the dropping of the connection and removal of the working
+/// copy, which happens on return — none of that is part of the monitored
+/// window.
 pub fn measure_in_process(
     request: &MeasureCellRequest,
     start: impl FnOnce() -> io::Result<()>,
@@ -277,14 +281,17 @@ pub fn measure_in_process(
 /// The `measure-cell` child's whole conversation (the parent's side is
 /// [`crate::host`]): writes `ready` once prepared, waits for a `go` line,
 /// measures, writes `done monotonic_ns=<instant>` right after the last
-/// operation, and finally `mean_wall_ns=<value>` — the one number safe
-/// for another process to read back (protocol §13). Anything but `go`, or
-/// no line at all, ends the child without measuring.
+/// operation, waits for `release` before checking and cleaning up, and
+/// finally writes `mean_wall_ns=<value>` — the one number safe for another
+/// process to read back (protocol §13). Anything but `go`, or no line at
+/// all, ends the child without measuring; anything but `release` ends it
+/// without a mean.
 pub fn serve_measure_cell(
     request: &MeasureCellRequest,
-    mut input: impl BufRead,
+    input: impl BufRead,
     output: impl Write,
 ) -> Result<(), MeasureError> {
+    let input = RefCell::new(input);
     let output = RefCell::new(output);
     let measured = measure_in_process(
         request,
@@ -292,26 +299,33 @@ pub fn serve_measure_cell(
             let mut output = output.borrow_mut();
             writeln!(output, "{READY_LINE}")?;
             output.flush()?;
-            let mut line = String::new();
-            input.read_line(&mut line)?;
-            if line.trim() == GO_LINE {
-                Ok(())
-            } else {
-                Err(io::Error::other(format!(
-                    "expected {GO_LINE:?} from the parent, got {line:?}"
-                )))
-            }
+            expect_line(&mut *input.borrow_mut(), GO_LINE)
         },
         |finished_ns| {
             let mut output = output.borrow_mut();
             writeln!(output, "{DONE_PREFIX}{finished_ns}")?;
-            output.flush()
+            output.flush()?;
+            expect_line(&mut *input.borrow_mut(), RELEASE_LINE)
         },
     )?;
     let mut output = output.into_inner();
     writeln!(output, "{MEAN_WALL_PREFIX}{}", measured.mean_wall_ns)?;
     output.flush()?;
     Ok(())
+}
+
+/// Blocks until the parent writes `expected`; anything else, or the
+/// parent hanging up, is an error.
+fn expect_line(input: &mut impl BufRead, expected: &str) -> io::Result<()> {
+    let mut line = String::new();
+    input.read_line(&mut line)?;
+    if line.trim() == expected {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "expected {expected:?} from the parent, got {line:?}"
+        )))
+    }
 }
 
 #[cfg(test)]
@@ -525,7 +539,7 @@ mod tests {
             let _guard = crate::test_support::lock_vfs_counters();
             let snapshot = snapshot();
 
-            let (result, output) = serve(&snapshot, "go\n");
+            let (result, output) = serve(&snapshot, "go\nrelease\n");
 
             result.expect("a child told to go measures");
             let lines: Vec<&str> = output.lines().collect();
@@ -550,7 +564,7 @@ mod tests {
             let _guard = crate::test_support::lock_vfs_counters();
             let snapshot = snapshot();
 
-            let (result, output) = serve(&snapshot, "go\n");
+            let (result, output) = serve(&snapshot, "go\nrelease\n");
 
             result.expect("a child told to go measures");
             let mut lines = output.lines();
@@ -570,6 +584,21 @@ mod tests {
 
                 assert!(matches!(result, Err(MeasureError::Io(_))), "{input:?}");
                 assert_eq!(output, "ready\n", "no mean without a go: {input:?}");
+            }
+        }
+
+        #[test]
+        fn the_child_gives_no_mean_unless_the_parent_releases_it_after_the_done_stamp() {
+            let _guard = crate::test_support::lock_vfs_counters();
+            let snapshot = snapshot();
+
+            for input in ["go\n", "go\nstop\n"] {
+                let (result, output) = serve(&snapshot, input);
+
+                assert!(matches!(result, Err(MeasureError::Io(_))), "{input:?}");
+                let lines: Vec<&str> = output.lines().collect();
+                assert_eq!(lines.len(), 2, "ready and done, no mean: {output:?}");
+                assert!(parse_done_ns(lines[1]).is_some(), "{output:?}");
             }
         }
     }

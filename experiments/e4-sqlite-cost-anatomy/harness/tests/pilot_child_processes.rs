@@ -276,56 +276,6 @@ mod kiln_e4_07 {
     }
 
     #[test]
-    fn a_half_ends_its_window_at_the_childs_done_stamp_not_when_the_child_exits() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let slow_to_clean_up = stand_in(
-            dir.path(),
-            "slow-to-clean-up",
-            "echo ready\nread go\necho 'done monotonic_ns=7'\nsleep 1\necho mean_wall_ns=5",
-        );
-        let fixture = fixture_with(&slow_to_clean_up, small_snapshot());
-
-        let run = fixture
-            .host
-            .run_half(&half_request(
-                Workload::PointUpdate,
-                Build::Passthrough,
-                TINY_PLAN,
-            ))
-            .expect("a child that follows the protocol is measured");
-
-        assert_eq!(run.finished_ns, 7);
-        assert_eq!(run.mean_wall_ns, 5.0);
-        assert!(
-            run.samples.last().expect("a sample after the window").at_ns > 7,
-            "the monitor still samples once past the stamp"
-        );
-    }
-
-    #[test]
-    fn a_child_that_reports_a_mean_without_a_done_stamp_fails_the_half() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let no_stamp = stand_in(
-            dir.path(),
-            "no-stamp",
-            "echo ready\nread go\necho mean_wall_ns=5",
-        );
-        let fixture = fixture_with(&no_stamp, small_snapshot());
-
-        let message = fixture
-            .host
-            .run_half(&half_request(
-                Workload::PointUpdate,
-                Build::Passthrough,
-                TINY_PLAN,
-            ))
-            .expect_err("a window with no end stamp cannot be closed")
-            .to_string();
-
-        assert!(message.contains("wrote no done line"), "{message}");
-    }
-
-    #[test]
     fn a_waiting_child_is_stopped_when_its_monitor_cannot_start() {
         let dir = tempfile::tempdir().expect("tempdir");
         let waiting_child = stand_in(dir.path(), "waiting", "echo ready\nexec sleep 31");
@@ -386,6 +336,102 @@ mod kiln_e4_07 {
 
         assert_eq!(announced.trim(), "ready");
         assert_eq!(allowed, vec![machine::PINNED_CPU]);
+    }
+}
+
+mod kiln_e4_05 {
+    use super::*;
+
+    #[test]
+    fn a_half_ends_its_window_at_the_childs_done_stamp_not_when_the_child_exits() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let slow_to_clean_up = stand_in(
+            dir.path(),
+            "slow-to-clean-up",
+            "echo ready\nread go\necho 'done monotonic_ns=7'\nread release\nsleep 1\necho mean_wall_ns=5",
+        );
+        let fixture = fixture_with(&slow_to_clean_up, small_snapshot());
+
+        let run = fixture
+            .host
+            .run_half(&half_request(
+                Workload::PointUpdate,
+                Build::Passthrough,
+                TINY_PLAN,
+            ))
+            .expect("a child that follows the protocol is measured");
+
+        assert_eq!(run.finished_ns, 7);
+        assert_eq!(run.mean_wall_ns, 5.0);
+        assert!(
+            run.samples.last().expect("a sample after the window").at_ns > 7,
+            "the monitor still samples once past the stamp"
+        );
+    }
+
+    #[test]
+    fn a_child_is_held_at_its_done_stamp_until_the_monitor_has_covered_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let released_at = dir.path().join("released_at");
+        let busy_after_release = stand_in(
+            dir.path(),
+            "busy-after-release",
+            &format!(
+                "now() {{ perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e 'printf \"%d\\n\", clock_gettime(CLOCK_MONOTONIC) * 1e9'; }}\n\
+                 echo ready\nread go\necho \"done monotonic_ns=$(now)\"\n\
+                 read release\nnow > '{released}'\n\
+                 perl -e '$until = time + 1; 1 while time < $until'\necho mean_wall_ns=5",
+                released = released_at.display()
+            ),
+        );
+        let fixture = fixture_with(&busy_after_release, small_snapshot());
+
+        let run = fixture
+            .host
+            .run_half(&half_request(
+                Workload::PointUpdate,
+                Build::Passthrough,
+                TINY_PLAN,
+            ))
+            .expect("a child that follows the protocol is measured");
+
+        let released_ns: u64 = fs::read_to_string(&released_at)
+            .expect("the child was released")
+            .trim()
+            .parse()
+            .expect("an instant");
+        let boundary = run.samples.last().expect("a boundary sample").at_ns;
+        assert!(
+            boundary > run.finished_ns,
+            "the last sample covers the stamp"
+        );
+        assert!(
+            boundary < released_ns,
+            "no sample is taken once the child is free to check and clean up"
+        );
+    }
+
+    #[test]
+    fn a_child_that_reports_a_mean_without_a_done_stamp_fails_the_half() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let no_stamp = stand_in(
+            dir.path(),
+            "no-stamp",
+            "echo ready\nread go\necho mean_wall_ns=5",
+        );
+        let fixture = fixture_with(&no_stamp, small_snapshot());
+
+        let message = fixture
+            .host
+            .run_half(&half_request(
+                Workload::PointUpdate,
+                Build::Passthrough,
+                TINY_PLAN,
+            ))
+            .expect_err("a window with no end stamp cannot be closed")
+            .to_string();
+
+        assert!(message.contains("wrote no done line"), "{message}");
     }
 }
 

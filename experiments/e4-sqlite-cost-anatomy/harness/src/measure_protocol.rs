@@ -1,8 +1,8 @@
 //! The text protocol between the pilot and a `measure-cell` child
 //! (protocol.md §9, §13): the arguments that describe one measured half,
 //! and the lines the two sides write each other — `ready`, `go`, the
-//! `done` stamp that closes the monitored window, and the one result
-//! line. Everything crosses the process boundary as plain text and is
+//! `done` stamp that closes the monitored window, the `release` that
+//! lets the child leave it, and the one result line. Everything crosses the process boundary as plain text and is
 //! read back exactly or rejected (KILN-E4-08); the parsing is pure, so a
 //! malformed field is tested without spawning anything.
 
@@ -88,6 +88,10 @@ pub const GO_LINE: &str = "go";
 /// Prefix of the line that closes the monitored window: the child's
 /// `CLOCK_MONOTONIC` instant right after its last operation.
 pub const DONE_PREFIX: &str = "done monotonic_ns=";
+/// What the parent writes once the monitor's boundary sample covers the
+/// `done` stamp: only then may the child check its repetition and clean up,
+/// so none of that can reach a judged sample.
+pub const RELEASE_LINE: &str = "release";
 /// Prefix of the child's one result line.
 pub const MEAN_WALL_PREFIX: &str = "mean_wall_ns=";
 

@@ -55,15 +55,16 @@ fn run_preflight(args: &[String]) -> ExitCode {
             );
         }
     };
-    match preflight::conclude(
+    let conclusion = preflight::conclude(
         &preflight::run_real(),
         manifest_target.as_ref(),
         &instrumented_binary,
         io::stdout().lock(),
-    ) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(message) => fail(message, 1),
+    );
+    if let Err(message) = &conclusion {
+        eprintln!("{message}");
     }
+    ExitCode::from(preflight::exit_status(&conclusion))
 }
 
 /// `measure-cell <see MeasureCellRequest::to_args>`: pins itself to
