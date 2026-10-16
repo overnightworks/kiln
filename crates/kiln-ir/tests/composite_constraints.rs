@@ -432,6 +432,92 @@ mod kiln_ir_89 {
     }
 
     #[test]
+    fn a_row_written_twice_is_looked_up_as_often_as_one_written_once() {
+        let store = store_with_order(1, 2, 3);
+
+        let in_two_writes = run_shop(
+            vec![
+                update("orders", &[10], &[("w", 5)]),
+                update("orders", &[10], &[("c", 3)]),
+            ],
+            &store,
+        );
+        let in_one_write = run_shop(vec![update("orders", &[10], &[("w", 5)])], &store);
+
+        assert_commits(&in_two_writes);
+        assert_eq!(
+            constraint_entries(&in_two_writes),
+            constraint_entries(&in_one_write)
+        );
+    }
+
+    #[test]
+    fn an_update_writing_no_column_of_the_tuple_checks_nothing() {
+        let schema = Schema {
+            tables: shop_tables(),
+            unique_constraints: vec![unique("orders", &["w", "d"])],
+            ..Default::default()
+        };
+        let program = program_with_schema(
+            schema,
+            vec![],
+            vec![update("orders", &[10], &[("c", 4)])],
+            Terminal::Return(Expr::Literal(integer(0))),
+        );
+
+        let execution = run_ok(
+            &program,
+            &call_under_test(vec![]),
+            &store_with_order(1, 2, 3),
+        );
+
+        assert_commits(&execution);
+        assert_eq!(constraint_entries(&execution), vec![]);
+    }
+
+    #[test]
+    fn an_update_of_the_mutable_column_checks_a_constraint_that_also_spans_a_key_column() {
+        let numbered = |name: &str, key: &[&str], others: &[&str]| Table {
+            name: table(name),
+            columns: key
+                .iter()
+                .chain(others)
+                .map(|name| int_column(name, IntegerWidth::I32))
+                .collect(),
+            key: key_of(key),
+        };
+        let schema = Schema {
+            tables: vec![numbered("slots", &["a", "b"], &["m"])],
+            unique_constraints: vec![unique("slots", &["a", "m"])],
+            ..Default::default()
+        };
+        let slot = |b, m| ("slots", vec![1, b], vec![("m", m)]);
+        let store = store_of(vec![slot(1, 5), slot(2, 6)]);
+        let run_update = |effect| {
+            let program = program_with_schema(
+                schema.clone(),
+                vec![],
+                vec![effect],
+                Terminal::Return(Expr::Literal(integer(0))),
+            );
+            run_ok(&program, &call_under_test(vec![]), &store)
+        };
+
+        let into_held_tuple = run_update(update("slots", &[1, 2], &[("m", 5)]));
+        let unrelated = run_update(update("slots", &[1, 2], &[]));
+
+        assert_eq!(
+            aborted_reason(&into_held_tuple),
+            &AbortReason::UniqueViolation {
+                constraint: unique("slots", &["a", "m"]),
+                tuple: numbers(&[1, 5]),
+            }
+        );
+        assert_commits(&unrelated);
+        assert_eq!(constraint_entries(&unrelated), vec![]);
+    }
+
+    #[test]
     fn rows_lacking_a_column_of_the_tuple_are_bound_by_nothing() {
         let schema = Schema {
             tables: shop_tables(),
