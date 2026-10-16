@@ -1,8 +1,0 @@
-claim_id = "4706c5c503154bf2bf5db651215ad618"
-agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
-role = "builder"
-base = "4e85e657ad6ac14bba2f7f7e1fdaa97051be8ce7"
-branch = "claude/issue-96-s1b-prefix-ranges"
-scope = ["crates/kiln-e1/src/footprint", "crates/kiln-e1/tests", "crates/kiln-ir/src/evaluator", "crates/kiln-ir/src/ir", "crates/kiln-ir/src/store.rs", "crates/kiln-ir/tests", "specs/kiln-e1.spec.md", "specs/kiln-ir.spec.md"]
-opened_commit = "8de63288d88d7e858e7035ca889a446316ee8b37"
-whole_reason = "a range form spans the IR's effect types, store lookup, evaluator range reads and iteration, validation, and the classifier's walker, facts, dependency and carried-slot analyses"
