@@ -35,6 +35,13 @@ pub enum BuildMismatch {
         manifest: String,
         measured: String,
     },
+    /// The build record names other cargo features for a build than the
+    /// ones its role is compiled with.
+    Features {
+        build: Build,
+        recorded: String,
+        required: &'static str,
+    },
 }
 
 impl fmt::Display for BuildMismatch {
@@ -65,11 +72,69 @@ impl fmt::Display for BuildMismatch {
                  in the manifest (sha256 {manifest})",
                 build.label()
             ),
+            BuildMismatch::Features {
+                build,
+                recorded,
+                required,
+            } => write!(
+                f,
+                "the build record says the {} build was compiled with features {recorded:?}, \
+                 not {required:?}",
+                build.label()
+            ),
         }
     }
 }
 
 impl std::error::Error for BuildMismatch {}
+
+/// The identity of the two builds a pilot may measure: one commit and the
+/// bytes of each. A manifest and a build record each vet builds against
+/// one, so the two cannot disagree on what a matching build is.
+#[derive(Debug, Clone, Copy)]
+pub struct VettedBuilds<'a> {
+    pub source_commit: &'a str,
+    pub instrumented_sha256: &'a str,
+    pub passthrough_sha256: &'a str,
+}
+
+impl VettedBuilds<'_> {
+    /// Whether `instrumented` and `passthrough` are these builds: each
+    /// reports its own role, was compiled from this commit, and has this
+    /// hash.
+    pub fn check(
+        &self,
+        instrumented: &BuildEvidence,
+        passthrough: &BuildEvidence,
+    ) -> Result<(), BuildMismatch> {
+        for (expected, evidence, sha256) in [
+            (Build::Instrumented, instrumented, self.instrumented_sha256),
+            (Build::Passthrough, passthrough, self.passthrough_sha256),
+        ] {
+            if evidence.report.role != expected {
+                return Err(BuildMismatch::Role {
+                    expected,
+                    reported: evidence.report.role,
+                });
+            }
+            if evidence.report.source_commit != self.source_commit {
+                return Err(BuildMismatch::SourceCommit {
+                    build: expected,
+                    manifest: self.source_commit.to_string(),
+                    reported: evidence.report.source_commit.clone(),
+                });
+            }
+            if evidence.sha256 != sha256 {
+                return Err(BuildMismatch::Sha256 {
+                    build: expected,
+                    manifest: sha256.to_string(),
+                    measured: evidence.sha256.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
 
 /// The preflight manifest (protocol §12).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,36 +175,12 @@ impl Manifest {
         instrumented: &BuildEvidence,
         passthrough: &BuildEvidence,
     ) -> Result<(), BuildMismatch> {
-        for (expected, evidence, manifest_sha256) in [
-            (Build::Instrumented, instrumented, &self.binary_sha256),
-            (
-                Build::Passthrough,
-                passthrough,
-                &self.passthrough_binary_sha256,
-            ),
-        ] {
-            if evidence.report.role != expected {
-                return Err(BuildMismatch::Role {
-                    expected,
-                    reported: evidence.report.role,
-                });
-            }
-            if evidence.report.source_commit != self.source_commit {
-                return Err(BuildMismatch::SourceCommit {
-                    build: expected,
-                    manifest: self.source_commit.clone(),
-                    reported: evidence.report.source_commit.clone(),
-                });
-            }
-            if &evidence.sha256 != manifest_sha256 {
-                return Err(BuildMismatch::Sha256 {
-                    build: expected,
-                    manifest: manifest_sha256.clone(),
-                    measured: evidence.sha256.clone(),
-                });
-            }
+        VettedBuilds {
+            source_commit: &self.source_commit,
+            instrumented_sha256: &self.binary_sha256,
+            passthrough_sha256: &self.passthrough_binary_sha256,
         }
-        Ok(())
+        .check(instrumented, passthrough)
     }
 
     /// Renders the manifest as simple `key = value` lines — the same
@@ -172,7 +213,7 @@ impl Manifest {
 /// Reads one quoted `key = "value"` line's value out of a rendered
 /// manifest, matching the whole key so `binary_sha256` never reads
 /// `passthrough_binary_sha256`'s line.
-fn read_quoted_field(manifest_contents: &str, key: &str) -> Option<String> {
+pub(crate) fn read_quoted_field(manifest_contents: &str, key: &str) -> Option<String> {
     manifest_contents.lines().find_map(|line| {
         let (line_key, value) = line.trim().split_once('=')?;
         if line_key.trim() != key {

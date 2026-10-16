@@ -54,6 +54,15 @@ impl Build {
         }
     }
 
+    /// The cargo features this build is compiled with (see `Cargo.toml`):
+    /// what a build record must say about it.
+    pub fn required_features(self) -> &'static str {
+        match self {
+            Build::Instrumented => "",
+            Build::Passthrough => "passthrough_shim",
+        }
+    }
+
     pub fn other(self) -> Build {
         match self {
             Build::Instrumented => Build::Passthrough,
@@ -225,6 +234,12 @@ mod tests {
         #[test]
         fn this_binary_reports_itself_as_the_passthrough_build() {
             assert_eq!(Build::of_this_binary(), Build::Passthrough);
+        }
+
+        #[test]
+        fn only_the_passthrough_build_is_compiled_with_a_feature() {
+            assert_eq!(Build::Instrumented.required_features(), "");
+            assert_eq!(Build::Passthrough.required_features(), "passthrough_shim");
         }
 
         #[test]

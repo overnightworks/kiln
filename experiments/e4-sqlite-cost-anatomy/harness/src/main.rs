@@ -6,15 +6,14 @@
 
 use std::fmt::Display;
 use std::io;
-use std::path::Path;
 use std::process::ExitCode;
 
 use kiln_e4_harness::builds::BuildReport;
 use kiln_e4_harness::cli::{self, PilotArgs};
 use kiln_e4_harness::measure_cell::serve_measure_cell;
 use kiln_e4_harness::measure_protocol::MeasureCellRequest;
-use kiln_e4_harness::preflight::{self, CheckResult};
-use kiln_e4_harness::{admission, affinity, interference, machine, manifest, monitor, pilot_run};
+use kiln_e4_harness::preflight;
+use kiln_e4_harness::{admission, affinity, interference, machine, monitor, pilot_run};
 
 const USAGE_ERROR: u8 = 2;
 
@@ -47,57 +46,24 @@ fn run_preflight(args: &[String]) -> ExitCode {
         Ok(target) => target,
         Err(usage) => return fail(usage, USAGE_ERROR),
     };
-
-    let report = preflight::run_real();
-    for (name, check) in [
-        ("rustc version", &report.rustc_version),
-        ("sqlite version", &report.sqlite_version),
-        ("build environment", &report.build_env),
-        ("CPU siblings", &report.cpu_siblings),
-        ("shim VFS", &report.shim_vfs),
-        ("source commit", &report.source_commit),
-    ] {
-        match check {
-            CheckResult::Pass => println!("PASS  {name}"),
-            CheckResult::Fail(reason) => println!("FAIL  {name}: {reason}"),
+    let instrumented_binary = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(err) => {
+            return fail(
+                format!("could not resolve the current binary's own path: {err}"),
+                1,
+            );
         }
-    }
-    if !report.all_passed() {
-        return fail("preflight failed closed; no frozen run may proceed", 1);
-    }
-
-    match manifest_target {
-        Some((manifest_path, passthrough_binary)) => {
-            write_preflight_manifest(&manifest_path, &passthrough_binary)
-        }
-        None => ExitCode::SUCCESS,
-    }
-}
-
-fn write_preflight_manifest(manifest_path: &Path, passthrough_binary: &Path) -> ExitCode {
-    let built = std::env::current_exe()
-        .and_then(|instrumented| preflight::build_manifest(&instrumented, passthrough_binary));
-    let manifest = match built {
-        Ok(manifest) => manifest,
-        Err(err) => return fail(format!("could not build manifest: {err}"), 1),
     };
-    if let Err(err) = manifest::write_manifest(manifest_path, &manifest) {
-        return fail(
-            format!(
-                "could not write manifest to {}: {err}",
-                manifest_path.display()
-            ),
-            1,
-        );
+    match preflight::conclude(
+        &preflight::run_real(),
+        manifest_target.as_ref(),
+        &instrumented_binary,
+        io::stdout().lock(),
+    ) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => fail(message, 1),
     }
-    println!(
-        "manifest written to {} (source commit {}, instrumented sha256 {}, passthrough sha256 {})",
-        manifest_path.display(),
-        manifest.source_commit,
-        manifest.binary_sha256,
-        manifest.passthrough_binary_sha256
-    );
-    ExitCode::SUCCESS
 }
 
 /// `measure-cell <see MeasureCellRequest::to_args>`: pins itself to
@@ -156,7 +122,8 @@ fn run_monitor_stream(args: &[String]) -> ExitCode {
 /// twelve gated cells, every half in an isolated, CPU-pinned child under
 /// a pinned monitor process (protocol §9), at the protocol's frozen
 /// operation counts. It starts only from vetted builds
-/// ([`admission::admit_builds`]) and into evidence files it creates
+/// ([`admission::admit_builds`], against the build record and the
+/// manifest) and into evidence files it creates
 /// exclusively ([`admission::reserve_evidence_files`]), and writes the
 /// mechanics-only report to `<output-dir>/pilot-report.txt`, every
 /// rejection, immediately, to `<output-dir>/rejected.log` and every
@@ -185,6 +152,7 @@ fn run_pilot(args: &[String]) -> ExitCode {
         &self_binary,
         &pilot_args.passthrough_binary,
         &pilot_args.manifest,
+        &pilot_args.build_record,
     ) {
         Ok(admitted) => admitted,
         Err(refusal) => return fail(format!("the pilot refused to start: {refusal}"), 1),

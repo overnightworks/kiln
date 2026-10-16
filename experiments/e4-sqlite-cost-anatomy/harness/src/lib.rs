@@ -14,6 +14,7 @@
 
 pub mod admission;
 pub mod affinity;
+pub mod build_record;
 pub mod builds;
 pub mod cells;
 pub mod cli;

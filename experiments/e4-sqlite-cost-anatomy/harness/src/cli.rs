@@ -14,18 +14,20 @@ pub struct PilotArgs {
     pub output_dir: PathBuf,
     pub passthrough_binary: PathBuf,
     pub manifest: PathBuf,
+    pub build_record: PathBuf,
     pub monitor_interval: Duration,
 }
 
 impl PilotArgs {
-    /// Parses `--output-dir`, `--passthrough-binary`, `--manifest` and the
-    /// optional `--monitor-interval-ms`. The warm-up and operation counts
+    /// Parses `--output-dir`, `--passthrough-binary`, `--manifest`,
+    /// `--build-record` and the optional `--monitor-interval-ms`. The warm-up and operation counts
     /// are frozen by protocol §13 and have no option: asking for either is
     /// refused by name.
     pub fn parse(args: &[String]) -> Result<PilotArgs, String> {
         let mut output_dir = None;
         let mut passthrough_binary = None;
         let mut manifest = None;
+        let mut build_record = None;
         let mut monitor_interval = machine::SAMPLE_INTERVAL;
 
         let mut iter = args.iter();
@@ -41,20 +43,25 @@ impl PilotArgs {
                 "--output-dir" => output_dir = Some(PathBuf::from(value)),
                 "--passthrough-binary" => passthrough_binary = Some(PathBuf::from(value)),
                 "--manifest" => manifest = Some(PathBuf::from(value)),
+                "--build-record" => build_record = Some(PathBuf::from(value)),
                 "--monitor-interval-ms" => monitor_interval = parse_interval_ms(value)?,
                 other => return Err(format!("unknown pilot argument {other:?}")),
             }
         }
 
-        match (output_dir, passthrough_binary, manifest) {
-            (Some(output_dir), Some(passthrough_binary), Some(manifest)) => Ok(PilotArgs {
-                output_dir,
-                passthrough_binary,
-                manifest,
-                monitor_interval,
-            }),
+        match (output_dir, passthrough_binary, manifest, build_record) {
+            (Some(output_dir), Some(passthrough_binary), Some(manifest), Some(build_record)) => {
+                Ok(PilotArgs {
+                    output_dir,
+                    passthrough_binary,
+                    manifest,
+                    build_record,
+                    monitor_interval,
+                })
+            }
             _ => Err(
-                "pilot needs --output-dir <dir>, --passthrough-binary <path> and --manifest <path>"
+                "pilot needs --output-dir <dir>, --passthrough-binary <path>, \
+                      --manifest <path> and --build-record <path>"
                     .to_string(),
             ),
         }
@@ -72,15 +79,28 @@ pub fn parse_interval_ms(value: &str) -> Result<Duration, String> {
     }
 }
 
-/// The `preflight` subcommand's arguments: nothing, or the manifest to
-/// write and the passthrough binary to record in it.
-pub fn parse_preflight_args(args: &[String]) -> Result<Option<(PathBuf, PathBuf)>, String> {
+/// What `preflight` records when it is given something to record: the
+/// manifest to write, the passthrough binary to put in it and the build
+/// record both binaries must match.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestTarget {
+    pub manifest_path: PathBuf,
+    pub passthrough_binary: PathBuf,
+    pub build_record: PathBuf,
+}
+
+/// The `preflight` subcommand's arguments: nothing, or a [`ManifestTarget`].
+pub fn parse_preflight_args(args: &[String]) -> Result<Option<ManifestTarget>, String> {
     match args {
         [] => Ok(None),
-        [manifest, passthrough] => Ok(Some((PathBuf::from(manifest), PathBuf::from(passthrough)))),
-        _ => Err(
-            "usage: kiln-e4-harness preflight [<manifest-path> <passthrough-binary>]".to_string(),
-        ),
+        [manifest, passthrough, build_record] => Ok(Some(ManifestTarget {
+            manifest_path: PathBuf::from(manifest),
+            passthrough_binary: PathBuf::from(passthrough),
+            build_record: PathBuf::from(build_record),
+        })),
+        _ => Err("usage: kiln-e4-harness preflight \
+                  [<manifest-path> <passthrough-binary> <build-record>]"
+            .to_string()),
     }
 }
 
@@ -92,13 +112,15 @@ mod tests {
         parts.iter().map(|part| part.to_string()).collect()
     }
 
-    const REQUIRED: [&str; 6] = [
+    const REQUIRED: [&str; 8] = [
         "--output-dir",
         "out",
         "--passthrough-binary",
         "pass",
         "--manifest",
         "manifest.txt",
+        "--build-record",
+        "record.txt",
     ];
 
     mod kiln_e4_21 {
@@ -129,7 +151,7 @@ mod tests {
         }
 
         #[test]
-        fn the_pilot_takes_its_directory_binary_and_manifest_and_the_default_interval() {
+        fn the_pilot_takes_its_directory_binaries_manifest_and_record_and_the_default_interval() {
             let parsed = PilotArgs::parse(&args(&REQUIRED)).expect("the required arguments");
 
             assert_eq!(
@@ -138,6 +160,7 @@ mod tests {
                     output_dir: PathBuf::from("out"),
                     passthrough_binary: PathBuf::from("pass"),
                     manifest: PathBuf::from("manifest.txt"),
+                    build_record: PathBuf::from("record.txt"),
                     monitor_interval: machine::SAMPLE_INTERVAL,
                 }
             );
@@ -146,6 +169,7 @@ mod tests {
         #[test]
         fn the_pilot_refuses_a_missing_option_an_unknown_one_and_a_missing_value() {
             for bad in [
+                args(&REQUIRED[..6]),
                 args(&REQUIRED[..4]),
                 args(&[&REQUIRED[..], &["--verbose", "yes"]].concat()),
                 args(&[&REQUIRED[..], &["--manifest"]].concat()),
@@ -176,13 +200,21 @@ mod tests {
         use super::*;
 
         #[test]
-        fn preflight_takes_both_a_manifest_path_and_a_passthrough_binary_or_neither() {
+        fn preflight_takes_a_manifest_path_a_passthrough_binary_and_a_build_record_or_nothing() {
             assert_eq!(parse_preflight_args(&[]), Ok(None));
             assert_eq!(
-                parse_preflight_args(&args(&["manifest.txt", "pass"])),
-                Ok(Some((PathBuf::from("manifest.txt"), PathBuf::from("pass"))))
+                parse_preflight_args(&args(&["manifest.txt", "pass", "record.txt"])),
+                Ok(Some(ManifestTarget {
+                    manifest_path: PathBuf::from("manifest.txt"),
+                    passthrough_binary: PathBuf::from("pass"),
+                    build_record: PathBuf::from("record.txt"),
+                }))
             );
-            for bad in [args(&["manifest.txt"]), args(&["a", "b", "c"])] {
+            for bad in [
+                args(&["manifest.txt"]),
+                args(&["manifest.txt", "pass"]),
+                args(&["a", "b", "c", "d"]),
+            ] {
                 assert!(parse_preflight_args(&bad).unwrap_err().contains("usage"));
             }
         }

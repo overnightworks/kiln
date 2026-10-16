@@ -7,15 +7,17 @@
 
 use std::ffi::CStr;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
 
 use libsqlite3_sys as ffi;
 
+use crate::build_record::BuildRecord;
 use crate::builds::BuildEvidence;
+use crate::cli::ManifestTarget;
 use crate::machine;
-use crate::manifest::Manifest;
+use crate::manifest::{self, Manifest};
 
 /// One check's outcome.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,18 +45,20 @@ pub struct PreflightReport {
 }
 
 impl PreflightReport {
+    fn named_checks(&self) -> [(&'static str, &CheckResult); 6] {
+        [
+            ("rustc version", &self.rustc_version),
+            ("sqlite version", &self.sqlite_version),
+            ("build environment", &self.build_env),
+            ("CPU siblings", &self.cpu_siblings),
+            ("shim VFS", &self.shim_vfs),
+            ("source commit", &self.source_commit),
+        ]
+    }
+
     /// Fails closed: every check must pass.
     pub fn all_passed(&self) -> bool {
-        [
-            &self.rustc_version,
-            &self.sqlite_version,
-            &self.build_env,
-            &self.cpu_siblings,
-            &self.shim_vfs,
-            &self.source_commit,
-        ]
-        .iter()
-        .all(|c| c.is_pass())
+        self.named_checks().iter().all(|(_, check)| check.is_pass())
     }
 }
 
@@ -272,19 +276,68 @@ pub fn run_real() -> PreflightReport {
     }
 }
 
+/// Prints each check's outcome to `out`; when every check passed and
+/// there is a `target`, records the manifest there, for the binary at
+/// `instrumented_binary` and the target's passthrough binary, both held
+/// against the target's build record. `Err` is the message of a preflight
+/// that failed closed.
+pub fn conclude(
+    report: &PreflightReport,
+    target: Option<&ManifestTarget>,
+    instrumented_binary: &Path,
+    mut out: impl Write,
+) -> Result<(), String> {
+    for (name, check) in report.named_checks() {
+        let line = match check {
+            CheckResult::Pass => format!("PASS  {name}"),
+            CheckResult::Fail(reason) => format!("FAIL  {name}: {reason}"),
+        };
+        writeln!(out, "{line}").map_err(|err| format!("could not report {name}: {err}"))?;
+    }
+    if !report.all_passed() {
+        return Err("preflight failed closed; no frozen run may proceed".to_string());
+    }
+    let Some(target) = target else {
+        return Ok(());
+    };
+    let record = BuildRecord::read_file(&target.build_record)
+        .map_err(|err| format!("could not read the build record: {err}"))?;
+    let manifest = build_manifest(instrumented_binary, &target.passthrough_binary, &record)
+        .map_err(|err| format!("could not build manifest: {err}"))?;
+    manifest::write_manifest(&target.manifest_path, &manifest).map_err(|err| {
+        format!(
+            "could not write manifest to {}: {err}",
+            target.manifest_path.display()
+        )
+    })?;
+    writeln!(
+        out,
+        "manifest written to {} (source commit {}, instrumented sha256 {}, passthrough sha256 {})",
+        target.manifest_path.display(),
+        manifest.source_commit,
+        manifest.binary_sha256,
+        manifest.passthrough_binary_sha256
+    )
+    .map_err(|err| format!("could not report the manifest: {err}"))
+}
+
 /// Builds the real manifest (protocol §12): the source commit and the
 /// SHA-256 of the instrumented binary and of the passthrough binary it
 /// will be compared with, `rustc --version`'s raw output, and
 /// `sqlite3_libversion()`. Called only once every preflight check has
 /// passed — a manifest recording a binary preflight has already rejected
-/// is not the record §12 means. Refuses a passthrough binary that is not
-/// the passthrough build of this very commit.
+/// is not the record §12 means. Refuses binaries that are not the two
+/// builds `build_record` made from the reviewed commit.
 pub fn build_manifest(
     instrumented_binary: &Path,
     passthrough_binary: &Path,
+    build_record: &BuildRecord,
 ) -> io::Result<Manifest> {
     let instrumented = BuildEvidence::collect(instrumented_binary)?;
     let passthrough = BuildEvidence::collect(passthrough_binary)?;
+    build_record
+        .check_builds(&instrumented, &passthrough)
+        .map_err(io::Error::other)?;
     let rustc_version_output =
         String::from_utf8_lossy(&Command::new("rustc").arg("--version").output()?.stdout)
             .into_owned();

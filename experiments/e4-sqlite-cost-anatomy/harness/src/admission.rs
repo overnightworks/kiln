@@ -1,13 +1,14 @@
 //! What the pilot requires before it measures or writes anything
 //! (protocol.md §5, §12, §13): the two builds it compares must be the ones
-//! preflight vetted — the exact bytes, the commit and the role the
-//! manifest records — and its evidence files must not already exist. A
+//! the build step made from the reviewed commit — the build record — and
+//! the ones preflight vetted — the exact bytes, the commit and the role
+//! the manifest records — and its evidence files must not already exist. A
 //! refusal here costs nothing; a run that went ahead on the wrong binary
 //! or over an earlier report would produce evidence that looks valid and
 //! is not.
 //!
-//! The decision lives in [`crate::manifest::Manifest::check_builds`];
-//! [`admit_builds`] and [`reserve_evidence_files`] are the thin adapters
+//! The decisions live in [`crate::build_record::BuildRecord::check_builds`]
+//! and [`crate::manifest::Manifest::check_builds`]; [`admit_builds`] and [`reserve_evidence_files`] are the thin adapters
 //! that read files and spawn the `build-role` child.
 
 use std::fmt;
@@ -15,6 +16,7 @@ use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::build_record::BuildRecord;
 use crate::builds::BuildEvidence;
 use crate::manifest::{BuildMismatch, Manifest};
 
@@ -30,6 +32,9 @@ pub const SAMPLES_LOG_FILE_NAME: &str = "monitor-samples.log";
 pub enum Refusal {
     /// The manifest cannot be read or lacks a recorded field (§12).
     ManifestUnreadable,
+    /// The build record cannot be read or lacks a field (§12): without it
+    /// there is no independent word on what the binaries are.
+    BuildRecordUnreadable(String),
     /// A binary is not the build the manifest vets.
     Unvetted(BuildMismatch),
     /// A binary could not be hashed or asked for its role.
@@ -41,6 +46,9 @@ impl fmt::Display for Refusal {
         match self {
             Refusal::ManifestUnreadable => {
                 write!(f, "the preflight manifest is unreadable or incomplete")
+            }
+            Refusal::BuildRecordUnreadable(reason) => {
+                write!(f, "the build record is unreadable or incomplete: {reason}")
             }
             Refusal::Unvetted(mismatch) => write!(f, "{mismatch}"),
             Refusal::Unverifiable(reason) => write!(f, "could not verify a build: {reason}"),
@@ -58,14 +66,18 @@ pub struct AdmittedBuilds {
     pub passthrough_sha256: String,
 }
 
-/// Vets the two binaries the pilot is about to measure against the
-/// preflight manifest: the exact bytes, the source commit and the role of
-/// each (§5, §12). Returns what the pilot report names.
+/// Vets the two binaries the pilot is about to measure against the build
+/// record the build step wrote and the preflight manifest: the exact
+/// bytes, the source commit and the role of each (§5, §12). Returns what
+/// the pilot report names.
 pub fn admit_builds(
     instrumented: &Path,
     passthrough: &Path,
     manifest_path: &Path,
+    build_record_path: &Path,
 ) -> Result<AdmittedBuilds, Refusal> {
+    let build_record = BuildRecord::read_file(build_record_path)
+        .map_err(|err| Refusal::BuildRecordUnreadable(err.to_string()))?;
     let manifest = fs::read_to_string(manifest_path)
         .ok()
         .and_then(|contents| Manifest::read(&contents))
@@ -76,6 +88,9 @@ pub fn admit_builds(
     };
     let instrumented_evidence = collect(instrumented)?;
     let passthrough_evidence = collect(passthrough)?;
+    build_record
+        .check_builds(&instrumented_evidence, &passthrough_evidence)
+        .map_err(Refusal::Unvetted)?;
     manifest
         .check_builds(&instrumented_evidence, &passthrough_evidence)
         .map_err(Refusal::Unvetted)?;
@@ -132,6 +147,10 @@ mod tests {
             });
             for (refusal, expected) in [
                 (Refusal::ManifestUnreadable, "manifest"),
+                (
+                    Refusal::BuildRecordUnreadable("no such file".to_string()),
+                    "build record",
+                ),
                 (unvetted, "passthrough"),
                 (
                     Refusal::Unverifiable("no such file".to_string()),
