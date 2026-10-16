@@ -1,0 +1,7 @@
+claim_id = "fa157e0dc58b49e79d3e6cdfcd8f4d32"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "d5dcbae5cc0b209a93899acf2ce433aa2f42c9db"
+branch = "claude/issue-106-e2-throughput-protocol"
+scope = ["experiments/e2-parallel-ordered-transactions/protocol.md"]
+opened_commit = "5c3ff4b990e908ff9312f88d658ee6afc9bb4d16"
