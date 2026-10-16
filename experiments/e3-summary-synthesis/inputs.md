@@ -90,9 +90,12 @@ classifies each state component:
   control state component with at most 16 named values: the order
   lifecycle's status (4 values, §6) and the dispatcher's cursor position
   among its `N = 5` workers (§5).
+  A key component whose value set is a fixed semantic constant of at most
+  16 named values is categorical too: the lease table's `K = 2` resources
+  (§8), so per-resource structure is enumerable.
 - A candidate **may never** enumerate the values of a quantity or identifier
   component (balances, quotas, counts, sequence values, owner identifiers,
-  keys), even when the family's semantics fixes a finite range for it (quota
+  keys whose value set is not a fixed small constant), even when the family's semantics fixes a finite range for it (quota
   `[0, 1000]`, owners `[1, 1 000 000]`). Encoding such a lookup through
   literals, branches or schema-derived domains counts as enumeration.
 - Semantic constants **may** appear in a candidate's arithmetic and guards:
@@ -113,9 +116,9 @@ Classification of every family's components under the rule:
 - Order lifecycle (§6): `status` is categorical (enumerable, 4 values).
 - Wallet (§7): `balance` is a quantity (not enumerable; 32 767 and 100 are
   usable constants).
-- Lease (§8): row presence per resource is control (2 values, enumerable);
-  the stored `owner` and the argument `resource` key are identifiers (not
-  enumerable; 1 000 000 and `K = 2` are usable constants).
+- Lease (§8): row presence per resource and the resource key (`K = 2`) are
+  categorical/control, enumerable; the stored `owner` is an identifier, not
+  enumerable; 1 000 000 is a usable constant.
 
 **Mutants.** Each family's list is the preregistered set of invalid
 candidates against which E3's "zero false acceptances" condition is judged
