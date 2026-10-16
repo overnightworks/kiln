@@ -4,7 +4,8 @@ Status: proposed, not yet frozen. Record: drafted in #83 by an author other
 than the one who froze the families, as `docs/experiments.md` ("Freeze order
 and authorship") requires; it becomes frozen when an independent reviewer of
 a different provider has passed it. Part A is `inputs.md` (the six families,
-their checking domains, the 52 mutants); this file is part B. Nothing below
+their checking domains, the 52 mutants); this file and `grammar.md` are
+part B. Nothing in either
 changes after a synthesis attempt has run; a change re-freezes this part and
 voids every result measured under the earlier one.
 
@@ -13,7 +14,7 @@ voids every result measured under the earlier one.
 It freezes, in the order of #83: the candidate language (§1), the component
 library and the search (§2), the checker's soundness contract (§3), the
 bound-class measurement (§4) and the manifest (§5). §6 records the head's
-rulings of 16.10.2026 as decisions with their reasons. It writes no code,
+rulings of 16.10.2026 as decisions with their reasons. Part B writes no code,
 measures nothing, and states no summary for any family and no verdict.
 
 Every frozen value carries a one-clause reason. Owners: `docs/experiments.md`
@@ -23,334 +24,8 @@ Every frozen value carries a one-clause reason. Owners: `docs/experiments.md`
 with `Execution { store, outcome, access_log }` and
 `Outcome::{Committed { response }, Aborted { reason }}`.
 
-## 1. The candidate language
-
-### 1.1 State signature, frozen by name
-
-A family's state is read through its **signature**: a fixed list of named
-state components, each with a kind. The classification is frozen here by
-name, from `inputs.md` §1's named examples and each family's semantics; no
-cardinality rule derives it (decision D2, §6).
-
-| Family | Component | Kind | Class (`inputs.md` §1) |
-|---|---|---|---|
-| Quota (§3) | `remaining`, `quota[0]` | `Int` | quantity |
-| Sequence (§4) | `last_value`, `sequence[0]` | `Int` | quantity |
-| Dispatcher (§5) | `cursor`, `dispatcher[0]` | `Cat(cursor)`, values `0 … 4` | control |
-| Order (§6) | `status`, `orders[0]` | `Cat(status)`, values `0 … 3` | categorical |
-| Wallet (§7) | `balance`, `wallet[0]` | `Int` | quantity |
-| Lease (§8) | `lease`, keyed by `resource` | `Keyed(Cat(resource) → Opt(Int))`, keys `0, 1` | key and row presence: categorical/control; `owner`: identifier |
-
-Every function parameter is an `Int`: parameters are arguments, not state
-components, and `inputs.md` §1 classifies state. A `Cat(c)` value is written
-`v0 … v(k-1)` in ascending order of its integer code. `Opt(Int)` is a row
-that is absent or present with an `owner`; reading a store through the
-signature maps an absent `lease` row to `none`. **Reason:** the head ruling
-lists exactly these components and classes; naming them leaves nothing to
-infer from a value range.
-
-### 1.2 Types
-
-| Type | Values |
-|---|---|
-| `Int` | checked `i64` |
-| `Bool` | true, false |
-| `Cat(c)` | the `k ≤ 16` named values of component `c` |
-| `Opt(Int)` | `none`, or `some(n)` with `n` an `Int` |
-| `Map(c)` | a total table `Cat(c) → Cat(c)` with `k` entries |
-| `Name` | an abort reason the `Program` can produce |
-| `Outcome` | `commit(Int)` or `abort(Name)` |
-
-`Name` ranges over the reasons read from the `Program`: every
-`AbortReason::Declared(name)` its bodies abort with;
-`Overflow(Width { table, column, key })` for every integer column without a
-clamping domain and every key the family's store can hold;
-`Overflow(Arithmetic)`; and `CheckViolation` for every declared check
-constraint and key. The checker compares full `AbortReason` values
-(`inputs.md` §1, "What equivalence means").
-
-### 1.3 Grammar
-
-Terms are typed; a term of the wrong type is malformed (§3.1). One grammar
-serves two uses. **Hole terms** are what the enumerator writes (§2.4).
-**Checker form** is what the checker evaluates: hole terms together with
-the component definitions of §2.1, written in the same grammar, and the
-mutants S4 writes (§3.8). Productions marked † occur only in checker form,
-never in a hole.
-
-```
-Int     ::= lit(n)                 n in the constant pool P, §1.5
-          | param(p)               an Int parameter of the function
-          | key                    the code of the key an entry is for
-          | state(c)               the value of an Int state component
-          | code(Cat)              the integer code of a category value
-          | get(Opt, Int)          the owner if present, else the default
-          | Int + Int | Int - Int
-          | min(Int, Int) | max(Int, Int) | clamp(Int, Int, Int)
-          | ite(Bool, Int, Int)
-          | O.f                    † an Int field of operand O ∈ {S, T, s}
-          | Int mod n              † Euclidean remainder, n a positive literal
-Bool    ::= true | false | not Bool | Bool and Bool | Bool or Bool
-          | Int rel Int            rel in {<, <=, =, !=, >=, >}
-          | Cat = Cat | present(Opt)
-          | O.f                    † a Bool field of an operand
-Cat     ::= name(v) | state(c) | ite(Bool, Cat, Cat)
-          | lookup(Map, Cat)       † the entry of a table
-          | of(c, Int)             † the value of c whose code is the Int
-Opt     ::= none | some(Int) | state(c, v)
-          | ite(Bool, Opt, Opt)
-Map     ::= table(Cat_0, …, Cat_{k-1})
-          | O.f                    † a Map field of an operand
-Entry   ::= when(Bool, t_1, …, t_m)   a per-key atom entry, §2.1
-Carrier ::= (t_1, …, t_m) | S | T | ite(Bool, Carrier, Carrier)   †
-Outcome ::= commit(Int) | abort(Name) | ite(Bool, Outcome, Outcome)
-          | case(Cat, Outcome_0, …, Outcome_{k-1})
-```
-
-`state(c)` reads a scalar state component and `state(c, v)` the row of a
-keyed component at key `v`. In checker form, `S` and `T` are the left and
-right operands of a combine and `s` the summary being applied; `x` is the
-state component (or, under `per-key`, the key's row) being applied to; a
-`Carrier` term is a combine's result. Where each production may occur:
-
-| Hole | May reference |
-|---|---|
-| `valid[f]` | `lit`, `param`, connectives, comparisons |
-| `atom[f]`, a field | `lit`, `param`, `key` (inside an `Entry` only), `none`, `some`, `table`, `name`, `ite`, arithmetic, comparisons |
-| `respond[f]` | everything of `atom[f]` except `key`, `table` and `Entry`, plus `state`, `code`, `get`, `present`, `case` |
-
-**Map-valued operands.** A `Map` is written as a literal `table` in an atom
-or read as an operand field `S.m`, `T.m`, `s.m` in checker form; no hole
-contains a map-valued reference. **Reason:** the holes need tables only as
-atoms of `transform` (§2.1), and the operand productions exist so the
-component definitions and S4's mutants are terms of one evaluator.
-
-### 1.4 Primitive semantics
-
-- `+` and `-` are checked `i64`, as the IR's `ArithmeticOp::{Add,
-  Subtract}`; `min` and `max` are total.
-- `clamp(z, l, u) = min(max(z, l), u)`, also for `l > u`, where it yields
-  `u`. **Reason:** this is E2 `inputs.md` §2.4's definition verbatim, it is
-  total, and a candidate with reversed bounds is then simply wrong and
-  rejected by comparison, not undefined.
-- `Int mod n` is the Euclidean remainder in `[0, n)`. `of(c, i)` with `i`
-  not a code of `c` rejects the candidate as an overflow does; `rotate`
-  passes a remainder, so there it is always defined.
-- `ite` and `case` evaluate the condition or scrutinee and the chosen arm
-  only. `get(o, d)` is the owner of `o` if present, else `d`.
-- **Overflow.** If any evaluation of a candidate — an atom, a combine, an
-  apply or a respond — overflows checked `i64` on any input the checker
-  evaluates (§3.2-§3.4), the candidate is rejected with the typed result
-  `Rejected(Overflow(witness))`. It is never mapped to a call's abort. A
-  call's abort is reproduced only when `respond[f]` evaluates to
-  `abort(name)`, and the checker compares that per call with `replay`
-  (decision D4). **Reason:** a summary's own arithmetic is not the
-  program's; mapping one to the other would let a candidate fail into a
-  right answer.
-
-### 1.5 Constants
-
-An `Int` literal must be in the family's **constant pool** `P`: the integer
-literals of its `Program` (function bodies, check constraints), the bounds
-of every declared column and parameter width, and `0` and `1`. A key code
-enters only through `key`. The checking domain's values are never literals:
-wallet balance `32 666` or lease owner `3` cannot be written. **Reason:**
-`inputs.md` §1 allows semantic constants in arithmetic and guards (5,
-32 767, 1000, 1 000 000) and nothing else.
-
-### 1.6 What the grammar does not enforce
-
-Over a finite checking domain, any language with addition and comparison
-can encode an indicator: `clamp(x, 0, 1) - clamp(x - 1, 0, 1)` is `1` at
-`x = 1` and `0` at every other integer, and `1 + 1 + 1` builds the
-unavailable literal `3`. No construct-level rule therefore makes a quantity
-table unrepresentable, and this part does not claim one. The tabulation ban
-of `inputs.md` §1 is enforced **semantically** by the checker contract: an
-admitted candidate must also agree with `kiln_ir::replay` on batches drawn
-from the family's full domain (§3.4), where a table of the small checking
-domain is wrong (decision D1).
-
-Two rules stay, as **search-space hygiene only**; they shrink the space and
-enforce nothing:
-
-- **Rule L.** Literals come from the pool (§1.5).
-- **Rule M.** A table is indexed by a `Cat` only, and no hole converts an
-  `Int` to a `Cat` (`of` is checker-form only).
-
-How this relates to `inputs.md`: §1 says S2's grammar enforces the ban and
-§10 item 1 that "S2 owns its enforcement in the grammar". S2 enforces it
-through the checker contract instead, because the grammar cannot. §10 item
-1's three recommendations hold: no hole takes a checking-domain value as a
-literal, size is measured on the representation (§1.7), and the measurement
-batches come from the family domain (§4.2). §10 item 2 asks that a
-candidate valid over the checking domain but growing on family-domain
-batches count as a miss; in this language no representation can grow
-(§4.4), so such a candidate is caught by family-domain disagreement
-instead. `inputs.md` is not edited.
-
-### 1.7 Size and bytes
-
-The **size** of a term is its node count: each constructor application,
-literal and reference counts 1; a `table`, `case` or `Entry` counts 1 plus
-its parts. It orders the search (§2.5). The **bytes** `B` of a summary are
-its serialised length at fixed width: a tag byte, then every carrier field
-(`Int` 8 bytes little-endian, `Bool` and `Cat` 1, `Opt(Int)` 9, `Map` `k`),
-with the identity serialised as tag `0` and zeroed fields. **Reason:** the
-frozen-representation rule of E2 `protocol.md` §3, "Size, B"; fixed width
-makes `B` a property of the chosen components, not of the data.
-
-### 1.8 What a candidate is
-
-A **candidate** for a family's `Program` is:
-
-| Part | Meaning |
-|---|---|
-| layout | one library component (§2.1) per signature component, in signature order |
-| `valid[f]` | per function `f`, a `Bool` hole term; when false the call's summary is `ε` |
-| `atom[f]` | per function `f`, one hole term per carrier field of the layout (an `Entry` per key for `per-key`) |
-| `respond[f]` | per function `f`, an `Outcome` hole term: the call's outcome from the state just before it |
-
-Combine and apply are not holes: they are the components' definitions. The
-summary of a call is `atom[f]` if `valid[f]` holds, else `ε`; its outcome is
-always `respond[f]`. This is the decomposition E2 uses for its hand
-summaries (E2 `inputs.md` §1, "State, transformer, response"). Per
-`inputs.md` §1 the access log is not compared, and the language has no
-construct for it.
-
-## 2. Component library and search
-
-### 2.1 Components
-
-The library is a fixed set of generic algebraic components. Each is a
-semigroup on its carrier with an **adjoined identity** `ε`: `ε ⊕ T = T`,
-`S ⊕ ε = S`, `apply(ε, x) = x`, and the body below runs only when both
-operands are values. **Reason:** an adjoined identity is exact byte for
-byte and needs no sentinel such as `i64::MIN`, whose arithmetic would
-overflow. No component names a family, a field or a function; each one's
-generality is argued by its source, a use outside these six families
-(decision D3).
-
-| Component | Kind it acts on | Carrier | Combine body `S ⊕ T` | Apply body `apply(s, x)` | Source |
-|---|---|---|---|---|---|
-| `shift` | `Int` | `a: Int` | `(S.a + T.a)` | `x + s.a` | the additive group; prefix sums (Blelloch, "Prefix sums and their applications", 1990) |
-| `clamp-shift` | `Int` | `a, l, u: Int` | `(S.a + T.a, clamp(S.l + T.a, T.l, T.u), clamp(S.u + T.a, T.l, T.u))` | `clamp(x + s.a, s.l, s.u)` | the composition closure of saturating additions, as in bounded counters and token buckets |
-| `reset-shift` | `Int` | `r: Bool, v: Int, a: Int` | `ite(T.r, T, (S.r, S.v, S.a + T.a))` | `ite(s.r, s.v, x) + s.a` | the segmented-scan operator (Blelloch 1990): a sum restarted at a flag |
-| `raise` | `Int` | `m: Int` | `(max(S.m, T.m))` | `max(x, s.m)` | the max semilattice (a max-register) |
-| `lower` | `Int` | `m: Int` | `(min(S.m, T.m))` | `min(x, s.m)` | the min semilattice |
-| `assign` | `Int`, `Cat(c)`, `Opt(Int)` | `v` of the kind | `T` | `s.v` | the last-writer-wins register (Shapiro et al., CRDTs, 2011) |
-| `fill` | `Opt(Int)` | `v: Int` | `S` | `ite(present(x), x, some(s.v))` | insert-if-absent: the first writer wins (SQL `ON CONFLICT DO NOTHING`) |
-| `rotate` | `Cat(c)`, `k` values | `a: Int` | `((S.a + T.a) mod k)` | `of(c, (code(x) + s.a) mod k)` | the cyclic group `Z_k` acting on a `k`-cycle; E2's inventory is a translation mod 91 |
-| `transform` | `Cat(c)`, `k` values | `m: Map(c)` | `(table(lookup(T.m, lookup(S.m, v0)), …, lookup(T.m, lookup(S.m, v(k-1)))))` | `lookup(s.m, x)` | the full transformation monoid; composing finite-state transition tables (Hillis and Steele, "Data parallel algorithms", 1986) |
-| `per-key(σ)` | `Keyed(Cat(c) → Opt(Int))`, `k` keys | one value of `σ` or `ε` per key | per key, `σ`'s combine | per key, `σ`'s apply to that key's row | the product of `k` copies of a monoid, indexed by a finite set |
-
-`σ` ranges over the components acting on `Opt(Int)` (`assign`, `fill`). A
-`per-key` atom is one `Entry` per key: `when(b, t_1 … t_m)` is `σ`'s value
-`(t_1 … t_m)` at that key if `b` holds, else `ε` there. The summary of a
-whole state is the product of one component value per signature component,
-combined and applied component by component; every family here has one
-signature component, so its product has one factor.
-
-### 2.2 Applicability
-
-| Kind | Components tried, in this order |
-|---|---|
-| `Int` | `assign`, `shift`, `raise`, `lower`, `reset-shift`, `clamp-shift` |
-| `Cat(c)` | `assign`, `transform`, `rotate` |
-| `Keyed(Cat(c) → Opt(Int))` | `per-key(assign)`, `per-key(fill)` |
-
-**Reason:** a deterministic order fixed before the run, narrow carriers
-first for the six signatures; it decides nothing else.
-
-### 2.3 What the enumerator receives
-
-The enumerator receives the family's `Program` and the family's
-**observation environments**, and nothing else: no mutant, no summary, no
-family name or number. From the `Program` it reads the signature of §1.1,
-the pool and the `Name` set. The observation environments are frozen:
-
-- for `valid[f]` and `atom[f]`: the arguments of every call of `f` in the
-  checking domain's alphabet `A`, malformed ones included;
-- for `respond[f]` and the stage filters: every store of `X` with those
-  arguments.
-
-They are deterministic, typed by each program's declared parameter types
-and drawn from the checking domain. They serve pruning (§2.5) and the stage
-filters (§2.6) only, never as literals (rule L); this is what "the
-enumerator receives only the `Program` and these observation environments"
-means (decision D8). **Reason:** pruning needs fixed inputs to compare terms
-on, and the checker evaluates this set anyway.
-
-### 2.4 Holes and search limits
-
-Every hole is a hole term of §1.3 of its type. The limits are **search
-limits**: they bound the enumeration and decide nothing about correctness or
-the bound class.
-
-| Limit | Value | Reason |
-|---|---|---|
-| size of any hole of function `f` | the node count of `f`'s body in `kiln_ir` (every `Effect`, `Terminal`, `Condition` and `Expr` node), computed from the `Program` at run start and logged | a term describing part of `f` needs no more nodes than `f` itself; the number comes from the `Program`, not from a known fill |
-| survivors per hole group (§2.6) | 64, in enumeration order | bounds the product of per-function survivors; later members are not tried |
-
-There is no depth limit and no branch budget: depth is bounded by size, and
-a branch budget enforced nothing (§1.6).
-
-### 2.5 Enumeration order and pruning
-
-The order is total and deterministic:
-
-1. the layout, by §2.2's order, the last signature component varying
-   fastest;
-2. within a layout, the functions in the `Program`'s declaration order, and
-   per function the hole group `(valid[f], atom[f])`, then `respond[f]`;
-3. within a hole, ascending size, then the pre-order sequence of
-   constructor ranks (the order of §1.3's alternatives), then payloads
-   (literals ascending, parameters and fields in declaration order,
-   categories in code order);
-4. a candidate is a choice of one survivor per hole group; candidates are
-   enumerated lexicographically by survivor index, the first function's
-   groups varying slowest.
-
-This order is **not globally smallest-first**: a larger hole term in an
-earlier layout precedes a smaller one in a later layout. The admitted
-candidate is the first admissible one in this order, not necessarily the
-smallest (decision D9).
-
-**Observational-equivalence pruning.** Two terms of one hole with equal
-values on every observation environment of that hole (§2.3) form one class;
-only the first in the order is kept, and the others are never revisited.
-This is **incomplete**: two terms equal on the checking domain may differ on
-the family domain, and the discarded one may be the only one that agrees
-there. There is no backtracking into pruned classes. Every miss is
-therefore scoped to this incomplete search: it is not a proof that no
-summary exists in the language (decision D8). **Reason:** without pruning,
-the number of syntactically distinct terms hides the far smaller number of
-distinguishable ones; with frozen environments the pruning is reproducible.
-
-### 2.6 Stage filters
-
-Before a candidate reaches the checker, its hole groups pass two filters,
-each a subset of the checker's own one-call checks (§3.2):
-
-- `(valid[f], atom[f])`: for every store `x` of `X` and every call of `f`
-  in `A`, applying the call's summary to `x` gives `replay`'s store after
-  that single call, read through the signature;
-- `respond[f]`: for every such pair, the outcome equals `replay`'s.
-
-Each filter depends on one function's holes only, so functions are filtered
-independently and only survivors are combined. A filter rejects only what
-the checker would reject, so it never discards an admissible candidate.
-
-### 2.7 Candidate count
-
-The enumerator logs per family: the size of the enumeration space per
-layout and hole, counted without evaluation before the run; for every
-candidate that reaches a check, its index in the order of §2.5 and the
-stage that rejected or admitted it; per hole the terms tried, pruned and
-surviving; and the index of the admission or of the last candidate tried.
-**Determinism** means the enumeration order is a function of the `Program`,
-the observation environments and this part alone, so every index is
-reproducible. How far the search gets within ten minutes depends on the
-machine; the count reached at the deadline is recorded, not promised.
+§1 (the candidate language) and §2 (the component library and the search)
+are in [`grammar.md`](grammar.md); section numbers run across both files.
 
 ## 3. Checker soundness contract
 
@@ -370,20 +45,48 @@ the only acceptance.
 
 ### 3.1 Validation precedes evaluation
 
-Validation is a pure function of the candidate and the `Program`, run in
-this order, stopping at the first failure with a typed reason:
+Validation is a pure function of its input and the `Program`. It runs the
+lists below in order and stops at the first failure with a typed reason. A
+malformed input is thereby told apart from one that evaluates and is wrong,
+as `docs/experiments.md` asks ("typed rejection, distinct from an abort").
 
-1. **Well-formed:** every hole filled, every name declared, every component
-   in the library and of the right kind for its signature component.
+**Checker-form validation**, for every input of the checker, a candidate or
+a mutant (§3.8):
+
+1. **Declared:** per signature component, a carrier whose fields each have
+   a type of the language (`Int`, `Bool`, `Opt(Int)`, or `Cat(c)` or
+   `Map(c)` for a category `c` of the signature), a combine and an apply;
+   per function, `valid`, `atom` and `respond`; every parameter, state
+   component, category value and `Name` declared by the `Program` (§1.2).
 2. **Well-typed:** every term has its §1.3 type, including the category of
-   every `Cat`, and uses only productions its hole allows.
-3. **Literals** are in the pool (rule L); tables are `Cat`-indexed (rule M).
-4. **Search limits** of §2.4 hold.
+   every `Cat`. Combine is a `Carrier` term over `S`, `T`, literals and
+   the operators; apply is a term of the component's kind (§1.3, "the apply
+   input is typed") over `s`, `x` and, for a keyed state, `x(v)`; `atom` is
+   a value of the declared carrier (or an `Entry` per key); `O.f` names a
+   declared field; operands are bound only there. Under `per-key(σ)` the
+   carrier, combine and apply are `σ`'s, run once per key (§2.1).
+3. **Total:** every declared operation is defined on every input of its
+   type: each `case` has one arm per value, each `table` one entry per
+   value, and no part listed in 1 is missing. An error during evaluation
+   (overflow, `of` outside the codes, §1.4) stays a typed rejection at
+   evaluation, not a validation failure.
 
-A malformed candidate is thereby told apart from one that evaluates and is
-wrong, as `docs/experiments.md` asks ("typed rejection, distinct from an
-abort"). Mutants in checker form (§3.8) skip check 4, which bounds the
-search, not the checker.
+Waived in checker form: membership in the library (§2.1, §2.2), the
+per-hole production restriction (§1.3's table), rules L and M (§1.6) and
+the search limits (§2.4). **Reason:** these bound or tidy the search and
+enforce nothing (§1.6); applying them to a mutant would let it fail
+structurally instead of reaching the semantic checks it was written for.
+**"Not expressible"** in `inputs.md` §1 means not expressible in checker
+form, the language of this list, and means only that wherever it is used.
+
+**Candidate validation**, additionally, for a candidate of the enumerator:
+
+4. **Library:** every component is in §2.1, of a kind §2.2 tries for its
+   signature component, with exactly §2.1's carrier, combine and apply.
+5. **Holes:** every hole term uses only the productions its hole allows
+   (§1.3).
+6. **Literals** are in the pool (rule L); tables are `Cat`-indexed (rule M).
+7. **Search limits** of §2.4 hold.
 
 ### 3.2 Equivalence to `replay` over the checking domain
 
@@ -464,14 +167,17 @@ mutant and on randomised pairs, and re-freezes this part.
 
 ### 3.8 Rejection of the 52 mutants
 
-S4 writes each preregistered mutant (`inputs.md` §9) in checker form: a
-carrier and `valid`, `atom`, combine, apply and `respond` terms of §1.3,
+S4 writes each preregistered mutant (`inputs.md` §9) in checker form: its
+own carrier and `valid`, `atom`, combine, apply and `respond` terms of §1.3,
 which may use the † productions, so a mutant's deviating combine (an `N`,
-`O` or `T` mutant) is written directly and is not limited to the library.
-Each is run through §3.1 (checks 1-3), §3.2 and §3.3; a `Valid` result is a
-false acceptance and fails E3 (`docs/experiments.md`, "Conjunctive success
-condition"). A mutant that checker form cannot express is recorded as "not
-expressible" with its reason (`inputs.md` §1), never dropped. Mutants are
+`O` or `T` mutant) is written directly and is not limited to the library;
+§2.1's adjoined identity holds for its carrier too. Each is run through
+§3.1's checker-form validation (checks 1-3 only), §3.2 and §3.3; a `Valid`
+result is a false acceptance and fails E3 (`docs/experiments.md`,
+"Conjunctive success condition"). A mutant checker form cannot express is
+recorded as "not expressible" in §3.1's sense, with its reason, never
+dropped. A mutant's behaviour is the one `inputs.md` freezes, whatever
+text expresses it. Mutants are
 not measured for the bound class. **Reason:** the checker's soundness does
 not depend on what the library can produce, so the checker is tested on
 the widest form it accepts.
@@ -529,8 +235,11 @@ increases by 1 for each:
 
 - checked `i64` operation executed (`+`, `-`, `min`, `max`, `clamp`,
   `mod`), as E2 counts every addition, subtraction and clamp;
-- test executed: an identity-tag test, an `ite` condition, a `present`
-  test; an arm that does not run costs nothing;
+- **branch test** executed: an identity-tag test, or the decision of an
+  `ite`, `case`, `get`, `when`, `and` or `or`. The Boolean term deciding it
+  (a comparison, `present`, `Cat =`, `not`, a field read) is part of that
+  one test and adds nothing, and an arm that does not run costs nothing.
+  Library bodies evaluate Boolean terms only as such decisions;
 - `Map` entry read or written.
 
 Copying a field and converting between a category and its code cost
@@ -545,29 +254,37 @@ terms), `respond`, serialising for `B` and generation run.
 ### 4.4 Stated bounds, derived from the library
 
 Hole terms run outside the boundaries (§4.3), so `B`, `C` and `A` depend
-only on the layout. Per component, from §1.7 and §4.3, with both operands
-values (two tag tests per combine, one per apply):
+only on the layout. Per component, from §1.7 and §4.3, at most: a combine
+of two values pays two tag tests and its body, an apply of a value one tag
+test and its body, and an identity operand pays less (it skips the body):
 
-| Component | `B` | `C` at most | `A` at most |
+| Component | `B` bytes | `C` units at most | `A` units at most |
 |---|---|---|---|
-| `assign` | 9 (`Int`), 2 (`Cat`), 10 (`Opt(Int)`) | 2 | 1 |
-| `shift`, `raise`, `lower` | 9 | 3 | 2 |
-| `reset-shift` | 18 | 4: tag tests, `T.r`, one addition | 3 |
-| `clamp-shift` | 25 | 7: tag tests, 3 additions, 2 clamps | 3 |
-| `fill` | 9 | 2 | 2 |
-| `rotate` | 9 | 4 | 3 |
-| `transform`, `k` values | `1 + k` | `2 + 3k` | 2 |
-| `per-key(σ)`, `k` keys | `1 + k · B(σ)` | `2 + k · C(σ)` | `1 + k · A(σ)` |
+| `assign` | `1 + 8` (`Int`), `1 + 1` (`Cat`), `1 + 9` (`Opt(Int)`) | 2: two tags | 1: one tag |
+| `shift`, `raise`, `lower` | `1 + 8 = 9` | 3: two tags, one `+`, `max` or `min` | 2: one tag, one operation |
+| `reset-shift` | `1 + 1 + 8 + 8 = 18` | 4: two tags, the `ite` on `T.r`, one `+` | 3: one tag, the `ite` on `s.r`, one `+` |
+| `clamp-shift` | `1 + 3 · 8 = 25` | 7: two tags, three `+`, two `clamp` | 3: one tag, one `+`, one `clamp` |
+| `fill` | `1 + 8 = 9` | 2: two tags | 2: one tag, the `ite` on `present(x)` |
+| `rotate` | `1 + 8 = 9` | 4: two tags, one `+`, one `mod` | 3: one tag, one `+`, one `mod` |
+| `transform`, `k` values | `1 + k` | `2 + 3k`: two tags; per entry two reads and one write | 2: one tag, one read |
+| `per-key(σ)`, `k` keys | `1 + k · B(σ)` | `2 + k · C(σ)`: two tags, then `σ`'s combine per key | `1 + k · A(σ)`: one tag, then `σ`'s apply per key |
+
+**Worked, for the lease.** `fill`'s apply of a value: its tag test (1),
+then the single decision of `ite(present(x), x, some(s.v))` (1), so
+`A(fill) = 2`. `per-key(fill)` with `k = 2`: `A = 1 + 2 · 2 = 5`, `C = 2 +
+2 · 2 = 6`, `B = 1 + 2 · 9 = 19`. `per-key(assign)`: `A = 1 + 2 · 1 = 3`,
+`C = 2 + 2 · 2 = 6`, `B = 1 + 2 · 10 = 21`. The lease's bound is the larger
+of the two per quantity: `B = 21`, `C = 6`, `A = 5`.
 
 A family's **stated bound** is, for each quantity, the maximum over the
 components its signature admits (§2.2):
 
 | Family | `B` bytes | `C` units | `A` units | Derivation |
 |---|---|---|---|---|
-| Quota, sequence, wallet | 25 | 7 | 3 | `Int`: `clamp-shift` is widest and costliest; `reset-shift` also applies in 3 |
-| Dispatcher | 9 | 17 | 3 | `Cat`, `k = 5`: `rotate` 9 bytes; `transform` `2 + 15` |
-| Order | 9 | 14 | 3 | `Cat`, `k = 4`: `rotate` 9 bytes; `transform` `2 + 12` |
-| Lease | 21 | 6 | 5 | `per-key`, `k = 2`: `1 + 2 · 10`, `2 + 2 · 2`, `1 + 2 · 2` |
+| Quota, sequence, wallet | 25 | 7 | 3 | `Int`: `clamp-shift` gives all three; `reset-shift`'s `A` is also 3 |
+| Dispatcher | 9 | 17 | 3 | `Cat`, `k = 5`: `rotate` gives `B` and `A`; `transform` gives `C = 2 + 3 · 5` |
+| Order | 9 | 14 | 3 | `Cat`, `k = 4`: `rotate` gives `B` and `A`; `transform` gives `C = 2 + 3 · 4` |
+| Lease | 21 | 6 | 5 | `per-key`, `k = 2`: the worked lines above |
 
 A candidate is **within the bound class** iff (i) for each of `B`, `C`, `A`
 the maximum over all 100 seeds and nine sizes is at most its family's bound
@@ -659,20 +376,43 @@ condition is discarded and the search continues with the next in order.
 The clock stops at the first admission; the search does not look further
 (decision D6).
 
-A family not admitted is a miss of exactly one type, decided by the
-furthest stage any of its candidates reached:
+A family not admitted is a miss of exactly one type. A candidate exists
+only once every hole group it draws on has passed its stage filter (§2.6),
+so every candidate has completed stage F; its later stages run in the order
+above. Each stage ends in one of three ways:
 
-| Type | Furthest stage reached |
-|---|---|
-| **measured growth** | a candidate failed only E2's growth rule |
-| **correctness** | a candidate passed the stage filters and was rejected for disagreeing with `replay` on the checking domain (multi-call batches or associativity), for its own overflow, or on the family domain |
-| **expressiveness** | no candidate passed the stage filters, and the argument below proves none in the language can |
-| **search** | no candidate passed the stage filters, and no such argument exists: the deadline came, or the capped and pruned enumeration ended |
+| Stage, in order | passed | failed | interrupted by the deadline |
+|---|---|---|---|
+| F, stage filters (§2.6) | the candidate is assembled | that group member joins no candidate | search, unless "No candidate" below gives expressiveness |
+| V, validation (§3.1) | next stage | defect: the enumerator wrote a term outside §1 | search |
+| K, checking domain (§3.2, §3.3; overflow, §1.4) | next stage | correctness | search |
+| Bd, stated bound (§4.4 (i)) | next stage | a value above the bound: defect (§4.4); the candidate's own overflow: correctness | search |
+| FD, family domain (§3.4) | next stage | correctness | search |
+| G, growth rule (§4.4 (ii)) | admitted; the clock stops | measured growth | search |
 
-A measured value above the stated bound is a defect that stops the run
-(§4.4), not a miss. The record gives the type and what ended the search;
-the verdict counts admissions as `docs/experiments.md` says ("Conjunctive
-success condition"), and the type changes no count (decision D7).
+**Precedence.** The type is that of the candidate whose **furthest
+completed stage** is furthest in the order F < V < K < Bd < FD < G; among
+candidates tied there, the earliest in §2.5's order decides. Its type is
+the entry, failed or interrupted, of the stage after its furthest completed
+one. **Reason:** the furthest stage is the most specific evidence the run
+produced, and the earliest tied candidate's result does not depend on how
+far the machine got before the deadline (§2.7).
+
+**No candidate.** If none was assembled, whether the deadline came or the
+capped and pruned enumeration ended, the miss is **expressiveness** iff an
+argument from §2.1 proves that, for some function, no `(valid, atom)` (or
+no `respond`) of any layout the library offers passes its filter, and
+**search** otherwise. **Reason:** such an argument covers every term the
+library can build, so neither the deadline nor the cap decided the outcome;
+"expressiveness" always refers to the library, never to checker form.
+
+A **defect** is not a miss: it stops the run, the family gets no verdict
+and its partial numbers are void, as for a harness fault (§5.3), and the
+document or implementation is re-frozen (§4.4). The record gives the type,
+the deciding candidate's index and stage, and what ended the search
+(admission, deadline, exhausted enumeration or defect). The verdict counts
+admissions as `docs/experiments.md` says ("Conjunctive success condition"),
+and the type changes no count (decision D7).
 
 **How the two expected misses arise.** Both are expressiveness misses,
 provable from §2.1 against one single-call pair of the checking domain:
@@ -738,12 +478,15 @@ not scored.
 
 ### 5.8 Threats to validity
 
-- **The library was designed with knowledge of E2's quota summary.** Its
-  designer knew that E2's quota summary is a clamped translation; a
-  designer of the same project cannot be kept from that. A quota admission
-  therefore shows that the search finds a layout and fills in a library
-  that contains the right component, not that it discovered saturation;
-  likewise for `transform` and `rotate`.
+- **The component selection was informed by the families.** Its designer
+  knew the six families and that E2's quota summary is a clamped
+  translation; a designer of the same project cannot be kept from that, and
+  a family-informed selection can encode answer shapes. D3 therefore does
+  not rest on an uninformed selection: it rests on each component having a
+  generic source or, for `clamp-shift`, a derivation from cited identities
+  (§2.1). A quota admission shows that the search finds a layout and fills
+  in a library that contains the right component, not that it discovered
+  saturation; likewise for `transform` and `rotate`.
 - **Expected misses decided by the library.** Wallet and lease miss for
   expressiveness (§5.4), so neither reaches the family-domain agreement or
   the growth rule. `inputs.md` §10 item 2 hoped the lease would also show
@@ -762,20 +505,25 @@ not scored.
 ## 6. Decisions (head rulings, 16.10.2026)
 
 - **D1, tabulation is enforced semantically** (§1.6, §3.4;
-  `docs/experiments.md`, "Gate"). Admission also
-  requires agreement with `replay` on the family-domain batches; rules L
-  and M are hygiene. Reason: over a finite domain arithmetic and
-  comparison encode indicators, so no construct rule bans a table.
+  `docs/experiments.md`, "Gate"). Admission also requires agreement with
+  `replay` on the family-domain batches, a sampled admission condition that
+  does not prove a table impossible; rules L and M are hygiene. Reason:
+  over a finite domain arithmetic and comparison encode indicators, so no
+  construct rule bans a table.
 - **D2, categoricals by name** (§1.1). Reason: a cardinality rule would
   classify a small quantity or identifier as enumerable.
-- **D3, a generic library** (§2.1). Components are textbook structures with
-  a source; layout, wiring and terms are search outputs; per-family shapes
-  are gone. Reason: a component fitting one family's expected algebra is a
-  hidden answer.
-- **D4, exact semantics** (§1.3, §1.4, §2.1). Every component is defined in
-  one grammar, `clamp` holds for reversed bounds, and a candidate's own
-  overflow is a typed rejection. Reason: the implementation must not
-  choose meanings.
+- **D3, a generic library** (§2.1, §5.8). Each component has a textbook
+  source or a derivation from cited identities; layout, wiring and terms
+  are search outputs; per-family shapes are gone. The selection was
+  informed by the families, so D3 rests on the sources, not on the
+  selection. Reason: a component fitting one family's expected algebra is
+  a hidden answer.
+- **D4, exact semantics** (§1.3, §1.4, §2.1, §3.1). Every component is
+  defined in one grammar with typed operand fields and apply input; `clamp`
+  holds for reversed bounds; `and`, `or`, `get`, `ite`, `case` and `when`
+  are lazy and everything else strict; a candidate's own overflow is a
+  typed rejection; checker-form validation is its own list. Reason: the
+  implementation must not choose meanings.
 - **D5, lease** (§5.4). The library cannot express `release`; the lease is
   an expected expressiveness miss. Reason: an honest statement of the
   library's reach.
@@ -783,12 +531,14 @@ not scored.
   candidate passing every condition; a failing candidate is discarded and
   the search continues. Reason: one rule, with no condition that ends a
   search early.
-- **D7, bounds and miss types** (§4.4, §5.4). Bounds are derived from the
-  library; growth acts on costs only; every miss has one type. Reason: a
-  bound chosen around expected fills decides nothing.
+- **D7, bounds and miss types** (§4.3, §4.4, §5.4). Bounds are derived
+  from the library with one unit per branch test; growth acts on costs
+  only; every miss has one type, read from the furthest completed stage.
+  Reason: a bound chosen around expected fills decides nothing.
 - **D8, an incomplete search** (§2.3, §2.5, §2.7). Pruning uses frozen
-  observation environments; misses are scoped to this search; the count at
-  the deadline is recorded, not promised. Reason: pruning on samples is not
+  observation environments with `key` bound, keeps erroring terms, and the
+  group product runs by total size; misses are scoped to this search; the
+  count at the deadline is recorded, not promised. Reason: pruning on samples is not
   semantic equivalence.
 - **D9, manifest** (§2.5, §5.2, §5.3). One attempt; a crash fails closed;
   conditions are recorded, not assumed; the order is not smallest-first.
