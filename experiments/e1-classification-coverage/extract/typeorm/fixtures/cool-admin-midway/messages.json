@@ -1,0 +1,308 @@
+{
+  "messages": [
+    {
+      "filePath": "src/modules/cloud/service/db.ts",
+      "fromLine": 32,
+      "toLine": 32,
+      "fromColumn": 21,
+      "toColumn": 57,
+      "content": {
+        "type": "method",
+        "name": "findOneBy",
+        "methodType": "read",
+        "object": "cloudDBEntity",
+        "objectTypes": [
+          "Repository<CloudDBEntity>"
+        ],
+        "attributes": [
+          {
+            "name": "id",
+            "start_line": 33,
+            "start_column": 52,
+            "end_line": 33,
+            "end_column": 54
+          }
+        ]
+      }
+    },
+    {
+      "filePath": "src/modules/cloud/service/db.ts",
+      "fromLine": 35,
+      "toLine": 35,
+      "fromColumn": 12,
+      "toColumn": 35,
+      "content": {
+        "type": "method",
+        "name": "save",
+        "methodType": "write",
+        "object": "repository",
+        "objectTypes": [
+          "Repository<any>"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "src/modules/cloud/service/db.ts",
+      "fromLine": 41,
+      "toLine": 41,
+      "fromColumn": 12,
+      "toColumn": 41,
+      "content": {
+        "type": "method",
+        "name": "delete",
+        "methodType": "write",
+        "object": "repository",
+        "objectTypes": [
+          "Repository<any>"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "src/modules/cloud/service/db.ts",
+      "fromLine": 44,
+      "toLine": 44,
+      "fromColumn": 12,
+      "toColumn": 30,
+      "content": {
+        "type": "method",
+        "name": "clear",
+        "methodType": "write",
+        "object": "repository",
+        "objectTypes": [
+          "Repository<any>"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "src/modules/cloud/service/db.ts",
+      "fromLine": 48,
+      "toLine": 49,
+      "fromColumn": 19,
+      "toColumn": 29,
+      "content": {
+        "type": "method",
+        "name": "createQueryBuilder",
+        "methodType": "other",
+        "object": "repository",
+        "objectTypes": [
+          "Repository<any>"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "src/modules/cloud/service/db.ts",
+      "fromLine": 69,
+      "toLine": 71,
+      "fromColumn": 23,
+      "toColumn": 6,
+      "content": {
+        "type": "method",
+        "name": "findOneBy",
+        "methodType": "read",
+        "object": "cloudDBEntity",
+        "objectTypes": [
+          "Repository<CloudDBEntity>"
+        ],
+        "attributes": [
+          {
+            "name": "className",
+            "start_line": 71,
+            "start_column": 6,
+            "end_line": 71,
+            "end_column": 15
+          }
+        ]
+      }
+    },
+    {
+      "filePath": "src/modules/cloud/service/db.ts",
+      "fromLine": 87,
+      "toLine": 87,
+      "fromColumn": 24,
+      "toColumn": 70,
+      "content": {
+        "type": "method",
+        "name": "findOneBy",
+        "methodType": "read",
+        "object": "cloudDBEntity",
+        "objectTypes": [
+          "Repository<CloudDBEntity>"
+        ],
+        "attributes": [
+          {
+            "name": "id",
+            "start_line": 88,
+            "start_column": 55,
+            "end_line": 88,
+            "end_column": 57
+          }
+        ]
+      }
+    },
+    {
+      "filePath": "src/modules/cloud/service/db.ts",
+      "fromLine": 89,
+      "toLine": 89,
+      "fromColumn": 28,
+      "toColumn": 71,
+      "content": {
+        "type": "method",
+        "name": "findOneBy",
+        "methodType": "read",
+        "object": "cloudDBEntity",
+        "objectTypes": [
+          "Repository<CloudDBEntity>"
+        ],
+        "attributes": [
+          {
+            "name": "tableName",
+            "start_line": 90,
+            "start_column": 59,
+            "end_line": 90,
+            "end_column": 68
+          }
+        ]
+      }
+    },
+    {
+      "filePath": "src/modules/cloud/service/db.ts",
+      "fromLine": 95,
+      "toLine": 95,
+      "fromColumn": 33,
+      "toColumn": 76,
+      "content": {
+        "type": "method",
+        "name": "findOneBy",
+        "methodType": "read",
+        "object": "cloudDBEntity",
+        "objectTypes": [
+          "Repository<CloudDBEntity>"
+        ],
+        "attributes": [
+          {
+            "name": "className",
+            "start_line": 96,
+            "start_column": 64,
+            "end_line": 96,
+            "end_column": 73
+          }
+        ]
+      }
+    },
+    {
+      "filePath": "src/modules/cloud/service/db.ts",
+      "fromLine": 101,
+      "toLine": 101,
+      "fromColumn": 26,
+      "toColumn": 69,
+      "content": {
+        "type": "method",
+        "name": "findOneBy",
+        "methodType": "read",
+        "object": "cloudDBEntity",
+        "objectTypes": [
+          "Repository<CloudDBEntity>"
+        ],
+        "attributes": [
+          {
+            "name": "tableName",
+            "start_line": 102,
+            "start_column": 57,
+            "end_line": 102,
+            "end_column": 66
+          }
+        ]
+      }
+    },
+    {
+      "filePath": "src/modules/cloud/service/db.ts",
+      "fromLine": 105,
+      "toLine": 105,
+      "fromColumn": 31,
+      "toColumn": 74,
+      "content": {
+        "type": "method",
+        "name": "findOneBy",
+        "methodType": "read",
+        "object": "cloudDBEntity",
+        "objectTypes": [
+          "Repository<CloudDBEntity>"
+        ],
+        "attributes": [
+          {
+            "name": "className",
+            "start_line": 106,
+            "start_column": 62,
+            "end_line": 106,
+            "end_column": 71
+          }
+        ]
+      }
+    },
+    {
+      "filePath": "src/modules/cloud/service/db.ts",
+      "fromLine": 121,
+      "toLine": 121,
+      "fromColumn": 25,
+      "toColumn": 65,
+      "content": {
+        "type": "method",
+        "name": "findBy",
+        "methodType": "read",
+        "object": "cloudDBEntity",
+        "objectTypes": [
+          "Repository<CloudDBEntity>"
+        ],
+        "attributes": [
+          {
+            "name": "status",
+            "start_line": 122,
+            "start_column": 53,
+            "end_line": 122,
+            "end_column": 59
+          }
+        ]
+      }
+    },
+    {
+      "filePath": "src/modules/cloud/service/db.ts",
+      "fromLine": 130,
+      "toLine": 132,
+      "fromColumn": 12,
+      "toColumn": 7,
+      "content": {
+        "type": "method",
+        "name": "query",
+        "methodType": "other",
+        "object": "coolDataSource",
+        "objectTypes": [
+          "CoolDataSource",
+          "DataSource"
+        ],
+        "attributes": []
+      }
+    },
+    {
+      "filePath": "src/modules/cloud/service/db.ts",
+      "fromLine": 141,
+      "toLine": 143,
+      "fromColumn": 12,
+      "toColumn": 7,
+      "content": {
+        "type": "method",
+        "name": "query",
+        "methodType": "other",
+        "object": "coolDataSource",
+        "objectTypes": [
+          "CoolDataSource",
+          "DataSource"
+        ],
+        "attributes": []
+      }
+    }
+  ]
+}
