@@ -1,0 +1,8 @@
+claim_id = "5912ecc7ac3c4033811f740e882020cc"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "32f5242baa695a89a91891b60b3abd462a7b09dc"
+branch = "claude/issue-72-e1-which-versus-whether"
+scope = ["crates/kiln-e1", "specs/kiln-e1.spec.md"]
+opened_commit = "61d7dbd53bdce8e190ac139dad8ce8c4220d3a6c"
+whole_reason = "one classifier rule and its criteria"
