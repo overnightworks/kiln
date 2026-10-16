@@ -61,7 +61,7 @@ a mutant (§3.8):
 2. **Well-typed:** every term has its §1.3 type, including the category of
    every `Cat`. Combine is a `Carrier` term over `S`, `T`, literals and
    the operators; apply is a term of the component's kind (§1.3, "the apply
-   input is typed") over `s`, `x` and, for a keyed state, `x(v)`; `atom` is
+   input is typed") over `s`, `x` and, for a keyed state, `x(v)`, its result a `keyed` literal; `atom` is
    a value of the declared carrier (or an `Entry` per key); `O.f` names a
    declared field; operands are bound only there. Under `per-key(σ)` the
    carrier, combine and apply are `σ`'s, run once per key (§2.1).
@@ -353,7 +353,8 @@ rather than filtered out.
 ### 5.3 Budget and attempt
 
 - **10 minutes of wall-clock per family**, on a monotonic clock, from the
-  first candidate proposed to admission or the deadline. It covers
+  moment enumeration for the family begins, before any pruning, filtering
+  or candidate assembly, to admission or the deadline. It covers
   enumeration, the stage filters, validation, every check of §3 and the
   measurement of §4, because "admitted" means all of them. Process start,
   loading the `Program` and writing the record are outside it.
@@ -371,14 +372,15 @@ rather than filtered out.
 A candidate is **admitted** iff it passes, in this order: validation
 (§3.1); equivalence and associativity over the checking domain (§3.2,
 §3.3); the stated bound (§4.4 (i)); agreement on the family domain (§3.4);
-and E2's growth rule on its costs (§4.4 (ii)). A candidate failing any
-condition is discarded and the search continues with the next in order.
-The clock stops at the first admission; the search does not look further
+and E2's growth rule on its costs (§4.4 (ii)). A candidate failing a
+condition is discarded and the search continues with the next in order,
+except for a validation defect or a value above the stated bound, which
+stop the run (below). The clock stops at the first admission; the search does not look further
 (decision D6).
 
 A family not admitted is a miss of exactly one type. A candidate exists
 only once every hole group it draws on has passed its stage filter (§2.6),
-so every candidate has completed stage F; its later stages run in the order
+so every candidate has passed stage F; its later stages run in the order
 above. Each stage ends in one of three ways:
 
 | Stage, in order | passed | failed | interrupted by the deadline |
@@ -390,16 +392,18 @@ above. Each stage ends in one of three ways:
 | FD, family domain (§3.4) | next stage | correctness | search |
 | G, growth rule (§4.4 (ii)) | admitted; the clock stops | measured growth | search |
 
-**Precedence.** The type is that of the candidate whose **furthest
-completed stage** is furthest in the order F < V < K < Bd < FD < G; among
-candidates tied there, the earliest in §2.5's order decides. Its type is
-the entry, failed or interrupted, of the stage after its furthest completed
-one. **Reason:** the furthest stage is the most specific evidence the run
+**Precedence.** Each candidate's **terminal stage** is the first stage it
+did not pass, failed or interrupted; stages run in the order F < V < K < Bd
+< FD < G. The miss is classified from the candidate whose terminal stage is
+furthest in that order, ties broken by the earliest in §2.5's order, and its
+type is that terminal stage's entry in the failed or interrupted column.
+**Reason:** the furthest terminal stage is the most specific evidence the run
 produced, and the earliest tied candidate's result does not depend on how
 far the machine got before the deadline (§2.7).
 
-**No candidate.** If none was assembled, whether the deadline came or the
-capped and pruned enumeration ended, the miss is **expressiveness** iff an
+**No candidate.** If none was assembled, whether the clock expired
+before any candidate was assembled or the capped and pruned enumeration
+ended, the miss is **expressiveness** iff an
 argument from §2.1 proves that, for some function, no `(valid, atom)` (or
 no `respond`) of any layout the library offers passes its filter, and
 **search** otherwise. **Reason:** such an argument covers every term the
@@ -533,7 +537,7 @@ not scored.
   search early.
 - **D7, bounds and miss types** (§4.3, §4.4, §5.4). Bounds are derived
   from the library with one unit per branch test; growth acts on costs
-  only; every miss has one type, read from the furthest completed stage.
+  only; every miss has one type, read from the furthest terminal stage.
   Reason: a bound chosen around expected fills decides nothing.
 - **D8, an incomplete search** (§2.3, §2.5, §2.7). Pruning uses frozen
   observation environments with `key` bound, keeps erroring terms, and the

@@ -39,6 +39,7 @@ infer from a value range.
 | `Cat(c)` | the `k ≤ 16` named values of component `c` |
 | `Opt(Int)` | `none`, or `some(n)` with `n` an `Int` |
 | `Map(c)` | a total table `Cat(c) → Cat(c)` with `k` entries |
+| `Keyed(c)` | the keyed state `Cat(c) → Opt(Int)`: one `Opt(Int)` row per value of `c` |
 | `Name` | an abort reason the `Program` can produce |
 | `Outcome` | `commit(Int)` or `abort(Name)` |
 
@@ -86,6 +87,7 @@ Opt     ::= none | some(Int) | state(c, v)
           | O.f                    † an Opt(Int) field of an operand
           | x                      † the applied-to row, kind Opt(Int)
           | x(v)                   † the row at key v of a keyed state
+Keyed   ::= keyed(Opt_0, …, Opt_{k-1})   † the keyed result, below
 Map     ::= table(Cat_0, …, Cat_{k-1})
           | O.f                    † a Map(c) field of an operand
 Entry   ::= when(Bool, t_1, …, t_m)   a per-key atom entry, §2.1
@@ -105,7 +107,16 @@ typed:** `x` is the value being applied to, of the kind the component acts
 on (§2.1): an `Int` or a `Cat(c)` for a scalar component, and under
 `per-key` the key's row, an `Opt(Int)`. `x(v)` reads the row at key `v` of a
 keyed state; only a checker-form apply that is not `per-key` needs it
-(§3.1). Where each production may occur:
+(§3.1), and its result is a `keyed` literal. **The keyed result:**
+`keyed(o_0, …, o_{k-1})` is the keyed state whose row at the key of code
+`i` is `o_i`, one `Opt(Int)` term per declared key of the component, in key
+code order (lease: `keyed(o_0, o_1)`). Its **type rule:** it has type
+`Keyed(c)` iff `k` is the number of values of `c` and every `o_i` is an
+`Opt(Int)`; a missing or extra row is malformed (§3.1). Its **evaluation**
+is strict, all `o_i` left to right, the default rule of §1.4. **Reason:**
+every row belongs to the resulting state, so no row is an unchosen arm to
+skip, and strictness leaves an overflow in any row a rejection (§1.4).
+Where each production may occur:
 
 | Hole | May reference |
 |---|---|
