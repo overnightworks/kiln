@@ -9,10 +9,19 @@ use kiln_ir::{Call, Program, Store};
 
 use crate::oracle::{calls_of, FamilyBatch};
 use crate::rows::{call, integer_at, integer_row, store_of};
+use crate::run::declared_aborts;
 
-pub use fold::{serial_fold, QuotaAbort};
+pub use fold::serial_fold;
 pub use generator::generate;
 pub use program::program;
+
+declared_aborts! {
+    QuotaAbort {
+        InvalidQuantity => "invalid_quantity",
+        QuotaExhausted => "quota_exhausted",
+        QuotaFull => "quota_full",
+    }
+}
 
 const QUOTA_TABLE: &str = "quota";
 const REMAINING_COLUMN: &str = "remaining";

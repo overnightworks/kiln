@@ -9,10 +9,18 @@ use kiln_ir::{Call, Program, Store};
 
 use crate::oracle::{calls_of, FamilyBatch};
 use crate::rows::{call, integer_at, integer_row, store_of};
+use crate::run::declared_aborts;
 
-pub use fold::{serial_fold, InventoryAbort};
+pub use fold::serial_fold;
 pub use generator::generate;
 pub use program::program;
+
+declared_aborts! {
+    InventoryAbort {
+        InvalidQuantity => "invalid_quantity",
+        InvalidThreshold => "invalid_threshold",
+    }
+}
 
 const STOCK_TABLE: &str = "stock";
 const QUANTITY_COLUMN: &str = "quantity";

@@ -18,6 +18,15 @@ macro_rules! declared_aborts {
             $($variant),+
         }
 
+        impl $enum {
+            /// The frozen name the program declares for this abort.
+            pub const fn name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $name),+
+                }
+            }
+        }
+
         impl $crate::run::DeclaredAbort for $enum {
             fn named(name: &kiln_ir::AbortName) -> Option<Self> {
                 match name.0.as_str() {

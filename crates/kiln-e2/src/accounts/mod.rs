@@ -10,10 +10,23 @@ use kiln_ir::{Call, Program, Store};
 use crate::oracle::{calls_of, FamilyBatch};
 use crate::rng::BATCH_SIZE_MAX;
 use crate::rows::{call, integer_at, integer_row, store_of};
+use crate::run::declared_aborts;
 
-pub use fold::{serial_fold, AccountsAbort};
+pub use fold::serial_fold;
 pub use generator::generate;
 pub use program::program;
+
+declared_aborts! {
+    AccountsAbort {
+        InvalidAmount => "invalid_amount",
+        SameAccount => "same_account",
+        AccountNotFound => "account_not_found",
+        AccountFrozen => "account_frozen",
+        InsufficientFunds => "insufficient_funds",
+        AlreadyFrozen => "already_frozen",
+        NotFrozen => "not_frozen",
+    }
+}
 
 const ACCOUNTS_TABLE: &str = "accounts";
 const BALANCE_COLUMN: &str = "balance";

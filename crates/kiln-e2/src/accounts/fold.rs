@@ -1,17 +1,7 @@
-use super::{Account, AccountCall, AccountsState, Status, ACCOUNT_COUNT, AMOUNT_MAX};
-use crate::run::{declared_aborts, CallOutcome, Run};
-
-declared_aborts! {
-    AccountsAbort {
-        InvalidAmount => "invalid_amount",
-        SameAccount => "same_account",
-        AccountNotFound => "account_not_found",
-        AccountFrozen => "account_frozen",
-        InsufficientFunds => "insufficient_funds",
-        AlreadyFrozen => "already_frozen",
-        NotFrozen => "not_frozen",
-    }
-}
+use super::{
+    Account, AccountCall, AccountsAbort, AccountsState, Status, ACCOUNT_COUNT, AMOUNT_MAX,
+};
+use crate::run::{CallOutcome, Run};
 
 /// The batch's calls applied in order (inputs.md section 4.2).
 pub fn serial_fold(batch: &super::Batch) -> Run<AccountsAbort, AccountsState> {

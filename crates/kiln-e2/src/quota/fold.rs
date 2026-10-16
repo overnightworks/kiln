@@ -1,13 +1,5 @@
-use super::{QuotaCall, QuotaState, CEILING, QUANTITY_MAX};
-use crate::run::{declared_aborts, CallOutcome, Run};
-
-declared_aborts! {
-    QuotaAbort {
-        InvalidQuantity => "invalid_quantity",
-        QuotaExhausted => "quota_exhausted",
-        QuotaFull => "quota_full",
-    }
-}
+use super::{QuotaAbort, QuotaCall, QuotaState, CEILING, QUANTITY_MAX};
+use crate::run::{CallOutcome, Run};
 
 /// The batch's calls applied in order (inputs.md section 2.2).
 pub fn serial_fold(batch: &super::Batch) -> Run<QuotaAbort, QuotaState> {

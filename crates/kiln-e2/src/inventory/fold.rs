@@ -1,15 +1,8 @@
 use super::{
-    InventoryCall, StockState, ORDER_QUANTITY_MAX, RESTOCK_AMOUNT, STOCK_MIN, THRESHOLD_MAX,
-    THRESHOLD_MIN,
+    InventoryAbort, InventoryCall, StockState, ORDER_QUANTITY_MAX, RESTOCK_AMOUNT, STOCK_MIN,
+    THRESHOLD_MAX, THRESHOLD_MIN,
 };
-use crate::run::{declared_aborts, CallOutcome, Run};
-
-declared_aborts! {
-    InventoryAbort {
-        InvalidQuantity => "invalid_quantity",
-        InvalidThreshold => "invalid_threshold",
-    }
-}
+use crate::run::{CallOutcome, Run};
 
 /// The batch's calls applied in order (inputs.md section 3.2).
 pub fn serial_fold(batch: &super::Batch) -> Run<InventoryAbort, StockState> {

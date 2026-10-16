@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use std::sync::LazyLock;
 
 use kiln_e2::accounts::{
-    self, Account, AccountCall, AccountsState,
+    self, Account, AccountCall, AccountsAbort, AccountsState,
     Status::{Frozen, Open},
 };
 use kiln_e2::comparison::{compare, CallDifference, Divergence};
@@ -44,7 +44,7 @@ where
 }
 
 /// A family's generated batches checked against its fold, and the outcome
-/// rows they exercised.
+/// rows the prefix corpus exercised.
 struct Sweep {
     family: &'static str,
     expected_rows: &'static [&'static str],
@@ -52,15 +52,49 @@ struct Sweep {
     rows_seen: BTreeMap<String, usize>,
 }
 
+/// How a family's batch is cut to its first calls, keeping its initial state.
+type Truncate<B> = fn(&mut B, usize);
+
+/// The protocol's paired corpus: for each seed, the prefixes of
+/// `generate(256, seed)` at every protocol size (protocol.md section 2).
+fn prefix_corpus<B: Clone>(
+    generate: fn(BatchSize, u32) -> B,
+    truncate: Truncate<B>,
+) -> impl Iterator<Item = (String, B)> {
+    let largest = BatchSize::new(*SIZES.last().expect("sizes")).expect("a protocol size");
+    (0..SEEDS).flat_map(move |seed| {
+        let full = generate(largest, seed);
+        SIZES.into_iter().map(move |size| {
+            let mut prefix = full.clone();
+            truncate(&mut prefix, size as usize);
+            (format!("prefix {size} of seed {seed}"), prefix)
+        })
+    })
+}
+
+/// Batches generated independently at each size, as additional evidence.
+fn independent_corpus<B>(generate: fn(BatchSize, u32) -> B) -> impl Iterator<Item = (String, B)> {
+    SIZES.into_iter().flat_map(move |size| {
+        let batch_size = BatchSize::new(size).expect("a protocol size");
+        (0..SEEDS).map(move |seed| {
+            (
+                format!("independent size {size} seed {seed}"),
+                generate(batch_size, seed),
+            )
+        })
+    })
+}
+
 fn sweep<B>(
     family: &'static str,
     expected_rows: &'static [&'static str],
     generate: fn(BatchSize, u32) -> B,
+    truncate: Truncate<B>,
     fold: Fold<B>,
     row_of: RowOf<B::Abort>,
 ) -> Sweep
 where
-    B: FamilyBatch,
+    B: FamilyBatch + Clone,
     B::Abort: PartialEq + Clone + Debug,
     B::State: PartialEq + Clone + Debug,
 {
@@ -70,19 +104,18 @@ where
         divergences: Vec::new(),
         rows_seen: BTreeMap::new(),
     };
-    for size in SIZES {
-        let size = BatchSize::new(size).expect("a protocol size");
-        for seed in 0..SEEDS {
-            let batch = generate(size, seed);
-            let oracle = oracle_run(&batch).expect("the oracle's schema is valid");
-            for (call, outcome) in batch.calls().iter().zip(&oracle.outcomes) {
-                *sweep.rows_seen.entry(row_of(call, outcome)).or_default() += 1;
-            }
-            if let Some(divergence) = divergence_of(&batch, fold) {
-                sweep
-                    .divergences
-                    .push(format!("size {size:?} seed {seed}: {divergence}"));
-            }
+    for (label, batch) in prefix_corpus(generate, truncate) {
+        let oracle = oracle_run(&batch).expect("the oracle's schema is valid");
+        for (call, outcome) in batch.calls().iter().zip(&oracle.outcomes) {
+            *sweep.rows_seen.entry(row_of(call, outcome)).or_default() += 1;
+        }
+        if let Some(divergence) = divergence_of(&batch, fold) {
+            sweep.divergences.push(format!("{label}: {divergence}"));
+        }
+    }
+    for (label, batch) in independent_corpus(generate) {
+        if let Some(divergence) = divergence_of(&batch, fold) {
+            sweep.divergences.push(format!("{label}: {divergence}"));
         }
     }
     sweep
@@ -181,6 +214,7 @@ static SWEEPS: LazyLock<Vec<Sweep>> = LazyLock::new(|| {
             "quota",
             QUOTA_ROWS,
             quota::generate,
+            |batch, length| batch.calls.truncate(length),
             quota::serial_fold,
             quota_row,
         ),
@@ -188,6 +222,7 @@ static SWEEPS: LazyLock<Vec<Sweep>> = LazyLock::new(|| {
             "inventory",
             INVENTORY_ROWS,
             inventory::generate,
+            |batch, length| batch.calls.truncate(length),
             inventory::serial_fold,
             inventory_row,
         ),
@@ -195,6 +230,7 @@ static SWEEPS: LazyLock<Vec<Sweep>> = LazyLock::new(|| {
             "accounts",
             ACCOUNTS_ROWS,
             accounts::generate,
+            |batch, length| batch.calls.truncate(length),
             accounts::serial_fold,
             plain_row,
         ),
@@ -301,12 +337,53 @@ mod kiln_e2_27 {
                 amount: 10_001,
             },
             AccountCall::Freeze { account: -1 },
+            AccountCall::Withdraw {
+                account: 9,
+                amount: 5,
+            },
+            AccountCall::Unfreeze { account: -1 },
             AccountCall::Unfreeze { account: 0 },
             AccountCall::Unfreeze { account: 1 },
             AccountCall::Freeze { account: 1 },
             AccountCall::Freeze { account: 1 },
         ];
         assert_fold_equals_oracle(&accounts::Batch { initial, calls }, accounts::serial_fold);
+    }
+
+    #[test]
+    fn an_absent_account_aborts_every_account_call_and_leaves_the_state_as_it_was() {
+        let open = Account {
+            balance: 10,
+            status: Open,
+        };
+        let initial = AccountsState {
+            accounts: [open; 4],
+        };
+        let absent = [-1, 4, 9];
+        let calls = absent.into_iter().flat_map(|account| {
+            [
+                AccountCall::Deposit { account, amount: 5 },
+                AccountCall::Withdraw { account, amount: 5 },
+                AccountCall::Freeze { account },
+                AccountCall::Unfreeze { account },
+            ]
+        });
+        for call in calls {
+            let batch = accounts::Batch {
+                initial,
+                calls: vec![call],
+            };
+            let oracle = oracle_run(&batch).expect("the oracle's schema is valid");
+            let fold = accounts::serial_fold(&batch);
+            for run in [oracle, fold] {
+                assert_eq!(
+                    run.outcomes,
+                    vec![CallOutcome::declared(AccountsAbort::AccountNotFound)],
+                    "{call:?}"
+                );
+                assert_eq!(run.final_state, initial, "{call:?}");
+            }
+        }
     }
 }
 
