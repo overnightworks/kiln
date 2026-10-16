@@ -1,8 +1,0 @@
-claim_id = "bccab2addda340ff9778f9948c767d88"
-agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
-role = "builder"
-base = "331ebecc75f80fd686c1974a95b590f3850ae17c"
-branch = "claude/issue-74-kiln-ir-compound-keys"
-scope = ["crates/kiln-e1", "crates/kiln-e2", "crates/kiln-ir", "specs/kiln-e1.spec.md", "specs/kiln-ir.spec.md"]
-opened_commit = "9d246d33811d6e2ac16f242a03ebab9c9014d34c"
-whole_reason = "Key replaces Value at once as store key, effect key, log target, abort payload and classifier operand; any cut leaves two key types side by side"
