@@ -33,11 +33,15 @@ pub enum Effect {
     },
     /// Remove a row. Aborts if no row exists at `key`.
     Delete { table: TableName, key: Vec<Expr> },
-    /// Read every row whose key falls in `[start, end]`, in key order (keys
-    /// compare component by component), binding the matched sequence to
-    /// `into` — empty if `start` sorts after `end` or no row's key falls
-    /// between them (`docs/concept.md` §2.2 D6, "an empty range reads as an
-    /// empty sequence").
+    /// Read every row whose key holds `prefix` as its first components and,
+    /// when `interval` is given, whose next component lies in it, in key order
+    /// (keys compare component by component), binding the matched sequence to
+    /// `into` — empty if the interval is reversed or no row's key matches
+    /// (`docs/concept.md` §2.2 D6, "an empty range reads as an empty
+    /// sequence"; D8). `prefix` has fewer components than the key; an empty one
+    /// with an omitted `interval` reads the whole table (with an `interval`,
+    /// the first key component is still restricted to it), and an omitted
+    /// `interval` matches every value of the next component.
     ///
     /// Always bounded (§2.1, "never an open-ended loop"): if more rows
     /// match than `bound` resolves to, the call aborts with
@@ -45,8 +49,8 @@ pub enum Effect {
     /// instead of binding `into` at all.
     ReadRange {
         table: TableName,
-        start: Vec<Expr>,
-        end: Vec<Expr>,
+        prefix: Vec<Expr>,
+        interval: Option<KeyInterval>,
         bound: Expr,
         into: Slot,
     },
@@ -96,14 +100,28 @@ impl Effect {
                 key.iter().chain(columns.values()).collect()
             }
             Self::ReadRange {
-                start, end, bound, ..
-            }
-            | Self::ReadIndexRange {
+                prefix,
+                interval,
+                bound,
+                ..
+            } => prefix
+                .iter()
+                .chain(interval.iter().flat_map(|k| [&k.from, &k.to]))
+                .chain([bound])
+                .collect(),
+            Self::ReadIndexRange {
                 start, end, bound, ..
             } => start.iter().chain(end).chain([bound]).collect(),
             Self::Iterate { .. } => Vec::new(),
         }
     }
+}
+
+/// An inclusive interval on the key component after a range's prefix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyInterval {
+    pub from: Expr,
+    pub to: Expr,
 }
 
 /// The slots an [`Effect::Iterate`] with row slot `row` and this `body`

@@ -71,9 +71,17 @@ fn slots_used_by(effect: &Effect) -> Vec<Slot> {
             key.iter().chain(columns.values()).collect()
         }
         Effect::ReadRange {
-            start, end, bound, ..
+            prefix,
+            interval,
+            bound,
+            ..
+        } => {
+            let interval = interval
+                .iter()
+                .flat_map(|bounds| [&bounds.from, &bounds.to]);
+            prefix.iter().chain(interval).chain([bound]).collect()
         }
-        | Effect::ReadIndexRange {
+        Effect::ReadIndexRange {
             start, end, bound, ..
         } => start.iter().chain(end).chain([bound]).collect(),
         Effect::Iterate { source, .. } => return vec![*source],

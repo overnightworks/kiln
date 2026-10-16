@@ -4,8 +4,8 @@
 
 use kiln_ir::{
     AccessKind, AccessTarget, ClampDomain, Column, ColumnType, Effect, Execution, Expr,
-    FunctionFault, Index, IndexName, IntegerWidth, Key, KeyDeclaration, Program, ProgramError, Row,
-    Schema, Slot, Store, Table, Terminal,
+    FunctionFault, Index, IndexName, IntegerWidth, Key, KeyDeclaration, KeyInterval, Program,
+    ProgramError, Row, Schema, Slot, Store, Table, Terminal,
 };
 
 use super::{
@@ -183,11 +183,16 @@ pub fn delete_line(w: i64, d: i64, o: i64) -> Effect {
     }
 }
 
-pub fn read_lines_range(start: (i64, i64, i64), end: (i64, i64, i64), into: Slot) -> Effect {
+/// Reads the `lines` rows holding `prefix` whose next key component lies in
+/// `interval`, or all of them when it is `None`.
+pub fn read_lines_range(prefix: &[i64], interval: Option<(i64, i64)>, into: Slot) -> Effect {
     Effect::ReadRange {
         table: table("lines"),
-        start: line_key_expr(start.0, start.1, start.2),
-        end: line_key_expr(end.0, end.1, end.2),
+        prefix: prefix.iter().copied().map(literal).collect(),
+        interval: interval.map(|(from, to)| KeyInterval {
+            from: literal(from),
+            to: literal(to),
+        }),
         bound: literal(100),
         into,
     }

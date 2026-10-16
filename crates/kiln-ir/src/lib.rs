@@ -33,9 +33,9 @@ pub use identifiers::{AbortName, ColumnName, FunctionName, IndexName, ParameterN
 pub use ir::{
     slots_released_by_iteration, ArithmeticOp, Block, CheckConstraint, ClampDomain, Column,
     ColumnType, Comparison, Condition, Effect, Expr, ForeignKey, Function, FunctionFault, Index,
-    IntegerWidth, Key, KeyColumn, KeyComponentFault, KeyDeclaration, Parameter, ParameterType,
-    Program, ProgramError, Relation, Row, Schema, SchemaError, Slot, Table, Terminal,
-    TextFormFault, UniqueConstraint, Value,
+    IntegerWidth, Key, KeyColumn, KeyComponentFault, KeyDeclaration, KeyInterval, Parameter,
+    ParameterType, Program, ProgramError, Relation, Row, Schema, SchemaError, Slot, Table,
+    Terminal, TextFormFault, UniqueConstraint, Value,
 };
 pub use replay::replay;
 pub use store::{KeyedRow, Store};

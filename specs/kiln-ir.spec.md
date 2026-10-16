@@ -25,8 +25,8 @@ module; several tests may share it.
 
 - [KILN-IR-07] A read sees the transaction's own earlier writes, and write effects apply in program order. Example: a write of 5 followed by a write of 9 to the same key leaves 9, and a read between them sees 5.
 - [KILN-IR-08] A point read of an absent key is a value the transaction can branch on, like any other value.
-- [KILN-IR-09] A range read returns every row whose key lies within its inclusive bounds, comparing keys component by component, in key order, including a range that holds a single row, whether the store returns it or a call iterates it.
-- [KILN-IR-10] A range read whose start sorts after its end, or over a table with no rows, reads as an empty sequence, and iterating it runs the body zero times.
+- [KILN-IR-09] A range read returns the rows it matches (`KILN-IR-91`), in key order, including a range that holds a single row, whether the store returns it or a call iterates it.
+- [KILN-IR-10] A range read whose interval is reversed, or over a table with no rows, reads as an empty sequence, and iterating it runs the body zero times.
 - [KILN-IR-11] A range read that matches no row is branchable as an absence, the same as a point read of an absent key.
 - [KILN-IR-12] A range read that exceeds its declared bound, or whose declared bound is negative even when no row matches, aborts the call and discards every effect the call produced before it.
 - [KILN-IR-13] A value projected from an earlier read can be used as the key of a later read and as an arithmetic operand.
@@ -61,7 +61,7 @@ module; several tests may share it.
 
 - [KILN-IR-34] The access log records every attempted access, including the one that aborts the call.
 - [KILN-IR-35] Each access log entry carries its table, key (every component) or range bounds, and touched columns, and origin (transaction logic or constraint check), for every access kind: point read, range read, insert, update and delete. An insert's touched columns are the non-key columns it names; its key is in its target.
-- [KILN-IR-36] A range read logs its bounds, including when the range turns out empty.
+- [KILN-IR-36] A range read logs its prefix and interval as written (`KILN-IR-92`), including when the range turns out empty.
 - [KILN-IR-43] Every access the transaction's own effects make is logged with logic origin.
 - [KILN-IR-44] A constraint check logs its accesses with constraint origin; they stay in the log when the check aborts the call.
 
@@ -137,11 +137,14 @@ module; several tests may share it.
 - [KILN-IR-76] A table declares its primary key as an ordered, non-empty list of its own columns, or declares itself keyless. A schema whose key list is empty, names an undeclared column or repeats a column, or that declares a secondary index on a keyless table, is rejected with a typed schema error.
 - [KILN-IR-77] A table keyed by three columns supports read, insert, update and delete by a key of three components: keys are equal when every component is, and a row is found only by its whole key.
 - [KILN-IR-78] Key columns live only in the key: a stored row holds none of them, and projecting a key column from a row bound by a point read, a range read or an indexed range read yields the matching component of that row's key, also when an index names the key column.
-- [KILN-IR-79] A key expression of a read, insert, update or delete, or a range read's bound, with a component count other than its table's key column count is rejected with a typed program error before any call runs: nothing is logged, no state changes, and the error is the same whichever function the call names.
+- [KILN-IR-79] A key expression of a read, insert, update or delete, or a range read's prefix, with a component count other than its table's key column count (a prefix: as many as the key or more) is rejected with a typed program error before any call runs: nothing is logged, no state changes, and the error is the same whichever function the call names.
 - [KILN-IR-80] An update that names a key column, and an insert whose columns name one, is rejected with a typed program error before any call runs, so a row never moves.
 - [KILN-IR-81] An effect that names an undeclared table, or a keyless one, is rejected with a typed program error before any call runs.
 - [KILN-IR-82] A key component whose kind differs from its column's, or that lies outside the column's declared width, aborts with a typed reason naming the table and the component's column and never clamps, even where the column declares a clamping domain; the store is unchanged. A component that can never fit, whatever the call: a literal of another kind or outside the width, or a parameter, projected column or arithmetic whose static kind differs from the column's, is rejected with a typed program error before any call runs; a projection counts only when every table its slot can hold anywhere in the function (an iteration's row slot holds those of its source slot) has a column it can never fit, so a program the evaluator can run without an abort is never rejected; a component known only at run time stays an abort.
 - [KILN-IR-83] An insert writes its key columns through its key: a unique, foreign-key or check constraint on a key column is checked for the inserted row against the component of its key, and an update, which cannot write a key column, never checks a constraint none of whose columns it writes: a constraint over a key column and a column the update writes is checked, with the key column's component taken from the row's key.
+- [KILN-IR-91] A primary-key range read names an equality prefix of fewer components than the table's key and optionally an inclusive interval on the next component. It matches exactly the keys holding that prefix whose next component lies in the interval, in key order; an empty prefix with an omitted interval reads the whole table (with an interval, the first key component is still restricted to it), an omitted interval matches every value of the next component (the extremes included, never a sentinel bound), and a reversed interval reads as an empty sequence. A prefix as long as the key or longer is rejected before any call runs (`KILN-IR-79`).
+- [KILN-IR-92] A range read logs its prefix and its interval as written, and an omitted interval is logged as omitted, distinct from an interval spanning every value.
+- [KILN-IR-93] A prefix component, and an interval bound as the component after the prefix, is checked like a key component (`KILN-IR-82`): at run time a value of another kind or outside that key column's width aborts with the typed reason naming the table and that column, before the range is logged, and never clamps.
 
 ## Values
 

@@ -3,8 +3,8 @@
 mod support;
 
 use kiln_ir::{
-    AbortReason, Block, Call, Effect, Expr, FunctionFault, Key, KeyComponentFault, ProgramError,
-    Slot, Store, Terminal,
+    AbortReason, Block, Call, Effect, Expr, FunctionFault, Key, KeyComponentFault, KeyInterval,
+    ProgramError, Slot, Store, Terminal,
 };
 use support::world::*;
 use support::{
@@ -48,20 +48,6 @@ mod kiln_ir_79 {
             Effect::Delete {
                 table: table("lines"),
                 key: key.clone(),
-            },
-            Effect::ReadRange {
-                table: table("lines"),
-                start: key.clone(),
-                end: line_key_expr(0, 0, 0),
-                bound: literal(1),
-                into: Slot(0),
-            },
-            Effect::ReadRange {
-                table: table("lines"),
-                start: line_key_expr(0, 0, 0),
-                end: key,
-                bound: literal(1),
-                into: Slot(0),
             },
         ]
     }
@@ -202,8 +188,11 @@ mod kiln_ir_81 {
             },
             Effect::ReadRange {
                 table: table(table_name),
-                start: key.clone(),
-                end: key,
+                prefix: vec![],
+                interval: Some(KeyInterval {
+                    from: key[0].clone(),
+                    to: key[0].clone(),
+                }),
                 bound: literal(1),
                 into: Slot(0),
             },
@@ -251,7 +240,7 @@ mod kiln_ir_82 {
             "lines" => line_key_expr(1, 1, 1),
             _ => vec![Expr::Literal(text("x"))],
         };
-        key[position] = bad;
+        key[position] = bad.clone();
         let valid = if table_name == "lines" {
             line_key_expr(1, 1, 1)
         } else {
@@ -281,15 +270,21 @@ mod kiln_ir_82 {
             },
             Effect::ReadRange {
                 table: table(table_name),
-                start: key.clone(),
-                end: valid.clone(),
+                prefix: valid[..position].to_vec(),
+                interval: Some(KeyInterval {
+                    from: bad.clone(),
+                    to: valid[position].clone(),
+                }),
                 bound: bound.clone(),
                 into,
             },
             Effect::ReadRange {
                 table: table(table_name),
-                start: valid,
-                end: key,
+                prefix: valid[..position].to_vec(),
+                interval: Some(KeyInterval {
+                    from: valid[position].clone(),
+                    to: bad,
+                }),
                 bound,
                 into,
             },
@@ -540,8 +535,11 @@ mod kiln_ir_82 {
     fn range_over(table_name: &str, into: u32, start: Expr, end: Expr) -> Effect {
         Effect::ReadRange {
             table: table(table_name),
-            start: vec![start],
-            end: vec![end],
+            prefix: vec![],
+            interval: Some(KeyInterval {
+                from: start,
+                to: end,
+            }),
             bound: literal(5),
             into: Slot(into),
         }

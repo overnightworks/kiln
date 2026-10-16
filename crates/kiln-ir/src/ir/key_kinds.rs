@@ -99,19 +99,31 @@ impl<'a> FunctionScope<'a> {
     /// The first component of `key` that can never be a component of
     /// `table`'s key.
     pub(super) fn check_key_kinds(&self, table: &Table, key: &[Expr]) -> Result<(), FunctionFault> {
-        for (name, expr) in table.key_columns().iter().zip(key) {
-            let column = table
-                .column(name)
-                .expect("a validated schema's key names declared columns");
-            if let Some(fault) = self.component_fault(column, expr) {
-                return Err(FunctionFault::KeyComponent {
-                    table: table.name.clone(),
-                    column: name.clone(),
-                    fault,
-                });
-            }
+        key.iter()
+            .enumerate()
+            .try_for_each(|(position, expr)| self.check_component_kind(table, position, expr))
+    }
+
+    /// Whether `expr` can ever be the component of `table`'s key at
+    /// `position`.
+    pub(super) fn check_component_kind(
+        &self,
+        table: &Table,
+        position: usize,
+        expr: &Expr,
+    ) -> Result<(), FunctionFault> {
+        let name = &table.key_columns()[position];
+        let column = table
+            .column(name)
+            .expect("a validated schema's key names declared columns");
+        match self.component_fault(column, expr) {
+            Some(fault) => Err(FunctionFault::KeyComponent {
+                table: table.name.clone(),
+                column: name.clone(),
+                fault,
+            }),
+            None => Ok(()),
         }
-        Ok(())
     }
 
     fn component_fault(&self, column: &Column, expr: &Expr) -> Option<KeyComponentFault> {

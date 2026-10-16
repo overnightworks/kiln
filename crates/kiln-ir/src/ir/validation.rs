@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use crate::identifiers::{ColumnName, FunctionName, TableName};
 
 use super::block::{Block, Terminal};
-use super::effect::Effect;
+use super::effect::{Effect, KeyInterval};
 use super::expression::Expr;
 use super::key_kinds::FunctionScope;
 use super::schema::{KeyComponentFault, SchemaError, Table};
@@ -46,8 +46,9 @@ pub enum FunctionFault {
     UndeclaredTable(TableName),
     /// A keyless table is reached only by appends and constraint checks (D9).
     KeylessTable(TableName),
-    /// A key expression or range bound with `given` components for a table
-    /// keyed by `expected`.
+    /// A key expression with `given` components for a table keyed by
+    /// `expected`, or a range prefix with as many components as the key or
+    /// more.
     KeyArity {
         table: TableName,
         expected: usize,
@@ -117,11 +118,11 @@ fn check_tables_and_keys(scope: &FunctionScope, effect: &Effect) -> Result<(), F
             check_written_columns(declared, columns)
         }
         Effect::ReadRange {
-            table, start, end, ..
-        } => {
-            check_key(scope, table, start)?;
-            check_key(scope, table, end).map(drop)
-        }
+            table,
+            prefix,
+            interval,
+            ..
+        } => check_range(scope, table, prefix, interval.as_ref()),
         Effect::ReadIndexRange { .. } => Ok(()),
         Effect::Iterate { body, .. } => body
             .iter()
@@ -160,6 +161,31 @@ fn check_key<'a>(
     }
     scope.check_key_kinds(declared, key)?;
     Ok(declared)
+}
+
+/// A range's prefix names fewer components than the key (D8); its interval
+/// bounds the component after the prefix.
+fn check_range(
+    scope: &FunctionScope,
+    table: &TableName,
+    prefix: &[Expr],
+    interval: Option<&KeyInterval>,
+) -> Result<(), FunctionFault> {
+    let declared = keyed_table(scope.schema, table)?;
+    let expected = declared.key_columns().len();
+    if prefix.len() >= expected {
+        return Err(FunctionFault::KeyArity {
+            table: table.clone(),
+            expected,
+            given: prefix.len(),
+        });
+    }
+    scope.check_key_kinds(declared, prefix)?;
+    interval.map_or(Ok(()), |interval| {
+        [&interval.from, &interval.to]
+            .into_iter()
+            .try_for_each(|bound| scope.check_component_kind(declared, prefix.len(), bound))
+    })
 }
 
 fn check_written_columns(

@@ -54,7 +54,8 @@ mod kiln_e1_27 {
     fn effects_reading(projection: &Expr) -> Vec<(&'static str, Effect, Keeps)> {
         let p = || projection.clone();
         let ten = || literal(10);
-        let range = |start, end, bound| read_range_bounded("a", vec![start], vec![end], bound, 5);
+        let range =
+            |start, end, bound| read_range_bounded("a", vec![], Some((start, end)), bound, 5);
         let index = |start, end, bound| {
             read_index_bounded("orders_by_customer", vec![start], vec![end], bound, 5)
         };
@@ -64,8 +65,9 @@ mod kiln_e1_27 {
             ("insert key", insert("a", p())),
             ("update key", update("a", p(), &[])),
             ("delete key", delete("a", p())),
-            ("range start", range(p(), param("high"), ten())),
-            ("range end", range(param("low"), p(), ten())),
+            ("range prefix", read_prefix_range(LINES, vec![p()], None, 5)),
+            ("interval start", range(p(), param("high"), ten())),
+            ("interval end", range(param("low"), p(), ten())),
             ("range bound", range(param("low"), param("high"), p())),
             ("index start", index(p(), param("high"), ten())),
             ("index end", index(param("low"), p(), ten())),
