@@ -139,7 +139,7 @@ impl MeasurementHost for ProcessHost {
             pristine_dir: self.snapshots.dir_for(request.cell.size).to_path_buf(),
             scratch_dir: self.scratch_dir.clone(),
         };
-        let mut child = MeasureChild::spawn(self.binary(request.build), &measure)?;
+        let mut child = MeasureChild::spawn(request.build, self.binary(request.build), &measure)?;
         child.wait_until_ready()?;
 
         let mut monitor = self.start_monitor()?;
@@ -174,6 +174,14 @@ fn sample_patience(interval: Duration) -> Duration {
     (interval * SAMPLE_PATIENCE_INTERVALS).max(MINIMUM_SAMPLE_PATIENCE)
 }
 
+/// A spawn failure that says which process and which path it was.
+fn could_not_start(what: &str, binary: &Path, error: io::Error) -> io::Error {
+    io::Error::new(
+        error.kind(),
+        format!("could not start {what} at {}: {error}", binary.display()),
+    )
+}
+
 /// The pinned `monitor-stream` child and the thread reading its lines.
 struct MonitorProcess {
     child: Child,
@@ -190,7 +198,8 @@ impl MonitorProcess {
             .arg(interval.as_millis().to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .spawn()?;
+            .spawn()
+            .map_err(|error| could_not_start("the monitor", binary, error))?;
         let stdout = child
             .stdout
             .take()
@@ -279,7 +288,7 @@ struct MeasureChild {
 }
 
 impl MeasureChild {
-    fn spawn(binary: &Path, request: &MeasureCellRequest) -> io::Result<Self> {
+    fn spawn(build: Build, binary: &Path, request: &MeasureCellRequest) -> io::Result<Self> {
         // A file rather than a pipe: nothing needs a reader thread, and the
         // text is there to quote if the child fails.
         let stderr = tempfile::tempfile()?;
@@ -289,7 +298,10 @@ impl MeasureChild {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::from(stderr.try_clone()?))
-            .spawn()?;
+            .spawn()
+            .map_err(|error| {
+                could_not_start(&format!("the {} build", build.label()), binary, error)
+            })?;
         let stdin = child.stdin.take();
         let stdout = child
             .stdout

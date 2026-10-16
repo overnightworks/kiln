@@ -282,7 +282,14 @@ mod kiln_e4_07 {
     #[test]
     fn a_waiting_child_is_stopped_when_its_monitor_cannot_start() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let waiting_child = stand_in(dir.path(), "waiting", "echo ready\nexec sleep 31");
+        // The duration is this test process's own: `sleep` keeps it through
+        // exec, so no other process can carry the same arguments.
+        let own_duration = format!("3100.{}", std::process::id());
+        let waiting_child = stand_in(
+            dir.path(),
+            "waiting",
+            &format!("echo ready\nexec sleep {own_duration}"),
+        );
         let dead_monitor = stand_in(dir.path(), "dead-monitor", "exit 0");
         let mut fixture = fixture_with(&waiting_child, small_snapshot());
         fixture.host.instrumented = dead_monitor;
@@ -299,7 +306,7 @@ mod kiln_e4_07 {
 
         assert!(message.contains("monitor"), "{message}");
         assert_eq!(
-            processes_started_with(&["sleep", "31"]),
+            processes_started_with(&["sleep", &own_duration]),
             0,
             "the child left waiting for go must not outlive the failed half"
         );
@@ -594,6 +601,9 @@ mod kiln_e4_04 {
             .to_string();
         assert!(
             message.contains("measurement failed for point-update/small/full")
+                && message.contains(
+                    "could not start the passthrough build at /nonexistent-kiln-e4-passthrough-binary",
+                )
                 && message.contains("No such file or directory"),
             "got: {message}"
         );

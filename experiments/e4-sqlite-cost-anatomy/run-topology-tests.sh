@@ -28,15 +28,24 @@ commit="$(git -C "$repository" rev-parse --verify --quiet "$2^{commit}")" \
 
 work_dir="$(mktemp -d)"
 tests_pid=""
+group_teardown_seconds=10
+
+# A member that has exited but is not yet reaped (a zombie) is gone.
+group_is_alive() { ps -o stat= --pgid "$tests_pid" | grep -qv '^Z'; }
 
 stop_tests() {
   # The tests run in a process group of their own (setsid), so a signal
-  # aimed at this script alone still has to stop cargo, the compilers and
-  # the test processes before their directory goes away.
-  if [[ -n "$tests_pid" ]]; then
-    kill -TERM -- "-$tests_pid" 2>/dev/null || true
-    wait "$tests_pid" 2>/dev/null || true
-  fi
+  # aimed at this script alone still has to end cargo, the compilers and
+  # the test processes, every member, before their directory goes away.
+  [[ -n "$tests_pid" ]] || return 0
+  kill -TERM -- "-$tests_pid" 2>/dev/null || true
+  for ((waited = 0; waited < group_teardown_seconds * 10; waited++)); do
+    group_is_alive || break
+    sleep 0.1
+  done
+  kill -KILL -- "-$tests_pid" 2>/dev/null || true
+  while group_is_alive; do sleep 0.1; done
+  wait "$tests_pid" 2>/dev/null || true
 }
 trap 'stop_tests; rm -rf "$work_dir"' EXIT
 trap 'exit 143' INT TERM
@@ -50,5 +59,4 @@ CARGO_TARGET_DIR="$work_dir/target" setsid cargo test --locked \
 tests_pid=$!
 tests_status=0
 wait "$tests_pid" || tests_status=$?
-tests_pid=""
 exit "$tests_status"
