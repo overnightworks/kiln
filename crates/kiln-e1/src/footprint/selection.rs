@@ -1,13 +1,18 @@
-//! Data-selected branches (`inputs.md` §5, Q1 and Q3): a branch decided by a
-//! read, or by a comparison over a read result, whose outcome changes which
-//! targets the function accesses. A comparison over arguments and literals
-//! alone selects by argument and never appears here. Such a read
-//! determines targets without the identifiable index or foreign key Q3 asks
-//! for, so the function is unknown.
+//! Data-selected branches (`inputs.md` §5, Q1 and Q3, amendment "which targets
+//! versus whether"): a branch decided by a read, or by a comparison over a read
+//! result, whose outcome changes *which* targets the function accesses. A
+//! comparison over arguments and literals alone selects by argument and never
+//! appears here. Such a read determines targets without the identifiable index
+//! or foreign key Q3 asks for, so the function is unknown.
+//!
+//! A selector that only decides *whether* an access happens leaves the target
+//! set a function of the arguments: when one path's targets include the
+//! other's, nothing is selected and each path classifies on its own. Only
+//! incomparable target sets, each with a target the other lacks, are *which*.
 //!
 //! The paths are compared pairwise, never by the union of an arm's targets:
 //! two paths that agree on every selector they both test except one, and reach
-//! different targets, show that this selector changes the targets while the
+//! incomparable targets, show that this selector changes the targets while the
 //! others stay fixed. Argument-selected branches are not selectors, but the
 //! paths must agree on them too: paths taking different argument arms are
 //! different cases and are not compared.
@@ -36,7 +41,7 @@ fn selection_between(first: &FeasiblePath, second: &FeasiblePath) -> Option<Data
         return None;
     }
     let selector = sole_differing_selector(first, second)?;
-    if reach_same_targets(first, second) {
+    if !reach_incomparable_targets(first, second) {
         return None;
     }
     let accesses = first.facts.accesses.iter().chain(&second.facts.accesses);
@@ -72,14 +77,16 @@ fn sole_differing_selector(first: &FeasiblePath, second: &FeasiblePath) -> Optio
     differing.next().is_none().then(|| sole.clone())
 }
 
-fn reach_same_targets(first: &FeasiblePath, second: &FeasiblePath) -> bool {
-    let covers = |path: &FeasiblePath, other: &FeasiblePath| {
-        other.facts.accesses.iter().all(|access| {
-            path.facts
-                .accesses
-                .iter()
-                .any(|own| own.target == access.target)
-        })
-    };
-    covers(first, second) && covers(second, first)
+fn reach_incomparable_targets(first: &FeasiblePath, second: &FeasiblePath) -> bool {
+    reaches_target_missing_from(first, second) && reaches_target_missing_from(second, first)
+}
+
+fn reaches_target_missing_from(path: &FeasiblePath, other: &FeasiblePath) -> bool {
+    path.facts.accesses.iter().any(|access| {
+        other
+            .facts
+            .accesses
+            .iter()
+            .all(|own| own.target != access.target)
+    })
 }
