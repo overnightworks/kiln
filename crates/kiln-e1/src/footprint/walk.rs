@@ -169,7 +169,9 @@ impl<'a> Walker<'a> {
                 let arms = [&**when_present, &**when_absent];
                 match condition {
                     Condition::RowPresent(slot) => self.branch(*slot, arms, at, facts),
-                    Condition::Compare { .. } => self.comparison_branch(operands, arms, at, facts),
+                    Condition::Compare { .. } | Condition::Contains { .. } => {
+                        self.comparison_branch(operands, arms, at, facts)
+                    }
                 }
             }
         }
@@ -528,15 +530,8 @@ fn unkeyed<'e>(expressions: impl IntoIterator<Item = &'e Expr>) -> Vec<Resolved<
 fn read_by(terminal: &Terminal) -> Vec<&Expr> {
     match terminal {
         Terminal::Return(response) => vec![response],
-        Terminal::Branch {
-            condition: Condition::Compare { left, right, .. },
-            ..
-        } => vec![left, right],
-        Terminal::Abort(_)
-        | Terminal::Branch {
-            condition: Condition::RowPresent(_),
-            ..
-        } => Vec::new(),
+        Terminal::Branch { condition, .. } => condition.operands(),
+        Terminal::Abort(_) => Vec::new(),
     }
 }
 

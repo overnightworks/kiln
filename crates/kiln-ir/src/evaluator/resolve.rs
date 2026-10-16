@@ -24,6 +24,8 @@ use super::{AbortReason, Binding, BoundRow, CallContext, OverflowReason};
 pub(super) enum ResolveError {
     Overflow(OverflowReason),
     NonIntegerOperand,
+    NonTextOperand,
+    NegativeTextLength,
     ComparisonTypeMismatch,
     ProjectionSourceAbsent { slot: Slot },
     MissingColumn { slot: Slot, column: ColumnName },
@@ -34,6 +36,8 @@ impl From<ResolveError> for AbortReason {
         match error {
             ResolveError::Overflow(reason) => AbortReason::Overflow(reason),
             ResolveError::NonIntegerOperand => AbortReason::NonIntegerOperand,
+            ResolveError::NonTextOperand => AbortReason::NonTextOperand,
+            ResolveError::NegativeTextLength => AbortReason::NegativeTextLength,
             ResolveError::ComparisonTypeMismatch => AbortReason::ComparisonTypeMismatch,
             ResolveError::ProjectionSourceAbsent { slot } => {
                 AbortReason::ProjectionSourceAbsent { slot }
@@ -108,6 +112,16 @@ pub(super) fn resolve(
             };
             resolve(chosen, ctx, bindings)
         }
+        Expr::Concat(first, second) => {
+            let mut joined = as_text(resolve(first, ctx, bindings)?)?;
+            joined.push_str(&as_text(resolve(second, ctx, bindings)?)?);
+            Ok(Value::Text(joined))
+        }
+        Expr::Truncate { text, length } => {
+            let text = as_text(resolve(text, ctx, bindings)?)?;
+            let length = as_integer(resolve(length, ctx, bindings)?)?;
+            Ok(Value::Text(truncated(&text, length)?))
+        }
     }
 }
 
@@ -130,6 +144,11 @@ pub(super) fn condition_holds(
             relation
                 .holds(&left, &right)
                 .ok_or(ResolveError::ComparisonTypeMismatch)
+        }
+        Condition::Contains { text, part } => {
+            let text = as_text(resolve(text, ctx, bindings)?)?;
+            let part = as_text(resolve(part, ctx, bindings)?)?;
+            Ok(text.contains(&part))
         }
     }
 }
@@ -206,6 +225,22 @@ fn as_integer(value: Value) -> Result<i64, ResolveError> {
         Value::Integer(value) => Ok(value),
         Value::Text(_) => Err(ResolveError::NonIntegerOperand),
     }
+}
+
+/// Extracts the text a text form's operand must resolve to; any other kind
+/// is a fact about the data this call ran against, never a panic.
+fn as_text(value: Value) -> Result<String, ResolveError> {
+    match value {
+        Value::Text(text) => Ok(text),
+        Value::Integer(_) => Err(ResolveError::NonTextOperand),
+    }
+}
+
+/// The first `length` Unicode scalar values of `text`.
+fn truncated(text: &str, length: i64) -> Result<String, ResolveError> {
+    let length = u64::try_from(length).map_err(|_| ResolveError::NegativeTextLength)?;
+    let length = usize::try_from(length).unwrap_or(usize::MAX);
+    Ok(text.chars().take(length).collect())
 }
 
 /// `lhs op rhs`, checked at `i64`'s own width: `None` on true `i64` overflow.

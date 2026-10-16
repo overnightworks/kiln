@@ -3,7 +3,7 @@
 //! runs its chosen arm alone, so nothing in the other arm is asked. What an
 //! expression is made of is the operand's question, never this one's.
 
-use kiln_ir::{Column, ColumnName, Condition, Expr, Schema};
+use kiln_ir::{Column, ColumnName, Condition, Expr, Schema, Value};
 
 use super::facts::PathFacts;
 use super::node_path::NodePath;
@@ -89,7 +89,12 @@ impl Evaluation<'_> {
                     _ => Aborts::Never,
                 }
             }
-            Expr::Arithmetic(_, left, right) => self.aborts([(&**left, None), (&**right, None)])?,
+            Expr::Arithmetic(_, left, right)
+            | Expr::Concat(left, right)
+            | Expr::Truncate {
+                text: left,
+                length: right,
+            } => self.aborts([(&**left, None), (&**right, None)])?,
             Expr::Conditional {
                 condition,
                 when_true,
@@ -106,10 +111,12 @@ impl Evaluation<'_> {
     }
 
     fn condition_aborts(&self, condition: &Condition) -> Result<Aborts, ClassifyError> {
-        match condition {
-            Condition::RowPresent(_) => Ok(Aborts::Never),
-            Condition::Compare { left, right, .. } => self.aborts([(left, None), (right, None)]),
-        }
+        self.aborts(
+            condition
+                .operands()
+                .into_iter()
+                .map(|operand| (operand, None)),
+        )
     }
 
     /// The arm a decided condition chooses runs alone; an undecided one may
@@ -152,7 +159,11 @@ fn decided_arm(facts: &PathFacts, condition: &Condition, at: &NodePath) -> Optio
             relation,
             right: Expr::Literal(right),
         } => relation.holds(left, right),
-        Condition::Compare { .. } => None,
+        Condition::Contains {
+            text: Expr::Literal(Value::Text(text)),
+            part: Expr::Literal(Value::Text(part)),
+        } => Some(text.contains(part.as_str())),
+        Condition::Compare { .. } | Condition::Contains { .. } => None,
         Condition::RowPresent(slot) if facts.is_released(*slot) => Some(false),
         Condition::RowPresent(slot) => facts
             .read_of(*slot, at)

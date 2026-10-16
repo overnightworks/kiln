@@ -59,6 +59,10 @@ pub const SHIPMENTS: &str = "shipments";
 /// `(customer_id, item_id)` through a declared foreign key.
 pub const INVENTORY: &str = "inventory";
 
+/// A table keyed by the text column [`KEY_COLUMN`], with a text column
+/// `name` and an integer column `size`.
+pub const LABELS: &str = "labels";
+
 /// The key of [`LINES`] in declared order.
 pub const LINE_KEY: [&str; 3] = ["w_id", "d_id", "o_id"];
 
@@ -251,6 +255,22 @@ fn keyed_table(name: &str, key: &[&str], other_columns: &[&str]) -> Table {
     }
 }
 
+fn labels_table() -> Table {
+    let text_column = |name: &str| Column {
+        name: ColumnName(name.to_owned()),
+        kind: ColumnType::Text,
+    };
+    Table {
+        name: table(LABELS),
+        columns: vec![
+            text_column(KEY_COLUMN),
+            text_column("name"),
+            integer_column("size"),
+        ],
+        key: KeyDeclaration::Columns(vec![ColumnName(KEY_COLUMN.to_owned())]),
+    }
+}
+
 /// Orders reference customers and products, customers reference regions; the
 /// declared indexes are per customer and per tenant. Every table is keyed by
 /// [`KEY_COLUMN`] but [`LINES`] and [`ARCHIVE`], which have the three-column
@@ -295,6 +315,7 @@ pub fn schema() -> Schema {
             keyed_table(ARCHIVE, &LINE_KEY, &["item_id"]),
             keyed_table(SHIPMENTS, &[KEY_COLUMN], &LINE_KEY),
             keyed_table(INVENTORY, &["w_id", "item_id"], &[]),
+            labels_table(),
         ],
         foreign_keys: vec![
             foreign_key("orders", &["customer_id"], "customers"),
