@@ -561,3 +561,99 @@ pub(super) mod kiln_e1_27 {
         }
     }
 }
+
+mod kiln_e1_40 {
+    use super::*;
+
+    fn read_shipment() -> Effect {
+        read(SHIPMENTS, param("id"), 0)
+    }
+
+    fn from_shipment(columns: [&str; 3]) -> Vec<Expr> {
+        columns.map(|column| column_of(0, column)).to_vec()
+    }
+
+    #[test]
+    fn a_whole_key_projecting_the_columns_of_a_declared_foreign_key_in_order_is_one_resolution() {
+        let body = returns(vec![
+            read_shipment(),
+            read_at(LINES, from_shipment(LINE_KEY), 1),
+        ]);
+
+        assert_eq!(category_of(body.clone()), ONE_HOP);
+        assert_eq!(
+            evidence_of(body),
+            ["f/body/effects[0]", "f/body/effects[1]"]
+        );
+    }
+
+    #[test]
+    fn components_equal_to_the_read_row_s_key_columns_by_an_alias_count_as_those_columns() {
+        let body = returns(vec![
+            read_line(0),
+            read_at(
+                ARCHIVE,
+                vec![param("w"), param("d"), column_of(0, "customer_id")],
+                1,
+            ),
+        ]);
+
+        assert_eq!(category_of(body.clone()), ONE_HOP);
+        assert_eq!(
+            evidence_of(body),
+            ["f/body/effects[0]", "f/body/effects[1]"]
+        );
+    }
+
+    #[test]
+    fn a_component_not_provably_equal_to_its_foreign_key_column_leaves_the_key_unidentified() {
+        let line_row = |column: &str| column_of(0, column);
+        let inventory_of =
+            |warehouse: Expr| read_at(INVENTORY, vec![warehouse, line_row("item_id")], 1);
+        let matching = returns(vec![read_line(0), inventory_of(line_row("customer_id"))]);
+        let unrelated = returns(vec![read_line(0), inventory_of(param("w"))]);
+
+        assert_eq!(category_of(matching), ONE_HOP);
+        assert_unknown(
+            unrelated,
+            UnknownCause::KeyNotIdentified {
+                table: table(INVENTORY),
+            },
+        );
+    }
+
+    #[test]
+    fn a_partial_or_reordered_match_of_a_foreign_key_is_unknown_naming_the_table() {
+        let lines_keyed = |key: Vec<Expr>| returns(vec![read_shipment(), read_at(LINES, key, 1)]);
+        let from_row = |columns: [&str; 3]| from_shipment(columns);
+        let keys = [
+            vec![column_of(0, "w_id"), column_of(0, "d_id"), param("o")],
+            vec![column_of(0, "w_id"), column_of(0, "d_id"), literal(1)],
+            from_row(["d_id", "w_id", "o_id"]),
+            from_row(["w_id", "d_id", "w_id"]),
+        ];
+
+        for key in keys {
+            assert_unknown(lines_keyed(key), key_not_identified());
+        }
+    }
+
+    #[test]
+    fn components_from_two_different_rows_are_no_foreign_key_match() {
+        let body = returns(vec![
+            read(SHIPMENTS, param("first"), 0),
+            read(SHIPMENTS, param("second"), 1),
+            read_at(
+                LINES,
+                vec![
+                    column_of(0, "w_id"),
+                    column_of(0, "d_id"),
+                    column_of(1, "o_id"),
+                ],
+                2,
+            ),
+        ]);
+
+        assert_unknown(body, key_not_identified());
+    }
+}

@@ -3,7 +3,7 @@ use kiln_ir::{
     Program, Relation, Schema, Table, Value,
 };
 
-use super::{CEILING, HOT_KEY, QUANTITY_MAX, QUOTA_TABLE, REMAINING_COLUMN};
+use super::{QuotaAbort, CEILING, HOT_KEY, QUANTITY_MAX, QUOTA_TABLE, REMAINING_COLUMN};
 use crate::builders::{
     abort_if, abort_unless_in_range, argument, branch, field, holds, integer_parameter, minus,
     number, plus, read, returning, sequence, update,
@@ -66,15 +66,20 @@ fn quantity_function(name: &str, body: Block) -> Function {
 }
 
 fn allocate() -> Function {
-    let steps = abort_unless_in_range(QUANTITY, 1, QUANTITY_MAX, "invalid_quantity")
-        .into_iter()
-        .chain([
-            abort_if(remaining(), Relation::Equal, number(0), "quota_exhausted").after(read(
-                QUOTA_TABLE,
-                key_literal(HOT_KEY),
-                0,
-            )),
-        ]);
+    let steps = abort_unless_in_range(
+        QUANTITY,
+        1,
+        QUANTITY_MAX,
+        QuotaAbort::InvalidQuantity.name(),
+    )
+    .into_iter()
+    .chain([abort_if(
+        remaining(),
+        Relation::Equal,
+        number(0),
+        QuotaAbort::QuotaExhausted.name(),
+    )
+    .after(read(QUOTA_TABLE, key_literal(HOT_KEY), 0))]);
     let grants_in_full = returning(
         vec![set_remaining(minus(remaining(), argument(QUANTITY)))],
         argument(QUANTITY),
@@ -90,15 +95,20 @@ fn allocate() -> Function {
 }
 
 fn refill() -> Function {
-    let steps = abort_unless_in_range(QUANTITY, 1, QUANTITY_MAX, "invalid_quantity")
-        .into_iter()
-        .chain([
-            abort_if(remaining(), Relation::Equal, number(CEILING), "quota_full").after(read(
-                QUOTA_TABLE,
-                key_literal(HOT_KEY),
-                0,
-            )),
-        ]);
+    let steps = abort_unless_in_range(
+        QUANTITY,
+        1,
+        QUANTITY_MAX,
+        QuotaAbort::InvalidQuantity.name(),
+    )
+    .into_iter()
+    .chain([abort_if(
+        remaining(),
+        Relation::Equal,
+        number(CEILING),
+        QuotaAbort::QuotaFull.name(),
+    )
+    .after(read(QUOTA_TABLE, key_literal(HOT_KEY), 0))]);
     let adds_in_full = returning(
         vec![set_remaining(plus(remaining(), argument(QUANTITY)))],
         argument(QUANTITY),

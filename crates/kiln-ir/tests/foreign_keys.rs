@@ -6,7 +6,7 @@ mod support;
 use kiln_ir::{
     AbortReason, AccessKind, AccessLogEntry, AccessOrigin, AccessTarget, AccessedColumns,
     CheckConstraint, Column, ColumnType, Comparison, ConstraintRef, Effect, Execution, ForeignKey,
-    IntegerWidth, Outcome, Program, Schema, SchemaError, Store, Terminal, UniqueConstraint,
+    IntegerWidth, Key, Outcome, Program, Schema, SchemaError, Store, Terminal, UniqueConstraint,
 };
 use support::{
     aborted_reason, call_under_test, column, constraint_entries, delete_row, insert_row, integer,
@@ -27,7 +27,7 @@ fn integer_column(name: &str) -> Column {
 fn orders_customer() -> ForeignKey {
     ForeignKey {
         table: table("orders"),
-        column: column("customer"),
+        columns: vec![column("customer")],
         references: table("customers"),
     }
 }
@@ -35,7 +35,7 @@ fn orders_customer() -> ForeignKey {
 fn orders_code_unique() -> UniqueConstraint {
     UniqueConstraint {
         table: table("orders"),
-        column: column("code"),
+        columns: vec![column("code")],
     }
 }
 
@@ -156,7 +156,7 @@ mod kiln_ir_45 {
     fn foreign_key_must_name_declared_tables_and_a_declared_column() {
         let declared = orders_customer();
         let undeclared_column = ForeignKey {
-            column: column("buyer"),
+            columns: vec![column("buyer")],
             ..declared.clone()
         };
         let undeclared_child_table = ForeignKey {
@@ -201,7 +201,7 @@ fn nodes_program(effects: Vec<Effect>) -> Program {
         tables: vec![keyed_by_id("nodes", vec![integer_column("parent")])],
         foreign_keys: vec![ForeignKey {
             table: table("nodes"),
-            column: column("parent"),
+            columns: vec![column("parent")],
             references: table("nodes"),
         }],
         ..Default::default()
@@ -242,7 +242,7 @@ mod kiln_ir_46 {
                 aborted_reason(&execution),
                 &AbortReason::DanglingReference {
                     foreign_key: orders_customer(),
-                    value: integer(2),
+                    referenced: Key(vec![integer(2)]),
                 }
             );
             assert_eq!(execution.store, store);
@@ -266,7 +266,7 @@ mod kiln_ir_46 {
             aborted_reason(&execution),
             &AbortReason::DanglingReference {
                 foreign_key: orders_customer(),
-                value: integer(1),
+                referenced: Key(vec![integer(1)]),
             }
         );
     }
@@ -518,7 +518,7 @@ mod kiln_ir_55 {
             aborted_reason(&execution),
             &AbortReason::DanglingReference {
                 foreign_key: orders_customer(),
-                value: integer(9),
+                referenced: Key(vec![integer(9)]),
             }
         );
     }
@@ -554,7 +554,7 @@ mod kiln_ir_57 {
     #[test]
     fn foreign_key_column_must_hold_integer_keys() {
         let text_reference = ForeignKey {
-            column: column("code"),
+            columns: vec![column("code")],
             ..orders_customer()
         };
         let cases = [

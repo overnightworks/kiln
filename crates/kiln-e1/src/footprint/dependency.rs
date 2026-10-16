@@ -6,7 +6,7 @@ use kiln_ir::{ColumnName, Schema, TableName};
 use super::cause::UnknownCause;
 use super::facts::{Binding, BindingKind, PathFacts, ResolutionRole};
 use super::node_path::NodePath;
-use super::operand::{Operand, ReadRef};
+use super::operand::{column_operand, Operand, ReadRef};
 
 /// What an operand is used for.
 pub enum AccessRole {
@@ -115,14 +115,7 @@ fn lookup_edge(facts: &PathFacts, schema: &Schema, target: &TableName, key: &[&O
     if let Some(edge) = whole_key_of_one_row(facts, schema, target, key) {
         return edge;
     }
-    match key {
-        [Operand::Column { read, column, .. }] => {
-            single_column_edge(facts, schema, target, read, column)
-        }
-        _ => Edge::Blocked(UnknownCause::KeyNotIdentified {
-            table: target.clone(),
-        }),
-    }
+    foreign_key_edge(facts, schema, target, key)
 }
 
 /// The key of `target` read whole from one row of a range over `target`: every
@@ -151,31 +144,68 @@ fn whole_key_of_one_row(
     }
 }
 
-/// A key of one component that projects `column` of `read`'s row: one
-/// resolution through a declared foreign key from the row's table onto
-/// `target`, otherwise unknown.
-fn single_column_edge(
+/// A key whose components are, in order, the source columns of one declared
+/// foreign key onto `target`'s whole key, each read from the row of the first
+/// read-derived component (or equal to it by an alias, `column_operand`): one
+/// resolution through that foreign key. Otherwise unknown, and a partial match
+/// is no match.
+fn foreign_key_edge(
     facts: &PathFacts,
     schema: &Schema,
     target: &TableName,
-    read: &ReadRef,
-    column: &ColumnName,
+    key: &[&Operand],
 ) -> Edge {
+    let Some(Operand::Column { read, row, .. }) = key
+        .iter()
+        .copied()
+        .find(|component| matches!(component, Operand::Column { .. }))
+    else {
+        return not_identified(target);
+    };
     let Some(from) = source_table(bound(facts, read)) else {
         return Edge::Covered;
     };
+    let projects_source_column = |(component, column): (&&Operand, &ColumnName)| {
+        **component == column_operand(schema, facts, read.clone(), row.clone(), column)
+    };
     let declared = schema.foreign_keys.iter().any(|foreign_key| {
         &foreign_key.table == from
-            && &foreign_key.column == column
             && &foreign_key.references == target
+            && foreign_key.columns.len() == key.len()
+            && key
+                .iter()
+                .zip(&foreign_key.columns)
+                .all(projects_source_column)
     });
     if declared {
         return Edge::Resolves(ResolutionRole::BaseRows, read.clone());
     }
+    match key {
+        [Operand::Column { column, .. }] => {
+            Edge::Blocked(missing_foreign_key(schema, from, target, column))
+        }
+        _ => not_identified(target),
+    }
+}
+
+fn not_identified(target: &TableName) -> Edge {
+    Edge::Blocked(UnknownCause::KeyNotIdentified {
+        table: target.clone(),
+    })
+}
+
+/// Why a key of one component, `column` of a row of `from`, resolves through
+/// no foreign key into `target`.
+fn missing_foreign_key(
+    schema: &Schema,
+    from: &TableName,
+    target: &TableName,
+    column: &ColumnName,
+) -> UnknownCause {
     let is_key_column = schema
         .table(from)
         .is_some_and(|table| table.key_position(column).is_some());
-    Edge::Blocked(if is_key_column {
+    if is_key_column {
         UnknownCause::KeyOfAnotherTable {
             from: from.clone(),
             to: target.clone(),
@@ -186,5 +216,5 @@ fn single_column_edge(
             column: column.clone(),
             to: target.clone(),
         }
-    })
+    }
 }

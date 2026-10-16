@@ -100,33 +100,6 @@ mod kiln_e1_30 {
     }
 
     #[test]
-    fn only_foreign_keys_of_one_column_are_declared_and_no_index() {
-        let schema = tpcc_schema();
-
-        let mut declared: Vec<(&str, &str, &str)> = schema
-            .foreign_keys
-            .iter()
-            .map(|key| {
-                (
-                    key.table.0.as_str(),
-                    key.column.0.as_str(),
-                    key.references.0.as_str(),
-                )
-            })
-            .collect();
-        declared.sort_unstable();
-        assert_eq!(
-            declared,
-            [
-                ("DISTRICT", "D_W_ID", "WAREHOUSE"),
-                ("STOCK", "S_I_ID", "ITEM"),
-                ("STOCK", "S_W_ID", "WAREHOUSE"),
-            ]
-        );
-        assert!(schema.indexes.is_empty());
-    }
-
-    #[test]
     fn every_table_declares_its_primary_key_in_clause_1_3_1_order_and_history_is_keyless() {
         let cases: [(&str, &[&str]); 8] = [
             ("WAREHOUSE", &["W_ID"]),
@@ -194,6 +167,50 @@ mod kiln_e1_30 {
                 .unwrap();
             assert_eq!(declared.kind, expected, "{table_name}.{column_name}");
         }
+    }
+}
+
+mod kiln_e1_41 {
+    use super::*;
+
+    #[test]
+    fn every_foreign_key_of_clause_1_3_1_is_declared_over_its_parent_s_whole_key_and_no_unique_constraint_or_index_is(
+    ) {
+        let schema = tpcc_schema();
+
+        let mut declared: Vec<(&str, Vec<&str>, &str)> = schema
+            .foreign_keys
+            .iter()
+            .map(|key| {
+                (
+                    key.table.0.as_str(),
+                    key.columns.iter().map(|column| column.0.as_str()).collect(),
+                    key.references.0.as_str(),
+                )
+            })
+            .collect();
+        declared.sort();
+        assert_eq!(
+            declared,
+            [
+                ("CUSTOMER", vec!["C_W_ID", "C_D_ID"], "DISTRICT"),
+                ("DISTRICT", vec!["D_W_ID"], "WAREHOUSE"),
+                (
+                    "HISTORY",
+                    vec!["H_C_W_ID", "H_C_D_ID", "H_C_ID"],
+                    "CUSTOMER"
+                ),
+                ("HISTORY", vec!["H_W_ID", "H_D_ID"], "DISTRICT"),
+                ("NEW-ORDER", vec!["NO_W_ID", "NO_D_ID", "NO_O_ID"], "ORDER"),
+                ("ORDER", vec!["O_W_ID", "O_D_ID", "O_C_ID"], "CUSTOMER"),
+                ("ORDER-LINE", vec!["OL_SUPPLY_W_ID", "OL_I_ID"], "STOCK"),
+                ("ORDER-LINE", vec!["OL_W_ID", "OL_D_ID", "OL_O_ID"], "ORDER"),
+                ("STOCK", vec!["S_I_ID"], "ITEM"),
+                ("STOCK", vec!["S_W_ID"], "WAREHOUSE"),
+            ]
+        );
+        assert!(schema.unique_constraints.is_empty());
+        assert!(schema.indexes.is_empty());
     }
 }
 
