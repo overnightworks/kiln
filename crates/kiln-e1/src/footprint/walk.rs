@@ -1,9 +1,11 @@
 //! Enumerates the feasible paths of a function body (Q1) and records, along
 //! each, the accesses and the reads their targets depend on.
 
+use std::collections::BTreeMap;
+
 use kiln_ir::{
-    slots_released_by_iteration, Block, Condition, Effect, Expr, Function, IndexName, Schema, Slot,
-    TableName, Terminal,
+    slots_released_by_iteration, Block, ColumnName, Condition, Effect, Expr, Function, IndexName,
+    Schema, Slot, TableName, Terminal,
 };
 
 use super::carried::first_carried_slot;
@@ -39,9 +41,9 @@ struct RangeRead<'e> {
     bound: &'e Expr,
 }
 
-/// Why walking a block's effects stopped short of its terminal.
+/// Why walking a block stopped short of deciding its terminal.
 enum Halt {
-    /// The evaluator aborts at `at` with `ProjectionSourceAbsent`. Inside the
+    /// The evaluator aborts at `at`, which reads a released slot. Inside the
     /// body of an iteration whose range may hold no row, it aborts only when
     /// that range holds one: `unless_empty` is the read that bound the range.
     Aborts {
@@ -90,10 +92,11 @@ struct Walker<'a> {
 }
 
 impl Walker<'_> {
-    /// The paths through `block`. One that reaches an abort ends there, with
-    /// the accesses before it (`KILN-IR-15`); an abort an iteration's body
-    /// reaches forks on whether that range holds a row, and the path where it
-    /// holds none skips the body.
+    /// The paths through `block`: its effects, then what its terminal reads,
+    /// then the terminal. One that reaches an abort ends there, with the
+    /// accesses before it (`KILN-IR-15`); an abort an iteration's body reaches
+    /// forks on whether that range holds a row, and the path where it holds
+    /// none skips the body.
     fn block(
         &self,
         block: &Block,
@@ -101,8 +104,12 @@ impl Walker<'_> {
         facts: PathFacts,
     ) -> Result<Vec<FeasiblePath>, ClassifyError> {
         let mut walked = facts.clone();
-        match self.effects(&block.effects, at, &mut walked) {
-            Ok(()) => self.terminal(block, at, walked),
+        let terminal = at.terminal();
+        let reached = self
+            .effects(&block.effects, at, &mut walked)
+            .and_then(|()| self.operands_of(&walked, read_by(&block.terminal), &terminal));
+        match reached {
+            Ok(operands) => self.terminal(&block.terminal, terminal, &operands, walked),
             Err(Halt::Fault(error)) => Err(error),
             Err(Halt::Aborts {
                 at: abort,
@@ -125,15 +132,19 @@ impl Walker<'_> {
         }
     }
 
+    /// Decides `terminal`, whose reads resolved to `operands`.
     fn terminal(
         &self,
-        block: &Block,
-        at: &NodePath,
+        terminal: &Terminal,
+        at: NodePath,
+        operands: &[Operand],
         facts: PathFacts,
     ) -> Result<Vec<FeasiblePath>, ClassifyError> {
-        let terminal = at.terminal();
-        match &block.terminal {
-            Terminal::Return(_) | Terminal::Abort(_) => Ok(vec![FeasiblePath { facts, terminal }]),
+        match terminal {
+            Terminal::Return(_) | Terminal::Abort(_) => Ok(vec![FeasiblePath {
+                facts,
+                terminal: at,
+            }]),
             Terminal::Branch {
                 condition,
                 when_present,
@@ -141,10 +152,8 @@ impl Walker<'_> {
             } => {
                 let arms = [&**when_present, &**when_absent];
                 match condition {
-                    Condition::RowPresent(slot) => self.branch(*slot, arms, terminal, facts),
-                    Condition::Compare { left, right, .. } => {
-                        self.comparison_branch([left, right], arms, terminal, facts)
-                    }
+                    Condition::RowPresent(slot) => self.branch(*slot, arms, at, facts),
+                    Condition::Compare { .. } => self.comparison_branch(operands, arms, at, facts),
                 }
             }
         }
@@ -188,21 +197,12 @@ impl Walker<'_> {
     /// data-selected, with the branch itself as selector (Q3).
     fn comparison_branch(
         &self,
-        operands: [&Expr; 2],
+        operands: &[Operand],
         [when_holds, when_fails]: [&Block; 2],
         terminal: NodePath,
         facts: PathFacts,
     ) -> Result<Vec<FeasiblePath>, ClassifyError> {
-        let mut data_selected = false;
-        for operand in operands {
-            match operand_of(self.schema, &facts, operand, &terminal) {
-                Ok(operand) => data_selected |= !operand.uses().is_empty(),
-                Err(Unresolvable::ReleasedSource) => {
-                    return Ok(vec![FeasiblePath { facts, terminal }])
-                }
-                Err(Unresolvable::Fault(error)) => return Err(error),
-            }
-        }
+        let data_selected = operands.iter().any(|operand| !operand.uses().is_empty());
         let arm = |holds: bool| {
             if data_selected {
                 facts.deciding(&terminal, holds)
@@ -230,11 +230,24 @@ impl Walker<'_> {
     fn effect(&self, effect: &Effect, node: NodePath, facts: &mut PathFacts) -> Result<(), Halt> {
         match effect {
             Effect::Read { table, key, into } => self.read(table, key, *into, node, facts),
-            Effect::Insert { table, key, .. } => {
+            Effect::Insert {
+                table,
+                key,
+                columns,
+            } => {
                 self.keyed_access(facts, AccessRole::InsertKey, table, key, &node)?;
-                Ok(())
+                self.written_columns(facts, columns, &node)
             }
-            Effect::Update { table, key, .. } | Effect::Delete { table, key } => {
+            Effect::Update {
+                table,
+                key,
+                columns,
+            } => {
+                let role = AccessRole::Lookup(table.clone());
+                self.keyed_access(facts, role, table, key, &node)?;
+                self.written_columns(facts, columns, &node)
+            }
+            Effect::Delete { table, key } => {
                 let role = AccessRole::Lookup(table.clone());
                 self.keyed_access(facts, role, table, key, &node)?;
                 Ok(())
@@ -332,7 +345,7 @@ impl Walker<'_> {
         let bounds = RangeBounds {
             start: self.operands_of(facts, range.start, &node)?,
             end: self.operands_of(facts, range.end, &node)?,
-            bound: operand_of(self.schema, facts, range.bound, &node).map_err(Halt::at(&node))?,
+            bound: self.operand(facts, range.bound, &node)?,
         };
         let (role, kind, target) = match range.over {
             RangeOver::PrimaryKeys(table) => (
@@ -393,17 +406,55 @@ impl Walker<'_> {
         })
     }
 
-    fn operands_of(
+    /// The evaluator logs a write before it resolves the written columns, so a
+    /// path aborting at one keeps the write's access.
+    fn written_columns(
         &self,
         facts: &PathFacts,
-        expressions: &[Expr],
+        columns: &BTreeMap<ColumnName, Expr>,
+        node: &NodePath,
+    ) -> Result<(), Halt> {
+        self.operands_of(facts, columns.values(), node)?;
+        Ok(())
+    }
+
+    fn operands_of<'e>(
+        &self,
+        facts: &PathFacts,
+        expressions: impl IntoIterator<Item = &'e Expr>,
         at: &NodePath,
     ) -> Result<Vec<Operand>, Halt> {
         expressions
-            .iter()
-            .map(|expression| operand_of(self.schema, facts, expression, at))
-            .collect::<Result<_, _>>()
-            .map_err(Halt::at(at))
+            .into_iter()
+            .map(|expression| self.operand(facts, expression, at))
+            .collect()
+    }
+
+    /// The operand of what `at` reads. Every place the evaluator reads a slot
+    /// resolves through here, so each one aborts on a released slot alike.
+    fn operand(
+        &self,
+        facts: &PathFacts,
+        expression: &Expr,
+        at: &NodePath,
+    ) -> Result<Operand, Halt> {
+        operand_of(self.schema, facts, expression, at).map_err(Halt::at(at))
+    }
+}
+
+/// What `terminal` reads before it returns or branches.
+fn read_by(terminal: &Terminal) -> Vec<&Expr> {
+    match terminal {
+        Terminal::Return(response) => vec![response],
+        Terminal::Branch {
+            condition: Condition::Compare { left, right, .. },
+            ..
+        } => vec![left, right],
+        Terminal::Abort(_)
+        | Terminal::Branch {
+            condition: Condition::RowPresent(_),
+            ..
+        } => Vec::new(),
     }
 }
 

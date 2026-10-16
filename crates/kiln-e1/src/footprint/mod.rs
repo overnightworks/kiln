@@ -40,8 +40,8 @@ pub enum ClassifyError {
     /// keys cannot be read component by component.
     InvalidProgram(ProgramError),
     UnknownFunction(FunctionName),
-    /// A key or bound refers to a slot no earlier read bound, or an iteration
-    /// ranges over one that an ended iteration released.
+    /// A place that reads a slot names one no earlier read bound, or an
+    /// iteration ranges over one that an ended iteration released.
     UnboundSlot {
         slot: Slot,
         at: String,

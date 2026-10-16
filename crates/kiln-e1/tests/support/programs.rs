@@ -88,6 +88,14 @@ pub fn insert_at(table_name: &str, key: Vec<Expr>) -> Effect {
     }
 }
 
+pub fn insert_writing(table_name: &str, key: Expr, columns: &[(&str, Expr)]) -> Effect {
+    Effect::Insert {
+        table: table(table_name),
+        key: vec![key],
+        columns: written(columns),
+    }
+}
+
 pub fn update(table_name: &str, key: Expr, columns: &[(&str, Expr)]) -> Effect {
     update_at(table_name, vec![key], columns)
 }
@@ -96,10 +104,21 @@ pub fn update_at(table_name: &str, key: Vec<Expr>, columns: &[(&str, Expr)]) -> 
     Effect::Update {
         table: table(table_name),
         key,
-        columns: columns
-            .iter()
-            .map(|(name, value)| (ColumnName((*name).to_owned()), value.clone()))
-            .collect(),
+        columns: written(columns),
+    }
+}
+
+fn written(columns: &[(&str, Expr)]) -> BTreeMap<ColumnName, Expr> {
+    columns
+        .iter()
+        .map(|(name, value)| (ColumnName((*name).to_owned()), value.clone()))
+        .collect()
+}
+
+pub fn delete(table_name: &str, key: Expr) -> Effect {
+    Effect::Delete {
+        table: table(table_name),
+        key: vec![key],
     }
 }
 
@@ -108,21 +127,41 @@ pub fn read_range(table_name: &str, start: Expr, end: Expr, into: u32) -> Effect
 }
 
 pub fn read_range_at(table_name: &str, start: Vec<Expr>, end: Vec<Expr>, into: u32) -> Effect {
+    read_range_bounded(table_name, start, end, literal(10), into)
+}
+
+pub fn read_range_bounded(
+    table_name: &str,
+    start: Vec<Expr>,
+    end: Vec<Expr>,
+    bound: Expr,
+    into: u32,
+) -> Effect {
     Effect::ReadRange {
         table: table(table_name),
         start,
         end,
-        bound: literal(10),
+        bound,
         into: Slot(into),
     }
 }
 
 pub fn read_index(index: &str, start: Vec<Expr>, end: Vec<Expr>, into: u32) -> Effect {
+    read_index_bounded(index, start, end, literal(10), into)
+}
+
+pub fn read_index_bounded(
+    index: &str,
+    start: Vec<Expr>,
+    end: Vec<Expr>,
+    bound: Expr,
+    into: u32,
+) -> Effect {
     Effect::ReadIndexRange {
         index: IndexName(index.to_owned()),
         start,
         end,
-        bound: literal(10),
+        bound,
         into: Slot(into),
     }
 }
