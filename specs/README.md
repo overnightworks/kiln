@@ -256,8 +256,8 @@ insert and delete responses), so these history-based checks do not suit
 repeated executions and `Starvation` checks neither. Rearrival leaves a
 transaction pending and undispatched; only the next `Dispatch` queues it
 and starts the `RequestedLeadsToTerminal` obligation. The `NoBypass` mutant drops `OlderQueued` from
-`WaitsOn` (rule 3) and TLC returns the lasso: t3 is admitted, commits and
-requests again, over and over, while t1, queued before each of t3's
+`WaitsOn` (rule 3) and TLC returns the lasso: t2 and t3 are admitted in turn, commit and
+request again, over and over, while t1, queued before each of their
 requests, is admitted in no state of the loop.
 
 Queued sequence numbers are dense (1..n): `Acquire` closes the gap it
@@ -554,7 +554,7 @@ lengths below are the states of the committed logs.
 | `PerOperationAcquisition` — slice 1's registration per operation: nothing is acquired at dispatch, `DoOp` registers each operation's resources as it runs, a draw sees the committed balance and waits for the allowance | `DeleteReinsert` | `NoWaitCycle` (t1 holds `DEL 2` waiting for `PIN 1`, t2 holds `DEL 1` waiting for `X 2`) | 3 |
 | `PerOperationAcquisition` | `DeleteReinsert` | TLC deadlock check | 3 |
 | `PerOperationAcquisition` | `OutOfOrder` | `NoWaitCycle` (t1 waits on t2's claim, t2 waits on t1's draw) | 3 |
-| `PerOperationAcquisition` | `FootprintGap` | `NoWaitCycle` (t1 holds `CLAIM 3` waiting for `X 2`, t2 holds `X 2` waiting for `DEL 3`) | 3 |
+| `PerOperationAcquisition` | `FootprintGap` | `NoWaitCycle` (t1 holds `CLAIM 3` and `PIN 1` waiting for `X 2`, t2 holds `X 2` waiting for `DEL 3`) | 3 |
 | `PerOperationAcquisition` | `ScanUpgrade` | `NoWaitCycle` (each holds its range and waits for `X` on a key the other's range covers) | 3 |
 | `ActiveAllowanceWait` — slice 1's escrow restored: no reservation at admission, a draw sees the committed balance, an active transaction waits for the allowance left by other tentative draws | `AllowanceCycle` | `NoWaitCycle` (each holds a tentative draw and waits on the other's) | 7 |
 | `ActiveAllowanceWait` | `AllowanceCycle` | TLC deadlock check | 7 |
@@ -564,7 +564,7 @@ lengths below are the states of the committed logs.
 | `DrawIgnoresReservation` — admission accounts what other holders have drawn, not what they reserved | `AllowanceCycle` | `ReservationsFunded` (both admitted with 2 on a balance of 2) | 5 |
 | `DrawIgnoresReservation` | `AllowanceCycle` | `BalanceNonNegative` (quota −2) | 11 |
 | `BudgetUndercounts` — the budget is the largest single draw, not the total | `AllowanceCycle` | `Serializable` (t1 reserves 1 and is told `insufficient` on its second draw; no serial order rejects t1) | 5 |
-| `NoBypass` — a later request may overtake an older queued request on a shared resource (`OlderQueued` dropped from `WaitsOn`) | `Starvation` | `RequestedLeadsToTerminal` (liveness: a lasso in which t3 is admitted, commits and requests again forever while t1, queued first, is never admitted) | 8, loop back to 4 |
+| `NoBypass` — a later request may overtake an older queued request on a shared resource (`OlderQueued` dropped from `WaitsOn`) | `Starvation` | `RequestedLeadsToTerminal` (liveness: a lasso in which t2 and t3 are admitted in turn, commit and request again forever while t1, queued first, is never admitted) | 17, loop back to 8 |
 | `WidenInPlace` — a call acquires the widened resource on top of its held footprint and waits for it instead of restarting | `WidenCycle` | `NoWaitCycle` (each holds `X` on the key the other's pointer names and waits for `S` on it) | 7 |
 | `WidenInPlace` | `WidenCycle` | TLC deadlock check | 7 |
 | `KeepTentativeOnRestart` — a restart keeps the tentative writes and draws | `WidenCycle` | `Serializable` (the re-run `Update` returns the call's own earlier write; no serial order yields it) | 9 |
