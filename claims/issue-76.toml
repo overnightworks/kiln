@@ -1,7 +1,0 @@
-claim_id = "3dc31fdc314843f9b0a7fae81b425cba"
-agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
-role = "builder"
-base = "1671bd06f98ce0bd676401932a2ac90de180a7e0"
-branch = "claude/issue-76-e2-oracle-crate"
-scope = ["Cargo.lock", "crates/kiln-e2", "specs/kiln-e2.spec.md"]
-opened_commit = "aab82777ccc7b416347f2caa5f69680e03ce62d5"
