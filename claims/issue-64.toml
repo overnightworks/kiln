@@ -1,8 +1,0 @@
-claim_id = "453fef56bb224cc39b81584a4b64ecca"
-agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
-role = "builder"
-base = "27535cfcb237cb413ecb6cce595b32b8fc46b398"
-branch = "claude/issue-64-ir-key-contract"
-scope = ["crates/kiln-e1/tests", "docs/concept.md", "experiments/e1-classification-coverage/inputs.md"]
-opened_commit = "67f0e40e1f0959a14696c2b6ec8c74ec056773c2"
-whole_reason = "the reference-meaning contract for compound keys and the new forms, their E1 classification rules, and an executable TPC-C fidelity matrix"
