@@ -1,0 +1,31 @@
+E4 feasibility pilot (protocol.md §13) — mechanics only
+source commit: d2349459ec84170a3b1c236e85e3e862b764cc3c
+instrumented binary sha256: 3ef35259c13aaf4b085f7ab43f3b6f7ee7ca730b80bd01dece4363ef0fc3fee8
+passthrough binary sha256:  76985be0d71869468456f8ae19c470f21fe42072616d5e4c17ffc5724024b232
+run duration: 796.286985543s
+rejected attempts: 423
+perf (§7): skipped — perf access not granted this session (protocol §7/§12)
+monitor sample coverage: 3046/2858 samples (106.6%) at 200ms intervals over 589.242303913s of measured windows
+
+overhead bound (§5, frozen at 2%; gated cells only, every pair reported as measured):
+  point-update/small/full: inconclusive — insufficient repetitions (0/9 pairs succeeded)
+  point-update/small/normal: inconclusive — insufficient repetitions (1/9 pairs succeeded)
+    pair=9  first=instrumented ops=2000   instrumented_mean_ns=   28192.3 passthrough_mean_ns=   29606.7 overhead= -4.78%
+  point-update/medium/full: inconclusive — insufficient repetitions (0/9 pairs succeeded)
+  point-update/medium/normal: inconclusive — insufficient repetitions (0/9 pairs succeeded)
+  insert/small/full: inconclusive — insufficient repetitions (0/9 pairs succeeded)
+  insert/small/normal: inconclusive — insufficient repetitions (1/9 pairs succeeded)
+    pair=7  first=instrumented ops=500    instrumented_mean_ns=   54929.4 passthrough_mean_ns=   57035.7 overhead= -3.69%
+  insert/medium/full: inconclusive — insufficient repetitions (0/9 pairs succeeded)
+  insert/medium/normal: inconclusive — insufficient repetitions (0/9 pairs succeeded)
+  transfer/small/full: inconclusive — insufficient repetitions (0/9 pairs succeeded)
+  transfer/small/normal: inconclusive — insufficient repetitions (1/9 pairs succeeded)
+    pair=9  first=instrumented ops=2000   instrumented_mean_ns=   47158.2 passthrough_mean_ns=   46537.9 overhead=  1.33%
+  transfer/medium/full: inconclusive — insufficient repetitions (0/9 pairs succeeded)
+  transfer/medium/normal: inconclusive — insufficient repetitions (0/9 pairs succeeded)
+  point-read/small/full: not gated — its read-only transaction never reaches the timed VFS calls, so the bound holds by construction (§5); no comparison ran
+  point-read/small/normal: not gated — its read-only transaction never reaches the timed VFS calls, so the bound holds by construction (§5); no comparison ran
+  point-read/medium/full: not gated — its read-only transaction never reaches the timed VFS calls, so the bound holds by construction (§5); no comparison ran
+  point-read/medium/normal: not gated — its read-only transaction never reaches the timed VFS calls, so the bound holds by construction (§5); no comparison ran
+
+pilot outcome: FAIL — a gated cell did not pass the 2% overhead bound (protocol §5): it failed, was inconclusive or had insufficient repetitions, or the report lacks a cell

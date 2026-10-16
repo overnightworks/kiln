@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
+use crate::workloads::{self, Synchronous};
+
 /// Why [`checkpoint_truncate`] refused to proceed: either SQLite itself
 /// reported the checkpoint blocked, or it reported success but left a
 /// nonempty WAL behind — either way, the pristine snapshot [`save_pristine`]
@@ -176,6 +178,34 @@ pub fn save_pristine(
     Ok(())
 }
 
+/// Loads `row_count` rows once (protocol §2.1), asserts the row count,
+/// closes the loading connection, checkpoints and truncates the WAL on a
+/// second one, and saves that main-file/WAL pair as the pristine state in
+/// `pristine_dir`. The loading database is a scratch directory beside
+/// `pristine_dir`, removed before returning.
+pub fn prepare_pristine(pristine_dir: &Path, row_count: u64) -> io::Result<()> {
+    let parent = pristine_dir.parent().unwrap_or(Path::new("."));
+    fs::create_dir_all(parent)?;
+    let loading = tempfile::tempdir_in(parent)?;
+    let db_path = loading.path().join("accounts.db");
+    let wal_path = loading.path().join("accounts.db-wal");
+
+    let conn = Connection::open(&db_path).map_err(io::Error::other)?;
+    workloads::configure_connection(&conn, Synchronous::Full).map_err(io::Error::other)?;
+    workloads::create_schema(&conn).map_err(io::Error::other)?;
+    workloads::initial_load(&conn, row_count).map_err(io::Error::other)?;
+    let loaded = workloads::checks::row_count(&conn).map_err(io::Error::other)?;
+    if loaded != row_count {
+        return Err(io::Error::other(format!(
+            "the initial load wrote {loaded} rows, not the {row_count} protocol §2.1 asks for"
+        )));
+    }
+    drop(conn);
+
+    checkpoint_truncate(&db_path, &wal_path).map_err(io::Error::other)?;
+    save_pristine(&db_path, &wal_path, pristine_dir).map_err(io::Error::other)
+}
+
 /// Restores `db_path`/`wal_path` from `pristine_dir`, outside any timed
 /// window (protocol §2.1).
 pub fn restore_pristine(pristine_dir: &Path, db_path: &Path, wal_path: &Path) -> io::Result<()> {
@@ -283,6 +313,28 @@ mod tests {
     }
 
     #[test]
+    fn wal_is_empty_or_absent_reports_an_error_that_is_not_a_missing_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let plain_file = dir.path().join("plain");
+        fs::write(&plain_file, b"not a directory").unwrap();
+
+        let beneath_a_file = plain_file.join("main.db-wal");
+
+        assert!(wal_is_empty_or_absent(&beneath_a_file).is_err());
+    }
+
+    #[test]
+    fn restore_failures_say_what_went_wrong() {
+        for (message, expected) in [
+            (CheckpointError::Blocked.to_string(), "blocked"),
+            (CheckpointError::WalNotEmpty.to_string(), "nonempty WAL"),
+            (PristineSaveError::NonemptyWal.to_string(), "not empty"),
+        ] {
+            assert!(message.contains(expected), "{message}");
+        }
+    }
+
+    #[test]
     fn wal_is_empty_or_absent_rejects_a_nonempty_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let nonempty = dir.path().join("nonempty.db-wal");
@@ -340,5 +392,43 @@ mod tests {
 
         assert!(matches!(result, Err(CheckpointError::Blocked)));
         reader.execute_batch("COMMIT;").unwrap();
+    }
+
+    mod kiln_e4_23 {
+        use super::*;
+
+        #[test]
+        fn a_prepared_snapshot_restores_to_the_loaded_rows_with_an_empty_wal() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let pristine_dir = dir.path().join("pristine");
+            prepare_pristine(&pristine_dir, 50).expect("prepare");
+
+            let db_path = dir.path().join("work.db");
+            let wal_path = dir.path().join("work.db-wal");
+            restore_pristine(&pristine_dir, &db_path, &wal_path).expect("restore");
+
+            assert!(wal_is_empty_or_absent(&wal_path).unwrap());
+            let conn = Connection::open(&db_path).unwrap();
+            assert_eq!(workloads::checks::row_count(&conn).unwrap(), 50);
+            let first_balance: i64 = conn
+                .query_row("SELECT balance FROM accounts WHERE id = 1", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(first_balance, 1_000_000);
+        }
+
+        #[test]
+        fn preparing_a_snapshot_leaves_no_loading_database_behind() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let pristine_dir = dir.path().join("pristine");
+            prepare_pristine(&pristine_dir, 5).expect("prepare");
+
+            let entries: Vec<_> = fs::read_dir(dir.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert_eq!(entries, vec![std::ffi::OsString::from("pristine")]);
+        }
     }
 }
