@@ -13,7 +13,7 @@ use super::cause::UnknownCause;
 use super::dependency::{track_access, AccessRole};
 use super::facts::{Binding, BindingKind, PathFacts, RangeBounds, Target};
 use super::node_path::NodePath;
-use super::operand::{operand_of, Operand, ReadRef, Unresolvable};
+use super::operand::{decided_expression, operand_of, Operand, ReadRef, Unresolvable};
 use super::ClassifyError;
 
 pub struct FeasiblePath {
@@ -431,7 +431,8 @@ impl Walker<'_> {
             return Ok(());
         };
         for (key_column, component) in declared.key_columns().iter().zip(key) {
-            let Expr::Projection { slot, column } = component else {
+            let Expr::Projection { slot, column } = decided_expression(facts, component, node)
+            else {
                 continue;
             };
             let read = facts.read_of(*slot, node)?;

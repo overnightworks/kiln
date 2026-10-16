@@ -152,6 +152,14 @@ impl<'a> FunctionScope<'a> {
                 .map(|parameter| parameter.kind.into()),
             Expr::Projection { .. } => None,
             Expr::Arithmetic(..) => Some(StaticKind::Integer),
+            Expr::Conditional {
+                when_true,
+                when_false,
+                ..
+            } => {
+                let kind = self.static_kind(when_true)?;
+                (self.static_kind(when_false)? == kind).then_some(kind)
+            }
         }
     }
 }

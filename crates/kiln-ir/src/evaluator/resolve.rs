@@ -6,7 +6,9 @@
 use std::collections::HashMap;
 
 use crate::identifiers::ColumnName;
-use crate::ir::{ArithmeticOp, ClampDomain, Column, ColumnType, Expr, IntegerWidth, Slot, Value};
+use crate::ir::{
+    ArithmeticOp, ClampDomain, Column, ColumnType, Condition, Expr, IntegerWidth, Slot, Value,
+};
 
 use super::{AbortReason, Binding, BoundRow, CallContext, OverflowReason};
 
@@ -22,6 +24,7 @@ use super::{AbortReason, Binding, BoundRow, CallContext, OverflowReason};
 pub(super) enum ResolveError {
     Overflow(OverflowReason),
     NonIntegerOperand,
+    ComparisonTypeMismatch,
     ProjectionSourceAbsent { slot: Slot },
     MissingColumn { slot: Slot, column: ColumnName },
 }
@@ -31,6 +34,7 @@ impl From<ResolveError> for AbortReason {
         match error {
             ResolveError::Overflow(reason) => AbortReason::Overflow(reason),
             ResolveError::NonIntegerOperand => AbortReason::NonIntegerOperand,
+            ResolveError::ComparisonTypeMismatch => AbortReason::ComparisonTypeMismatch,
             ResolveError::ProjectionSourceAbsent { slot } => {
                 AbortReason::ProjectionSourceAbsent { slot }
             }
@@ -91,6 +95,41 @@ pub(super) fn resolve(
             let result = checked_apply(*op, lhs, rhs)
                 .ok_or(ResolveError::Overflow(OverflowReason::Arithmetic))?;
             Ok(Value::Integer(result))
+        }
+        Expr::Conditional {
+            condition,
+            when_true,
+            when_false,
+        } => {
+            let chosen = if condition_holds(condition, ctx, bindings)? {
+                when_true
+            } else {
+                when_false
+            };
+            resolve(chosen, ctx, bindings)
+        }
+    }
+}
+
+/// Whether `condition` holds against what this call has read so far; a
+/// comparison resolves both operands and logs no access.
+pub(super) fn condition_holds(
+    condition: &Condition,
+    ctx: &CallContext,
+    bindings: &HashMap<Slot, Binding>,
+) -> Result<bool, ResolveError> {
+    match condition {
+        Condition::RowPresent(slot) => Ok(bindings.get(slot).is_some_and(Binding::is_present)),
+        Condition::Compare {
+            left,
+            relation,
+            right,
+        } => {
+            let left = resolve(left, ctx, bindings)?;
+            let right = resolve(right, ctx, bindings)?;
+            relation
+                .holds(&left, &right)
+                .ok_or(ResolveError::ComparisonTypeMismatch)
         }
     }
 }
@@ -174,6 +213,7 @@ fn checked_apply(op: ArithmeticOp, lhs: i64, rhs: i64) -> Option<i64> {
     match op {
         ArithmeticOp::Add => lhs.checked_add(rhs),
         ArithmeticOp::Subtract => lhs.checked_sub(rhs),
+        ArithmeticOp::Multiply => lhs.checked_mul(rhs),
     }
 }
 

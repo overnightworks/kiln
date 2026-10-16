@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use crate::ir::{Condition, Slot, Terminal};
+use crate::ir::{Slot, Terminal};
 use crate::store::Store;
 
-use super::super::resolve::resolve;
+use super::super::resolve::{condition_holds, resolve};
 use super::super::{AbortReason, AccessLogEntry, Binding, CallContext, Outcome};
 use super::execute_block;
 
@@ -34,33 +34,14 @@ pub(super) fn execute_terminal(
         } => {
             let present = match condition_holds(condition, ctx, bindings) {
                 Ok(present) => present,
-                Err(reason) => return Outcome::Aborted { reason },
+                Err(error) => {
+                    return Outcome::Aborted {
+                        reason: error.into(),
+                    }
+                }
             };
             let block = if present { when_present } else { when_absent };
             execute_block(block, ctx, store, bindings, access_log)
-        }
-    }
-}
-
-/// Whether `condition` holds against what this call has read so far; a
-/// comparison resolves both operands and logs no access.
-pub(super) fn condition_holds(
-    condition: &Condition,
-    ctx: &CallContext,
-    bindings: &HashMap<Slot, Binding>,
-) -> Result<bool, AbortReason> {
-    match condition {
-        Condition::RowPresent(slot) => Ok(bindings.get(slot).is_some_and(Binding::is_present)),
-        Condition::Compare {
-            left,
-            relation,
-            right,
-        } => {
-            let left = resolve(left, ctx, bindings)?;
-            let right = resolve(right, ctx, bindings)?;
-            relation
-                .holds(&left, &right)
-                .ok_or(AbortReason::ComparisonTypeMismatch)
         }
     }
 }
