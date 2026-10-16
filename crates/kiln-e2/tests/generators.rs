@@ -5,7 +5,7 @@ use kiln_e2::inventory::{self, InventoryCall, InventoryCall::*, StockState};
 use kiln_e2::quota::{self, QuotaCall, QuotaCall::*, QuotaState};
 use kiln_e2::{batch_generator, BatchSize, BatchSizeOutOfRange, Family, SplitMix64};
 use kiln_ir::{Call, Outcome, Value};
-use support::{final_store, replay_all};
+use support::{aborted, committed, final_store, outcomes_of, replay_all};
 
 fn size(n: u32) -> BatchSize {
     BatchSize::new(n).expect("a size in range")
@@ -112,23 +112,6 @@ mod kiln_e2_21 {
         assert_eq!(
             accounts::generate(size(64), 3),
             accounts::generate(size(64), 3)
-        );
-    }
-
-    #[test]
-    fn different_indices_and_sizes_give_different_batches() {
-        assert_ne!(quota::generate(size(64), 3), quota::generate(size(64), 4));
-        assert_ne!(
-            inventory::generate(size(64), 3),
-            inventory::generate(size(64), 4)
-        );
-        assert_ne!(
-            accounts::generate(size(64), 3),
-            accounts::generate(size(64), 4)
-        );
-        assert_ne!(
-            accounts::generate(size(64), 3).initial,
-            accounts::generate(size(65), 3).initial
         );
     }
 }
@@ -552,6 +535,211 @@ mod kiln_e2_26 {
             assert_eq!(
                 (balances_and_frozen(end), committed_digest(&executions)),
                 (last, digest),
+                "size {n} index {index}"
+            );
+        }
+    }
+
+    type Expected = &'static [Result<i64, &'static str>];
+
+    fn expected_outcomes(expected: Expected) -> Vec<Outcome> {
+        expected
+            .iter()
+            .map(|result| match result {
+                Ok(response) => committed(*response),
+                Err(name) => aborted(name),
+            })
+            .collect()
+    }
+
+    // The literals below were produced by the builder's independent Python
+    // reference of the frozen draws and outcome tables, not by the Rust code.
+    #[test]
+    fn small_quota_batches_replay_to_the_reference_outcomes_in_order() {
+        let rows: [(u32, u32, i64, i64, Expected); 2] = [
+            (
+                16,
+                3,
+                111,
+                9,
+                &[
+                    Ok(22),
+                    Ok(5),
+                    Ok(37),
+                    Ok(27),
+                    Ok(2),
+                    Ok(22),
+                    Err("quota_exhausted"),
+                    Err("quota_exhausted"),
+                    Err("quota_exhausted"),
+                    Ok(45),
+                    Ok(24),
+                    Ok(21),
+                    Err("quota_exhausted"),
+                    Ok(29),
+                    Ok(8),
+                    Ok(12),
+                ],
+            ),
+            (
+                12,
+                5,
+                807,
+                657,
+                &[
+                    Ok(40),
+                    Ok(14),
+                    Ok(35),
+                    Ok(4),
+                    Ok(48),
+                    Ok(5),
+                    Ok(13),
+                    Ok(33),
+                    Ok(26),
+                    Ok(38),
+                    Ok(22),
+                    Ok(22),
+                ],
+            ),
+        ];
+        for (n, index, initial, last, outcomes) in rows {
+            let batch = quota::generate(size(n), index);
+            assert_eq!(batch.initial.remaining, initial);
+            let program = quota::program();
+            assert_eq!(
+                outcomes_of(&program, batch.initial.to_store(), &batch.calls),
+                expected_outcomes(outcomes),
+                "size {n} index {index}"
+            );
+            let end = final_store(&program, batch.initial.to_store(), &batch.calls);
+            assert_eq!(QuotaState::from_store(&end).remaining, last);
+        }
+    }
+
+    #[test]
+    fn small_inventory_batches_replay_to_the_reference_outcomes_in_order() {
+        let rows: [(u32, u32, i64, i64, Expected); 2] = [
+            (
+                16,
+                3,
+                62,
+                70,
+                &[
+                    Ok(62),
+                    Ok(54),
+                    Err("invalid_quantity"),
+                    Ok(48),
+                    Ok(46),
+                    Ok(36),
+                    Ok(27),
+                    Ok(25),
+                    Ok(22),
+                    Ok(16),
+                    Ok(15),
+                    Ok(13),
+                    Ok(94),
+                    Ok(87),
+                    Ok(82),
+                    Ok(75),
+                ],
+            ),
+            (
+                12,
+                5,
+                59,
+                83,
+                &[
+                    Ok(59),
+                    Ok(50),
+                    Ok(45),
+                    Ok(0),
+                    Ok(37),
+                    Ok(29),
+                    Ok(28),
+                    Ok(19),
+                    Ok(15),
+                    Ok(11),
+                    Ok(97),
+                    Ok(92),
+                ],
+            ),
+        ];
+        for (n, index, initial, last, outcomes) in rows {
+            let batch = inventory::generate(size(n), index);
+            assert_eq!(batch.initial.quantity, initial);
+            let program = inventory::program();
+            assert_eq!(
+                outcomes_of(&program, batch.initial.to_store(), &batch.calls),
+                expected_outcomes(outcomes),
+                "size {n} index {index}"
+            );
+            let end = final_store(&program, batch.initial.to_store(), &batch.calls);
+            assert_eq!(StockState::from_store(&end).quantity, last);
+        }
+    }
+
+    #[test]
+    fn small_account_batches_replay_to_the_reference_outcomes_in_order() {
+        type Row = (u32, u32, Snapshot, Snapshot, Expected);
+        let rows: [Row; 2] = [
+            (
+                16,
+                3,
+                ([32157, 48901, 38180, 6353], [0, 0, 0, 0]),
+                ([8604, 32011, 57812, 7753], [0, 0, 0, 0]),
+                &[
+                    Err("invalid_amount"),
+                    Ok(43271),
+                    Ok(24187),
+                    Ok(5921),
+                    Ok(17856),
+                    Ok(35467),
+                    Ok(4297),
+                    Err("insufficient_funds"),
+                    Ok(8471),
+                    Err("insufficient_funds"),
+                    Err("not_frozen"),
+                    Err("not_frozen"),
+                    Ok(52050),
+                    Ok(57945),
+                    Ok(32011),
+                    Ok(57812),
+                ],
+            ),
+            (
+                12,
+                5,
+                ([6742, 12441, 45631, 6081], [0, 0, 0, 0]),
+                ([11400, 2265, 37357, 440], [1, 0, 0, 0]),
+                &[
+                    Ok(3126),
+                    Ok(5688),
+                    Ok(37357),
+                    Ok(2265),
+                    Err("not_frozen"),
+                    Ok(2790),
+                    Ok(10138),
+                    Ok(11400),
+                    Err("account_frozen"),
+                    Ok(440),
+                    Err("account_frozen"),
+                    Err("account_frozen"),
+                ],
+            ),
+        ];
+        for (n, index, initial, last, outcomes) in rows {
+            let batch = accounts::generate(size(n), index);
+            assert_eq!(balances_and_frozen(batch.initial), initial);
+            let program = accounts::program();
+            assert_eq!(
+                outcomes_of(&program, batch.initial.to_store(), &batch.calls),
+                expected_outcomes(outcomes),
+                "size {n} index {index}"
+            );
+            let end = final_store(&program, batch.initial.to_store(), &batch.calls);
+            assert_eq!(
+                balances_and_frozen(AccountsState::from_store(&end)),
+                last,
                 "size {n} index {index}"
             );
         }

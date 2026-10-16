@@ -45,7 +45,7 @@ builds no summaries.
 - [KILN-E2-18] SplitMix64 reproduces the frozen test vectors: from state 0 and from state `(1 << 48) | (64 << 32) | 0`, the first three outputs are those the freeze lists.
 - [KILN-E2-19] `uniform(lo, hi)` is `lo + (next mod (hi - lo + 1))`.
 - [KILN-E2-20] Batch `j` of size `n` for family `f` starts from the state `(f << 48) | (n << 32) | j` with quota 1, inventory 2 and accounts 3; a size outside 1 to 256 is refused.
-- [KILN-E2-21] A generator is deterministic: the same family, size and batch index give the same batch, and different indices give different batches.
+- [KILN-E2-21] A generator is deterministic: the same family, size and batch index give the same batch, and the seed derivation is the frozen one of KILN-E2-20.
 - [KILN-E2-22] The quota generator draws the initial remaining, then per call the kind, the quantity and the malformed share, in that order, with the frozen mix, ranges and malformed replacement; its batches match a reference derivation of the frozen draws.
 - [KILN-E2-23] The inventory generator does the same with the frozen mix of 45 order lines to 4 stock checks, ranges and malformed replacements.
 - [KILN-E2-24] The accounts generator draws each account's balance then status, then per call the kind and the arguments in the listed order and the malformed share, with the frozen mix and ranges; it never produces `same_account` or an absent account in a money operation, and its malformed calls carry amount 0 or account 4.

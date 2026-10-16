@@ -5,7 +5,7 @@ use kiln_e2::inventory::{
     InventoryCall::{OrderLine, StockCheck},
     StockState,
 };
-use support::{aborted, assert_rows, committed, final_store, outcomes_of};
+use support::{aborted, assert_rows, committed};
 
 fn stock(quantity: i64) -> StockState {
     StockState { quantity }
@@ -125,23 +125,24 @@ mod kiln_e2_08 {
 
     #[test]
     fn i3_responses_depend_on_the_order_and_the_state_does_not() {
-        let five_then_three = [OrderLine { quantity: 5 }, OrderLine { quantity: 3 }];
-        let three_then_five = [OrderLine { quantity: 3 }, OrderLine { quantity: 5 }];
         let initial = stock(15).to_store();
-
-        assert_eq!(
-            outcomes_of(&program(), initial.clone(), &five_then_three),
-            [committed(15), committed(10)]
+        assert_rows(
+            &program(),
+            initial.clone(),
+            &[
+                (OrderLine { quantity: 5 }, committed(15), stock(10)),
+                (OrderLine { quantity: 3 }, committed(10), stock(98)),
+            ],
+            StockState::from_store,
         );
-        assert_eq!(
-            outcomes_of(&program(), initial.clone(), &three_then_five),
-            [committed(15), committed(12)]
+        assert_rows(
+            &program(),
+            initial,
+            &[
+                (OrderLine { quantity: 3 }, committed(15), stock(12)),
+                (OrderLine { quantity: 5 }, committed(12), stock(98)),
+            ],
+            StockState::from_store,
         );
-        for calls in [five_then_three, three_then_five] {
-            assert_eq!(
-                StockState::from_store(&final_store(&program(), initial.clone(), &calls)),
-                stock(98)
-            );
-        }
     }
 }
