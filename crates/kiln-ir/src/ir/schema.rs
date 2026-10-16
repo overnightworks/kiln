@@ -99,7 +99,7 @@ pub enum Comparison {
 }
 
 impl ColumnType {
-    pub(crate) fn holds_kind_of(&self, value: &Value) -> bool {
+    fn holds_kind_of(&self, value: &Value) -> bool {
         matches!(
             (self, value),
             (ColumnType::Integer { .. }, Value::Integer(_)) | (ColumnType::Text, Value::Text(_))

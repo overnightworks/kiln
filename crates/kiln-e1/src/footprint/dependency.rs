@@ -1,7 +1,7 @@
 //! How an access target depends on earlier reads, and whether the schema lets
 //! the compiler identify that dependency ahead of time (Q2, Q3).
 
-use kiln_ir::{ColumnName, IndexName, Schema, TableName};
+use kiln_ir::{ColumnName, Schema, TableName};
 
 use super::cause::UnknownCause;
 use super::facts::{Binding, BindingKind, PathFacts, ResolutionRole};
@@ -38,14 +38,31 @@ pub fn track_access<'a>(
     node: &NodePath,
 ) -> Vec<ReadRef> {
     let operands: Vec<&Operand> = operands.into_iter().collect();
+    let reads: Vec<ReadRef> = operands.iter().flat_map(|operand| operand.uses()).collect();
+    let resolving = |resolution_role| {
+        reads
+            .iter()
+            .map(|read| (read, resolution_role))
+            .collect::<Vec<_>>()
+    };
     match role {
         AccessRole::Lookup(table) => track_lookup(facts, schema, table, &operands, node),
-        _ => operands
-            .iter()
-            .flat_map(|operand| operand.uses())
-            .for_each(|read| settle(facts, role, &read, node)),
+        AccessRole::InsertKey => resolve_each(facts, resolving(ResolutionRole::BaseRows), node),
+        AccessRole::IndexBound => {
+            resolve_each(facts, resolving(ResolutionRole::IndexBounds), node);
+        }
+        AccessRole::PrimaryRangeBound if !reads.is_empty() => {
+            facts.block(node, UnknownCause::PrimaryRangeBoundedByRead);
+        }
+        AccessRole::PrimaryRangeBound => {}
     }
-    operands.iter().flat_map(|operand| operand.uses()).collect()
+    reads
+}
+
+fn resolve_each(facts: &mut PathFacts, reads: Vec<(&ReadRef, ResolutionRole)>, node: &NodePath) {
+    for (read, resolution_role) in reads {
+        facts.resolve(read, resolution_role, std::slice::from_ref(node));
+    }
 }
 
 fn track_lookup(
@@ -71,46 +88,15 @@ fn track_lookup(
     if reads.is_empty() {
         return;
     }
-    match lookup_edge(facts, schema, table, key, &reads) {
+    match lookup_edge(facts, schema, table, key) {
         Edge::Resolves(role, read) => facts.resolve(&read, role, std::slice::from_ref(node)),
         Edge::Covered => {}
         Edge::Blocked(cause) => facts.block(node, cause),
     }
 }
 
-fn settle(facts: &mut PathFacts, role: &AccessRole, read: &ReadRef, node: &NodePath) {
-    if let Some(index) = undeclared_index(facts, read) {
-        facts.block(node, UnknownCause::UndeclaredIndex(index));
-        return;
-    }
-    match role {
-        AccessRole::InsertKey => {
-            facts.resolve(read, ResolutionRole::BaseRows, std::slice::from_ref(node));
-        }
-        AccessRole::IndexBound => {
-            facts.resolve(
-                read,
-                ResolutionRole::IndexBounds,
-                std::slice::from_ref(node),
-            );
-        }
-        AccessRole::PrimaryRangeBound => {
-            facts.block(node, UnknownCause::PrimaryRangeBoundedByRead);
-        }
-        AccessRole::Lookup(_) => unreachable!("a lookup is judged as a whole key"),
-    }
-}
-
 fn bound<'f>(facts: &'f PathFacts, read: &ReadRef) -> &'f Binding {
     facts.binding_of(read).expect("a used read is bound")
-}
-
-/// The index `read` reads rows of when the schema does not declare it.
-fn undeclared_index(facts: &PathFacts, read: &ReadRef) -> Option<IndexName> {
-    match &bound(facts, read).kind {
-        BindingKind::UndeclaredIndexRange(index) => Some(index.clone()),
-        _ => None,
-    }
 }
 
 fn source_table(binding: &Binding) -> Option<&TableName> {
@@ -125,16 +111,7 @@ fn source_table(binding: &Binding) -> Option<&TableName> {
 /// The first of containment, index-to-base resolution and a declared foreign
 /// key that applies to a key with read-derived components; otherwise why none
 /// does (Clarification rule 2 (b), (c), (d), (e)).
-fn lookup_edge(
-    facts: &PathFacts,
-    schema: &Schema,
-    target: &TableName,
-    key: &[&Operand],
-    reads: &[ReadRef],
-) -> Edge {
-    if let Some(index) = reads.iter().find_map(|read| undeclared_index(facts, read)) {
-        return Edge::Blocked(UnknownCause::UndeclaredIndex(index));
-    }
+fn lookup_edge(facts: &PathFacts, schema: &Schema, target: &TableName, key: &[&Operand]) -> Edge {
     if let Some(edge) = whole_key_of_one_row(facts, schema, target, key) {
         return edge;
     }
@@ -183,7 +160,9 @@ fn single_column_edge(
     read: &ReadRef,
     column: &ColumnName,
 ) -> Edge {
-    let from = source_table(bound(facts, read)).expect("a declared read has a table");
+    let Some(from) = source_table(bound(facts, read)) else {
+        return Edge::Covered;
+    };
     let declared = schema.foreign_keys.iter().any(|foreign_key| {
         &foreign_key.table == from
             && &foreign_key.column == column

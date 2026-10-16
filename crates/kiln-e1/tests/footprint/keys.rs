@@ -214,6 +214,21 @@ mod kiln_e1_37 {
     }
 
     #[test]
+    fn a_key_projected_from_a_range_over_another_table_with_the_same_key_columns_is_unknown() {
+        let archive_range = read_range_at(
+            ARCHIVE,
+            line_at("w", "d", literal(0)),
+            line_at("w", "d", literal(9)),
+            0,
+        );
+        let body = returns(vec![
+            archive_range,
+            iterate(0, 1, vec![update_at(LINES, line_key_of(1), &[])]),
+        ]);
+        assert_unknown(body, key_not_identified());
+    }
+
+    #[test]
     fn a_key_with_components_of_a_range_row_is_unknown_when_the_range_is_over_another_table() {
         let body = returns(vec![
             read_range("orders", param("low"), param("high"), 0),

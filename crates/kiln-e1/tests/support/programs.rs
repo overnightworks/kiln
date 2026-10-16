@@ -44,6 +44,9 @@ pub const KEY_COLUMN: &str = "id";
 /// The shared schema's table keyed by three columns.
 pub const LINES: &str = "lines";
 
+/// A table keyed by the same column names as [`LINES`].
+pub const ARCHIVE: &str = "lines_archive";
+
 /// The key of [`LINES`] in declared order.
 pub const LINE_KEY: [&str; 3] = ["w_id", "d_id", "o_id"];
 
@@ -234,6 +237,7 @@ pub fn schema() -> Schema {
             single_key("b", &[]),
             single_key("shared", &[]),
             keyed_table(LINES, &LINE_KEY, &["customer_id", "item_id"]),
+            keyed_table(ARCHIVE, &LINE_KEY, &[]),
         ],
         foreign_keys: vec![
             foreign_key("orders", "customer_id", "customers"),

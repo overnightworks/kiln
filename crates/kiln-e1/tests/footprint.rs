@@ -377,6 +377,31 @@ mod kiln_e1_24 {
     }
 
     #[test]
+    fn accesses_through_the_rows_of_an_undeclared_index_leave_the_undeclared_index_as_the_reason() {
+        let accesses = [
+            read("orders", column_of(1, "customer_id"), 2),
+            read("orders", key_of(1), 2),
+            insert("audit", column_of(1, "customer_id")),
+            update("orders", key_of(1), &[]),
+        ];
+        for access in accesses {
+            let body = returns(vec![
+                read_index(
+                    "orders_by_note",
+                    vec![param("note")],
+                    vec![param("note")],
+                    0,
+                ),
+                iterate(0, 1, vec![access]),
+            ]);
+            assert_unknown(
+                body,
+                UnknownCause::UndeclaredIndex(IndexName("orders_by_note".to_owned())),
+            );
+        }
+    }
+
+    #[test]
     fn a_primary_key_range_is_no_index_and_its_own_rows_cost_no_hop() {
         let body = returns(vec![
             read_range("orders", param("low"), param("high"), 0),
