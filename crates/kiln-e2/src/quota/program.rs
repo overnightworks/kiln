@@ -8,7 +8,7 @@ use crate::builders::{
     abort_if, abort_unless_in_range, argument, branch, field, holds, integer_parameter, minus,
     number, plus, read, returning, sequence, update,
 };
-use crate::rows::{column, key_literal, table};
+use crate::rows::{column, key_column, key_declaration, key_literal, table};
 
 const QUANTITY: &str = "quantity";
 
@@ -29,13 +29,17 @@ fn schema() -> Schema {
     Schema {
         tables: vec![Table {
             name: table(QUOTA_TABLE),
-            columns: vec![Column {
-                name: column(REMAINING_COLUMN),
-                kind: ColumnType::Integer {
-                    width: IntegerWidth::I32,
-                    domain: None,
+            columns: vec![
+                key_column(),
+                Column {
+                    name: column(REMAINING_COLUMN),
+                    kind: ColumnType::Integer {
+                        width: IntegerWidth::I32,
+                        domain: None,
+                    },
                 },
-            }],
+            ],
+            key: key_declaration(),
         }],
         check_constraints: vec![
             remaining_bound(Comparison::AtLeast, 0),
