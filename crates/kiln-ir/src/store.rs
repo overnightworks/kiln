@@ -48,29 +48,36 @@ impl Store {
         self.tables.get(table).and_then(|rows| rows.get(key))
     }
 
-    /// Every row of `table` whose key falls in `[start, end]`, with its
-    /// key, in key order.
+    /// Every row of `table` whose key holds `prefix` as its first components
+    /// and, when `interval` is given, whose next component lies in it
+    /// (inclusive), with its key, in key order. Without an interval every
+    /// value of the next component matches.
     ///
-    /// Empty if `table` has no rows, if no key falls between `start` and
-    /// `end`, or if `start` sorts after `end` — a reversed bound is an
-    /// empty range, not a panic: `BTreeMap::range` would panic on a
-    /// reversed bound, so this checks for it first instead of ever calling
-    /// into that panic (`docs/concept.md` §2.2 D6).
-    pub fn rows_in_range(&self, table: &TableName, start: &Key, end: &Key) -> Vec<KeyedRow> {
-        if start > end {
+    /// Empty if `table` has no rows, if no key matches, or if the interval is
+    /// reversed — a reversed bound is an empty range, not a panic
+    /// (`docs/concept.md` §2.2 D6, D8). `prefix` is shorter than the table's
+    /// keys, which `Program::validate` guarantees.
+    pub fn rows_in_range(
+        &self,
+        table: &TableName,
+        prefix: &[Value],
+        interval: Option<(&Value, &Value)>,
+    ) -> Vec<KeyedRow> {
+        let Some(rows) = self.tables.get(table) else {
             return Vec::new();
-        }
-        self.tables
-            .get(table)
-            .map(|rows| {
-                rows.range(start.clone()..=end.clone())
-                    .map(|(key, row)| KeyedRow {
-                        key: key.clone(),
-                        row: row.clone(),
-                    })
-                    .collect()
+        };
+        let mut first = prefix.to_vec();
+        first.extend(interval.map(|(from, _)| from.clone()));
+        rows.range(Key(first)..)
+            .take_while(|(key, _)| {
+                key.0.starts_with(prefix)
+                    && interval.is_none_or(|(_, to)| &key.0[prefix.len()] <= to)
             })
-            .unwrap_or_default()
+            .map(|(key, row)| KeyedRow {
+                key: key.clone(),
+                row: row.clone(),
+            })
+            .collect()
     }
 
     /// Every row of `table` holding all of `columns` whose values, in that
@@ -216,6 +223,11 @@ mod tests {
         }
     }
 
+    fn rows_between(store: &Store, table: &TableName, from: i64, to: i64) -> Vec<KeyedRow> {
+        let (from, to) = (Value::Integer(from), Value::Integer(to));
+        store.rows_in_range(table, &[], Some((&from, &to)))
+    }
+
     fn observed_keys(rows: &[KeyedRow]) -> Vec<i64> {
         rows.iter()
             .map(
@@ -242,7 +254,7 @@ mod tests {
                     keys.iter().map(|&key| (table.clone(), one_part(key), row_keyed(key))),
                 );
 
-                let rows = store.rows_in_range(&table, &one_part(i64::MIN), &one_part(i64::MAX));
+                let rows = rows_between(&store, &table, i64::MIN, i64::MAX);
 
                 prop_assert_eq!(observed_keys(&rows), sorted_keys);
             }
@@ -257,7 +269,7 @@ mod tests {
                     .map(|key| (table.clone(), one_part(key), row_keyed(key))),
             );
 
-            let rows = store.rows_in_range(&table, &one_part(5), &one_part(10));
+            let rows = rows_between(&store, &table, 5, 10);
 
             assert_eq!(observed_keys(&rows), vec![5, 10]);
         }
@@ -271,7 +283,7 @@ mod tests {
                 (table.clone(), one_part(6), row_keyed(6)),
             ]);
 
-            let rows = store.rows_in_range(&table, &one_part(5), &one_part(5));
+            let rows = rows_between(&store, &table, 5, 5);
 
             assert_eq!(observed_keys(&rows), vec![5]);
         }
@@ -285,7 +297,7 @@ mod tests {
             let table = TableName("t".to_owned());
             let store = Store::containing([(table.clone(), one_part(5), Row::default())]);
 
-            let rows = store.rows_in_range(&table, &one_part(10), &one_part(0));
+            let rows = rows_between(&store, &table, 10, 0);
 
             assert!(rows.is_empty());
         }
@@ -295,7 +307,7 @@ mod tests {
             let table = TableName("t".to_owned());
             let store = Store::empty();
 
-            let rows = store.rows_in_range(&table, &one_part(0), &one_part(10));
+            let rows = rows_between(&store, &table, 0, 10);
 
             assert!(rows.is_empty());
         }

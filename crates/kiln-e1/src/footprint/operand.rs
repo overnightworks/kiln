@@ -153,7 +153,8 @@ impl Operand {
 /// far. Every arm of a conditional counts, whichever the path runs: what a
 /// value is made of never depends on the arm chosen (`inputs.md` §5,
 /// Clarification 7(c)). A key column of a point-read row is the operand the
-/// read used for it (Clarification rule 1).
+/// read used for it, and one a primary-key range's static prefix covers is
+/// that prefix operand (Clarification rule 1).
 pub fn operand_of(
     schema: &Schema,
     facts: &PathFacts,
@@ -211,8 +212,9 @@ fn condition_operand(
 }
 
 /// `column` of the row `row`, which `read` produced: for a key column of a
-/// point-read row, the operand the read used for it (`inputs.md` §5,
-/// Clarification rule 1).
+/// point-read row, the operand the read used for it, and for one a
+/// primary-key range's static prefix covers, that prefix operand (`inputs.md`
+/// §5, Clarification rule 1).
 pub fn column_operand(
     schema: &Schema,
     facts: &PathFacts,
@@ -220,7 +222,7 @@ pub fn column_operand(
     row: RowOrigin,
     column: &ColumnName,
 ) -> Operand {
-    match point_read_key_operand(schema, facts, &read, column) {
+    match aliased_key_operand(schema, facts, &read, column) {
         Some(used) => used.clone(),
         None => Operand::Column {
             read,
@@ -230,18 +232,23 @@ pub fn column_operand(
     }
 }
 
-/// What a point read used for its key column `column`, if `read` is one.
-fn point_read_key_operand<'f>(
+/// The operand `read` fixed for its key column `column`: what a point read
+/// used for it, or what a primary-key range's prefix holds there when that
+/// reads nothing — a prefix derived from a read is no operand the path can
+/// compare with a key.
+fn aliased_key_operand<'f>(
     schema: &Schema,
     facts: &'f PathFacts,
     read: &ReadRef,
     column: &ColumnName,
 ) -> Option<&'f Operand> {
-    let Some(BindingKind::PointRead { table, key }) =
-        facts.binding_of(read).map(|binding| &binding.kind)
-    else {
-        return None;
+    let (table, fixed, must_be_static) = match &facts.binding_of(read)?.kind {
+        BindingKind::PointRead { table, key } => (table, key, false),
+        BindingKind::PrimaryRange { table, prefix } => (table, prefix, true),
+        BindingKind::IndexRange { .. } | BindingKind::UndeclaredIndexRange(_) => return None,
     };
     let position = schema.table(table)?.key_position(column)?;
-    key.get(position)
+    fixed
+        .get(position)
+        .filter(|operand| !must_be_static || operand.uses().is_empty())
 }

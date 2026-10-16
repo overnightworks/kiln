@@ -18,8 +18,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use kiln_ir::{
     replay, run, Call, Column, ColumnName, ColumnType, Effect, Execution, Expr, Function,
-    FunctionName, IntegerWidth, Key, KeyDeclaration, Parameter, ParameterName, ParameterType,
-    Program, Row, Schema, Store, Table, TableName, Terminal, Value,
+    FunctionName, IntegerWidth, Key, KeyDeclaration, KeyInterval, Parameter, ParameterName,
+    ParameterType, Program, Row, Schema, Store, Table, TableName, Terminal, Value,
 };
 use proptest::prelude::*;
 
@@ -59,6 +59,14 @@ pub fn one_part(component: i64) -> Key {
 /// A key expression of one literal component.
 pub fn literal_key(component: i64) -> Vec<Expr> {
     vec![Expr::Literal(integer(component))]
+}
+
+/// An inclusive interval between two literals.
+pub fn literal_interval(from: i64, to: i64) -> Option<KeyInterval> {
+    Some(KeyInterval {
+        from: Expr::Literal(integer(from)),
+        to: Expr::Literal(integer(to)),
+    })
 }
 
 /// A key expression whose components are the literals of `key`.

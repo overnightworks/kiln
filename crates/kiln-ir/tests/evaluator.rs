@@ -10,7 +10,7 @@ mod support;
 
 use kiln_ir::{
     AbortReason, AccessKind, AccessLogEntry, AccessOrigin, AccessTarget, AccessedColumns,
-    Condition, Effect, Expr, Outcome, Row, Slot, Store, Terminal, Value,
+    Condition, Effect, Expr, KeyInterval, Outcome, Row, Slot, Store, Terminal, Value,
 };
 use proptest::prelude::*;
 use support::{
@@ -426,16 +426,19 @@ mod kiln_ir_35 {
             (
                 Effect::ReadRange {
                     table: table("t"),
-                    start: vec![int(0)],
-                    end: vec![int(9)],
+                    prefix: vec![],
+                    interval: Some(KeyInterval {
+                        from: int(0),
+                        to: int(9),
+                    }),
                     bound: int(9),
                     into: Slot(0),
                 },
                 entry(
                     AccessKind::RangeRead,
                     AccessTarget::Range {
-                        start: one_part(0),
-                        end: one_part(9),
+                        prefix: vec![],
+                        interval: Some((Value::Integer(0), Value::Integer(9))),
                     },
                     AccessedColumns::EntireRow,
                 ),

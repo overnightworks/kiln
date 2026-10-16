@@ -65,15 +65,15 @@ fn apply_effect(
         Effect::Delete { table, key } => apply_delete(table, key, ctx, store, bindings, access_log),
         Effect::ReadRange {
             table,
-            start,
-            end,
+            prefix,
+            interval,
             bound,
             into,
         } => apply_read_range(
             RangeRead {
                 table,
-                start,
-                end,
+                prefix,
+                interval: interval.as_ref(),
                 bound,
                 into: *into,
             },

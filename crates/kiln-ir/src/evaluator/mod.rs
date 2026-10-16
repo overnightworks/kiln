@@ -206,16 +206,18 @@ pub enum ConstraintRef {
 }
 
 /// Which rows an [`AccessLogEntry`] names: one row by key (every
-/// component), or every row whose key falls in `[start, end]` — recorded
-/// even when the range matches no row, since the range itself was still
-/// attempted (`docs/concept.md` §2.2, D5: "range bounds (including empty
-/// ranges)") — or the rows a constraint check looks up by a tuple of values.
+/// component), or every row whose key holds a prefix and whose next component
+/// lies in an interval, as written — an omitted interval stays `None`, not an
+/// unbounded one — recorded even when the range matches no row, since the
+/// range itself was still attempted (`docs/concept.md` §2.2, D5: "range
+/// bounds (including empty ranges)") — or the rows a constraint check looks
+/// up by a tuple of values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccessTarget {
     Point(Key),
     Range {
-        start: Key,
-        end: Key,
+        prefix: Vec<Value>,
+        interval: Option<(Value, Value)>,
     },
     IndexRange {
         index: IndexName,
