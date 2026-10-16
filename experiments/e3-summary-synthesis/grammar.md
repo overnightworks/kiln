@@ -26,9 +26,9 @@ Every function parameter is an `Int`: parameters are arguments, not state
 components, and `inputs.md` §1 classifies state. **Category values come from
 this signature, not from the `Program`:** the `Program` stores a category as
 an `Integer` column and names no values, so a `Cat(c)`, its values and the key
-values of a `Keyed(c)` are the rows above, while parameters, columns and abort
-names are declared by the `Program`. A `Cat(c)` value is written
-`v0 … v(k-1)` in ascending order of its integer code. `Opt(Int)` is a row
+values of a `Keyed(c)` are the rows above, while parameters and columns are
+declared by the `Program`; abort names come from §1.2. A `Cat(c)` value is
+written `v0 … v(k-1)` in ascending order of its integer code. `Opt(Int)` is a row
 that is absent or present with an `owner`; reading a store through the
 signature maps an absent `lease` row to `none`. **Reason:** the head ruling
 lists exactly these components and classes; naming them leaves nothing to
@@ -47,22 +47,22 @@ infer from a value range.
 | `Name` | one of the family's frozen names, the list below |
 | `Outcome` | `commit(Int)` or `abort(Name)` |
 
-`Name` ranges over the family's **frozen names**, listed by name below, so
-no derivation is left to the implementation (the principle of §1.1). A
-family's names are its declared aborts, each an `AbortReason::Declared(name)`
-of its bodies (`inputs.md` §3-§8), and its structural aborts, written as the
+`Name` ranges only over the family's **frozen names** listed below. These
+lists are the sole authority, with no derivation left to the implementation
+(the principle of §1.1). The following explains their contents: the family's
+declared aborts, each an `AbortReason::Declared(name)` of its bodies
+(`inputs.md` §3-§8), and its structural aborts, written as the
 checker compares them (`inputs.md` §1, "What equivalence means"):
-`Overflow(Arithmetic)`; `Overflow(Width{table, column, key})` for every integer
-column without a clamping domain and every key the family's store can hold
-(no program here declares a `ClampDomain`); and
+`Overflow(Arithmetic)`; `Overflow(Width{table, column, key})` for every non-key
+integer value column without a clamping domain and every key the family's
+store can hold (no program here declares a `ClampDomain`); and
 `CheckViolation{table.column cmp n, key k}` for every declared check
 constraint and key. `Overflow(Argument)` is in no set: no call of either
 domain carries an out-of-width argument (`inputs.md` §5.2, §7.2, §8.2).
 The width and check-violation names are †: they occur only in checker form
 (a mutant's or a component's term), never in a hole. A structural name marked
 *unreachable* is raised by no call on any store of the family domain; it is
-listed because the derivation lists it, so the set rests on no reachability
-argument.
+retained in the frozen list, so the set rests on no reachability argument.
 
 - **Quota:** `invalid_quantity`, `quota_exhausted`, `quota_full`;
   `Overflow(Arithmetic)`; † `Overflow(Width{quota, remaining, 0})`,
@@ -140,7 +140,8 @@ Entry   ::= when(Bool, t_1, …, t_m)   a per-key atom entry, §2.1
 Carrier ::= (t_1, …, t_m) | S | T | ite(Bool, Carrier, Carrier)   †
 Name    ::= a name of the family's list, §1.2: a declared name, or
             Overflow(Arithmetic)
-          | Overflow(Width{t, c, k}) | CheckViolation{t.c cmp n, key k}   †
+          | a † name from the same list: Overflow(Width{t, c, k})
+            or CheckViolation{t.c cmp n, key k}
 Outcome ::= commit(Int) | abort(Name) | ite(Bool, Outcome, Outcome)
           | case(Cat, Outcome_0, …, Outcome_{k-1})
 ```
@@ -238,23 +239,25 @@ these value classes, each with its source, and nothing else:
 |---|---|
 | the integer literals of the function bodies | the `Program` (`inputs.md` §3-§8) |
 | the operands of the check constraints | the `Program`'s schema |
-| the minimum and maximum of every `IntegerWidth` that a column (its key column included) or a parameter declares | the `Program`'s schema and parameters; the widths below |
+| the minimum and maximum of every `IntegerWidth` that a non-key value column or a parameter declares | the `Program`'s schema and parameters; the widths below |
 | both bounds of every `ClampDomain` | the `Program`'s schema; none of the six declares one, so this class is empty |
 | `0` and `1` | this rule |
 
 Width bounds, from `IntegerWidth::range`: `I8` `-128 … 127`; `I16`
 `-32 768 … 32 767`; `I32` `-2 147 483 648 … 2 147 483 647`; `I64`
-`-9 223 372 036 854 775 808 … 9 223 372 036 854 775 807`. A key column is
-`I64`, as quota's `Program` declares it.
+`-9 223 372 036 854 775 808 … 9 223 372 036 854 775 807`. Key columns are
+excluded because their `I64` width is a representation convention of
+`kiln-e2`'s single-row tables (`crates/kiln-e2/src/rows.rs`, `key_column`),
+so its extremes would alter enumeration without semantic reason.
 
-| Family | Body literals | Check operands | Widths declared |
+| Family | Body literals | Check operands | Non-key value and parameter widths |
 |---|---|---|---|
-| Quota | `0`, `1`, `50`, `1000` | `0`, `1000` | `I32` (`remaining`, `quantity`), `I64` |
+| Quota | `0`, `1`, `50`, `1000` | `0`, `1000` | `I32` (`remaining`, `quantity`) |
 | Sequence | `1`, `1000000` | `0` | `I64` (`last_value`, `value`) |
-| Dispatcher | `0`, `1`, `4`, `5` | `0`, `4` | `I8` (`cursor`, `count`), `I64` |
-| Order | `0`, `1`, `2`, `3` | `0`, `3` | `I8` (`status`), `I64` |
-| Wallet | `1`, `100` | `0` | `I16` (`balance`, `amount`), `I64` |
-| Lease | `0`, `1`, `1000000` | `1`, `1000000` | `I8` (`resource`), `I32` (`owner`), `I64` |
+| Dispatcher | `0`, `1`, `4`, `5` | `0`, `4` | `I8` (`cursor`, `count`) |
+| Order | `0`, `1`, `2`, `3` | `0`, `3` | `I8` (`status`) |
+| Wallet | `1`, `100` | `0` | `I16` (`balance`, `amount`) |
+| Lease | `0`, `1`, `1000000` | `1`, `1000000` | `I8` (`resource`), `I32` (`owner`) |
 
 A key code enters only through `key`. The checking domain's values are never
 literals: wallet balance `32 666` or lease owner `3` cannot be written.
@@ -430,8 +433,10 @@ first for the six signatures; it decides nothing else.
 
 The enumerator receives the family's `Program` and the family's
 **observation environments**, and nothing else: no mutant, no summary, no
-family name or number. From the `Program` it reads the pool and the `Name` set;
-the signature of §1.1 is part of this freeze, not an input. The observation environments are frozen:
+family name or number. From the `Program` it reads the pool under §1.5;
+the `Name` set comes only from §1.2's frozen per-family lists. Those lists
+and the signature of §1.1 are part of this freeze, not inputs. The
+observation environments are frozen:
 
 - for `valid[f]` and `atom[f]`: the arguments of every call of `f` in the
   checking domain's alphabet `A`, malformed ones included;
@@ -457,7 +462,7 @@ the bound class.
 
 | Limit | Value | Reason |
 |---|---|---|
-| size of any hole of function `f` | the node count of `f`'s body in `kiln_ir`, computed from the `Program` at run start and logged: every `Effect`, `Terminal`, `Condition` and `Expr` node counts 1 plus its parts, a `Block` is a wrapper and counts 0, and names, slots, operators and literal values are payload | a term describing part of `f` needs no more nodes than `f` itself; the number comes from the `Program`, not from a known fill |
+| size of any hole of function `f` | the node count of `f`'s body in `kiln_ir`, computed from the `Program` at run start and logged: every `Effect`, `Terminal`, `Condition` and `Expr` node counts 1 plus its parts, a `Block` is a wrapper and counts 0, and names, slots, operators and literal values are payload | bounds enumeration by the size of the function being summarized; the number comes from the `Program`, not from a known fill |
 | survivors per hole group (§2.6) | 64, in enumeration order | bounds the product of per-function survivors; later members are not tried |
 
 **Example, quota** (`crates/kiln-e2/src/quota/program.rs`). A bounds test
@@ -469,6 +474,17 @@ a literal key is 1 + 1 = 2. `allocate`: the two argument tests 5 + 5; the
 `refill`: 5 + 5 + 7, then 1 + 5 (`remaining + quantity <= 1000`) + 7 + 7 =
 20; in all 37. The program's count is 33 + 37 = 70, and a hole of `allocate`
 has size limit 33, of `refill` 37.
+
+**Named limitation — dispatcher `transform`.** For `skip`, each of the five
+table entries must select four distinct categorical results. With `name`
+and `ite` (§1.3), each needs at least three comparisons (3 nodes each),
+three `ite` nodes and four `name` leaves: `3 · 3 + 3 + 4 = 16` nodes.
+The `table` therefore needs at least `1 + 5 · 16 = 81` nodes, exceeding
+`skip`'s frozen IR body count of 40 (`inputs.md` §5.1): two argument tests
+`5 + 5`, a read `2`, and the wrap branch `1 + 5 + 13 + 9`, totalling 40.
+Dispatcher can therefore be admitted only through `rotate`, which remains
+expressible within the limit. This is an expected search-space limitation,
+not a correctness claim or a guarantee of admission.
 
 There is no depth limit and no branch budget: depth is bounded by size, and
 a branch budget enforced nothing (§1.6).

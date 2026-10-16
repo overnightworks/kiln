@@ -45,8 +45,8 @@ the only acceptance.
 
 ### 3.1 Validation precedes evaluation
 
-Validation is a pure function of its input and the `Program`. It runs the
-lists below in order and stops at the first failure with a typed reason. A
+Validation is a pure function of its input, the `Program` and this freeze.
+It runs the lists below in order and stops at the first failure with a typed reason. A
 malformed input is thereby told apart from one that evaluates and is wrong,
 as `docs/experiments.md` asks ("typed rejection, distinct from an abort").
 
@@ -57,8 +57,9 @@ a mutant (§3.8):
    a type of the language (`Int`, `Bool`, `Opt(Int)`, or `Cat(c)` or
    `Map(c)` for a category `c` of the signature), a combine and an apply;
    per function, `valid`, `atom` and `respond`; every parameter, state
-   component and `Name` declared by the `Program` (§1.2), and every category
-   and category value declared by the signature (§1.1).
+   component declared by the `Program`, every `Name` in its family's frozen
+   list (§1.2), and every category and category value declared by the
+   signature (§1.1).
 2. **Well-typed:** every term has its §1.3 type, including the category of
    every `Cat`. Combine is a `Carrier` term over `S`, `T`, literals and
    the operators; apply is a term of the component's kind (§1.3, "the apply
@@ -553,4 +554,6 @@ not scored.
   attempt, so they void no result: frozen name sets (§1.2), typed key terms
   and the category source (§1.1, §1.3, §3.1), hole production lists (§1.3),
   pool bounds (§1.5), uniform size counting (§1.7, §2.4), rule M as hygiene
-  (§1.6).
+  (§1.6). Fix batch 1 records R1 at §1.2, §2.3 and §3.1 (name authority),
+  R2 at §1.5 (pool eligibility), and R3 at §2.4 (dispatcher `transform`
+  size limitation).
