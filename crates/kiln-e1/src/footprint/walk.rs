@@ -5,14 +5,14 @@ use std::collections::BTreeMap;
 
 use kiln_ir::{
     slots_released_by_iteration, Block, ColumnName, Condition, Effect, Expr, Function, IndexName,
-    Schema, Slot, TableName, Terminal,
+    KeyInterval, Schema, Slot, TableName, Terminal,
 };
 
 use super::abort::{Aborts, Evaluation, Resolved};
 use super::carried::first_carried_slot;
 use super::cause::UnknownCause;
 use super::dependency::{track_access, AccessRole};
-use super::facts::{Binding, BindingKind, Obstacle, PathFacts, RangeBounds, Target};
+use super::facts::{Binding, BindingKind, Obstacle, PathFacts, PrimaryBounds, RangeBounds, Target};
 use super::node_path::NodePath;
 use super::operand::{operand_of, Operand, ReadRef};
 use super::ClassifyError;
@@ -30,13 +30,15 @@ pub fn feasible_paths(
     Walker { schema }.block(&function.body, &body, PathFacts::default())
 }
 
-enum RangeOver<'e> {
-    PrimaryKeys(&'e TableName),
-    Index(&'e IndexName),
+struct PrimaryRangeRead<'e> {
+    table: &'e TableName,
+    prefix: &'e [Expr],
+    interval: Option<&'e KeyInterval>,
+    bound: &'e Expr,
 }
 
-struct RangeRead<'e> {
-    over: RangeOver<'e>,
+struct IndexRangeRead<'e> {
+    index: &'e IndexName,
     start: &'e [Expr],
     end: &'e [Expr],
     bound: &'e Expr,
@@ -169,7 +171,9 @@ impl<'a> Walker<'a> {
                 let arms = [&**when_present, &**when_absent];
                 match condition {
                     Condition::RowPresent(slot) => self.branch(*slot, arms, at, facts),
-                    Condition::Compare { .. } => self.comparison_branch(operands, arms, at, facts),
+                    Condition::Compare { .. } | Condition::Contains { .. } => {
+                        self.comparison_branch(operands, arms, at, facts)
+                    }
                 }
             }
         }
@@ -270,18 +274,18 @@ impl<'a> Walker<'a> {
             }
             Effect::ReadRange {
                 table,
-                start,
-                end,
+                prefix,
+                interval,
                 bound,
                 into,
             } => {
-                let range = RangeRead {
-                    over: RangeOver::PrimaryKeys(table),
-                    start,
-                    end,
+                let range = PrimaryRangeRead {
+                    table,
+                    prefix,
+                    interval: interval.as_ref(),
                     bound,
                 };
-                self.read_range(range, *into, node, facts)
+                self.read_primary_range(range, *into, node, facts)
             }
             Effect::ReadIndexRange {
                 index,
@@ -290,13 +294,13 @@ impl<'a> Walker<'a> {
                 bound,
                 into,
             } => {
-                let range = RangeRead {
-                    over: RangeOver::Index(index),
+                let range = IndexRangeRead {
+                    index,
                     start,
                     end,
                     bound,
                 };
-                self.read_range(range, *into, node, facts)
+                self.read_index_range(range, *into, node, facts)
             }
             Effect::Iterate { source, row, body } => self.iterate(*source, *row, body, node, facts),
         }
@@ -352,46 +356,87 @@ impl<'a> Walker<'a> {
         Ok(())
     }
 
-    fn read_range(
+    fn read_primary_range(
         &self,
-        range: RangeRead<'_>,
+        range: PrimaryRangeRead<'_>,
         into: Slot,
         node: NodePath,
         facts: &mut PathFacts,
     ) -> Result<(), Halt> {
-        let mut resolved = self.range_components(&range.over, range.start);
-        resolved.extend(self.range_components(&range.over, range.end));
+        let interval_bounds: Vec<&Expr> = range
+            .interval
+            .iter()
+            .flat_map(|interval| [&interval.from, &interval.to])
+            .collect();
+        let mut resolved = self.key_components(range.table, range.prefix);
+        resolved.extend(
+            interval_bounds
+                .iter()
+                .map(|bound| self.component_at(range.table, range.prefix.len(), bound)),
+        );
         resolved.push((range.bound, None));
+        self.passes(facts, resolved, &node)?;
+        let interval = match interval_bounds[..] {
+            [from, to] => Some((
+                operand_of(self.schema, facts, from, &node)?,
+                operand_of(self.schema, facts, to, &node)?,
+            )),
+            _ => None,
+        };
+        let bounds = PrimaryBounds {
+            prefix: self.operands_of(facts, range.prefix, &node)?,
+            interval,
+            bound: operand_of(self.schema, facts, range.bound, &node)?,
+        };
+        let depends_on = track_access(
+            facts,
+            self.schema,
+            &AccessRole::PrimaryRangeBound,
+            bounds.all(),
+            &node,
+        );
+        let kind = BindingKind::PrimaryRange {
+            table: range.table.clone(),
+            prefix: bounds.prefix.clone(),
+        };
+        let target = Target::PrimaryRange {
+            table: range.table.clone(),
+            bounds,
+        };
+        facts.record_access(&node, target);
+        bind(facts, into, kind, node, depends_on);
+        Ok(())
+    }
+
+    fn read_index_range(
+        &self,
+        range: IndexRangeRead<'_>,
+        into: Slot,
+        node: NodePath,
+        facts: &mut PathFacts,
+    ) -> Result<(), Halt> {
+        let resolved = unkeyed(range.start.iter().chain(range.end).chain([range.bound]));
         self.passes(facts, resolved, &node)?;
         let bounds = RangeBounds {
             start: self.operands_of(facts, range.start, &node)?,
             end: self.operands_of(facts, range.end, &node)?,
             bound: operand_of(self.schema, facts, range.bound, &node)?,
         };
-        let (role, kind, target) = match range.over {
-            RangeOver::PrimaryKeys(table) => (
-                AccessRole::PrimaryRangeBound,
-                BindingKind::PrimaryRange {
-                    table: table.clone(),
-                },
-                Target::PrimaryRange {
-                    table: table.clone(),
-                    bounds: bounds.clone(),
-                },
-            ),
-            RangeOver::Index(index) => (
-                AccessRole::IndexBound,
-                self.index_binding(index),
-                Target::IndexRange {
-                    index: index.clone(),
-                    bounds: bounds.clone(),
-                },
-            ),
-        };
-        let depends_on = track_access(facts, self.schema, &role, bounds.all(), &node);
+        let kind = self.index_binding(range.index);
+        let depends_on = track_access(
+            facts,
+            self.schema,
+            &AccessRole::IndexBound,
+            bounds.all(),
+            &node,
+        );
         if let BindingKind::UndeclaredIndexRange(undeclared) = &kind {
             facts.block(&node, UnknownCause::UndeclaredIndex(undeclared.clone()));
         }
+        let target = Target::IndexRange {
+            index: range.index.clone(),
+            bounds,
+        };
         facts.record_access(&node, target);
         bind(facts, into, kind, node, depends_on);
         Ok(())
@@ -433,27 +478,27 @@ impl<'a> Walker<'a> {
     where
         'a: 'e,
     {
-        let declared = self.schema.table(table);
-        let key_column = |position: usize| {
-            let declared = declared?;
-            declared.column(declared.key_columns().get(position)?)
-        };
         key.iter()
             .enumerate()
-            .map(|(position, component)| (component, key_column(position)))
+            .map(|(position, component)| self.component_at(table, position, component))
             .collect()
     }
 
-    /// A primary-key range's start or end fills its table's key columns; an
-    /// index range's components are left to the run.
-    fn range_components<'e>(&self, over: &RangeOver, components: &'e [Expr]) -> Vec<Resolved<'e>>
+    /// `component` with the key column of `table` at `position`, which it
+    /// fills.
+    fn component_at<'e>(
+        &self,
+        table: &TableName,
+        position: usize,
+        component: &'e Expr,
+    ) -> Resolved<'e>
     where
         'a: 'e,
     {
-        match over {
-            RangeOver::PrimaryKeys(table) => self.key_components(table, components),
-            RangeOver::Index(_) => unkeyed(components),
-        }
+        let declared = self.schema.table(table);
+        let key_column =
+            declared.and_then(|declared| declared.column(declared.key_columns().get(position)?));
+        (component, key_column)
     }
 
     /// The evaluator logs a write before it resolves the written columns, so a
@@ -475,9 +520,13 @@ impl<'a> Walker<'a> {
         terminal: &Terminal,
         at: &NodePath,
     ) -> Result<Vec<Operand>, Halt> {
-        let reads = read_by(terminal);
-        self.passes(facts, unkeyed(reads.iter().copied()), at)?;
-        self.operands_of(facts, reads, at)
+        let evaluation = Evaluation {
+            schema: self.schema,
+            facts,
+            at,
+        };
+        Self::halt_unless_past(evaluation.terminal_aborts(terminal)?, at)?;
+        self.operands_of(facts, read_by(terminal), at)
     }
 
     /// Whether the evaluator gets past resolving `resolved` at `at`. A
@@ -495,7 +544,11 @@ impl<'a> Walker<'a> {
             facts,
             at,
         };
-        match evaluation.aborts(resolved)? {
+        Self::halt_unless_past(evaluation.aborts(resolved)?, at)
+    }
+
+    fn halt_unless_past(aborts: Aborts, at: &NodePath) -> Result<(), Halt> {
+        match aborts {
             Aborts::Never => Ok(()),
             Aborts::Always => Err(Halt::aborting_at(at)),
             Aborts::OnOneArm => Err(Halt::Refuses { at: at.clone() }),
@@ -528,15 +581,8 @@ fn unkeyed<'e>(expressions: impl IntoIterator<Item = &'e Expr>) -> Vec<Resolved<
 fn read_by(terminal: &Terminal) -> Vec<&Expr> {
     match terminal {
         Terminal::Return(response) => vec![response],
-        Terminal::Branch {
-            condition: Condition::Compare { left, right, .. },
-            ..
-        } => vec![left, right],
-        Terminal::Abort(_)
-        | Terminal::Branch {
-            condition: Condition::RowPresent(_),
-            ..
-        } => Vec::new(),
+        Terminal::Branch { condition, .. } => condition.operands(),
+        Terminal::Abort(_) => Vec::new(),
     }
 }
 

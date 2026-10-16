@@ -10,7 +10,8 @@ use kiln_ir::{
 };
 use support::{
     aborted_reason, call_under_test, column, committed_response, insert_row, integer, keyed_by_id,
-    literal_key, one_part, program_with_schema, run_ok, store_of_rows, table, text, RowSpec,
+    literal_interval, literal_key, one_part, program_with_schema, run_ok, store_of_rows, table,
+    text, RowSpec,
 };
 
 fn index_name(name: &str) -> IndexName {
@@ -671,8 +672,8 @@ mod kiln_ir_72 {
             vec![
                 Effect::ReadRange {
                     table: table("people"),
-                    start: literal_key(1),
-                    end: literal_key(3),
+                    prefix: vec![],
+                    interval: literal_interval(1, 3),
                     bound: Expr::Literal(integer(10)),
                     into: Slot(0),
                 },

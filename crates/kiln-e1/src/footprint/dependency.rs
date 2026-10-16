@@ -102,7 +102,7 @@ fn bound<'f>(facts: &'f PathFacts, read: &ReadRef) -> &'f Binding {
 fn source_table(binding: &Binding) -> Option<&TableName> {
     match &binding.kind {
         BindingKind::PointRead { table, .. }
-        | BindingKind::PrimaryRange { table }
+        | BindingKind::PrimaryRange { table, .. }
         | BindingKind::IndexRange { table } => Some(table),
         BindingKind::UndeclaredIndexRange(_) => None,
     }
@@ -119,8 +119,9 @@ fn lookup_edge(facts: &PathFacts, schema: &Schema, target: &TableName, key: &[&O
 }
 
 /// The key of `target` read whole from one row of a range over `target`: every
-/// component projects the matching key column of the same row binding, so the
-/// key is that row's and no mix of two rows of the range.
+/// component is the matching key column of the same row binding, or what the
+/// range's prefix fixes for it, so the key is that row's and no mix of two
+/// rows of the range.
 fn whole_key_of_one_row(
     facts: &PathFacts,
     schema: &Schema,
@@ -128,15 +129,21 @@ fn whole_key_of_one_row(
     key: &[&Operand],
 ) -> Option<Edge> {
     let key_columns = schema.table(target)?.key_columns();
-    let [Operand::Column { read, row, .. }, ..] = key else {
+    let Some(Operand::Column { read, row, .. }) = key
+        .iter()
+        .copied()
+        .find(|component| matches!(component, Operand::Column { .. }))
+    else {
         return None;
     };
-    let matches_key_column = |(component, key_column): (&&Operand, &ColumnName)| matches!(component, Operand::Column { row: from, column, .. } if from == row && column == key_column);
-    if key.len() != key_columns.len() || !key.iter().zip(key_columns).all(matches_key_column) {
+    let is_key_column_of_row = |(component, key_column): (&&Operand, &ColumnName)| {
+        **component == column_operand(schema, facts, read.clone(), row.clone(), key_column)
+    };
+    if key.len() != key_columns.len() || !key.iter().zip(key_columns).all(is_key_column_of_row) {
         return None;
     }
     match &bound(facts, read).kind {
-        BindingKind::PrimaryRange { table } if table == target => Some(Edge::Covered),
+        BindingKind::PrimaryRange { table, .. } if table == target => Some(Edge::Covered),
         BindingKind::IndexRange { table } if table == target => {
             Some(Edge::Resolves(ResolutionRole::BaseRows, read.clone()))
         }

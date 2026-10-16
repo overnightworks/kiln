@@ -71,9 +71,17 @@ fn slots_used_by(effect: &Effect) -> Vec<Slot> {
             key.iter().chain(columns.values()).collect()
         }
         Effect::ReadRange {
-            start, end, bound, ..
+            prefix,
+            interval,
+            bound,
+            ..
+        } => {
+            let interval = interval
+                .iter()
+                .flat_map(|bounds| [&bounds.from, &bounds.to]);
+            prefix.iter().chain(interval).chain([bound]).collect()
         }
-        | Effect::ReadIndexRange {
+        Effect::ReadIndexRange {
             start, end, bound, ..
         } => start.iter().chain(end).chain([bound]).collect(),
         Effect::Iterate { source, .. } => return vec![*source],
@@ -85,7 +93,12 @@ fn projected_slots(expression: &Expr) -> Vec<Slot> {
     match expression {
         Expr::Literal(_) | Expr::Parameter(_) => Vec::new(),
         Expr::Projection { slot, .. } => vec![*slot],
-        Expr::Arithmetic(_, left, right) => {
+        Expr::Arithmetic(_, left, right)
+        | Expr::Concat(left, right)
+        | Expr::Truncate {
+            text: left,
+            length: right,
+        } => {
             let mut slots = projected_slots(left);
             slots.extend(projected_slots(right));
             slots
@@ -95,17 +108,21 @@ fn projected_slots(expression: &Expr) -> Vec<Slot> {
             when_true,
             when_false,
         } => {
-            let mut slots = match &**condition {
-                Condition::RowPresent(slot) => vec![*slot],
-                Condition::Compare { left, right, .. } => {
-                    let mut slots = projected_slots(left);
-                    slots.extend(projected_slots(right));
-                    slots
-                }
-            };
+            let mut slots = condition_slots(condition);
             slots.extend(projected_slots(when_true));
             slots.extend(projected_slots(when_false));
             slots
         }
+    }
+}
+
+fn condition_slots(condition: &Condition) -> Vec<Slot> {
+    match condition {
+        Condition::RowPresent(slot) => vec![*slot],
+        Condition::Compare { .. } | Condition::Contains { .. } => condition
+            .operands()
+            .into_iter()
+            .flat_map(projected_slots)
+            .collect(),
     }
 }

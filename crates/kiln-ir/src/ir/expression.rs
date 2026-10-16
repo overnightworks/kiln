@@ -55,6 +55,16 @@ pub enum Expr {
         when_true: Box<Expr>,
         when_false: Box<Expr>,
     },
+    /// The first text followed by the second (`docs/concept.md` §2.2 D9,
+    /// "Values"). Text declares no width (D3), so the result is never
+    /// clamped; an operand of another kind aborts typed.
+    Concat(Box<Expr>, Box<Expr>),
+    /// The first `length` Unicode scalar values of `text`, all of it when it
+    /// is shorter; a negative `length` aborts typed.
+    Truncate {
+        text: Box<Expr>,
+        length: Box<Expr>,
+    },
 }
 
 /// How a [`Condition::Compare`] relates its left operand to its right one.
@@ -103,6 +113,10 @@ impl Relation {
 /// comparison conditions). Whether it depends on the store is visible from
 /// its operands: one without a projection is decided by the call's arguments
 /// alone.
+///
+/// `Contains` holds when `part` occurs anywhere in `text`, compared by
+/// Unicode scalar value and case-sensitively; every text contains the empty
+/// text. An operand that is not text aborts typed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Condition {
     RowPresent(Slot),
@@ -111,4 +125,19 @@ pub enum Condition {
         relation: Relation,
         right: Expr,
     },
+    Contains {
+        text: Expr,
+        part: Expr,
+    },
+}
+
+impl Condition {
+    /// The expressions the condition resolves, in the order it resolves them.
+    pub fn operands(&self) -> Vec<&Expr> {
+        match self {
+            Self::RowPresent(_) => Vec::new(),
+            Self::Compare { left, right, .. } => vec![left, right],
+            Self::Contains { text, part } => vec![text, part],
+        }
+    }
 }

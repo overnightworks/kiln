@@ -45,8 +45,8 @@ the only acceptance.
 
 ### 3.1 Validation precedes evaluation
 
-Validation is a pure function of its input and the `Program`. It runs the
-lists below in order and stops at the first failure with a typed reason. A
+Validation is a pure function of its input, the `Program` and this freeze.
+It runs the lists below in order and stops at the first failure with a typed reason. A
 malformed input is thereby told apart from one that evaluates and is wrong,
 as `docs/experiments.md` asks ("typed rejection, distinct from an abort").
 
@@ -57,7 +57,9 @@ a mutant (§3.8):
    a type of the language (`Int`, `Bool`, `Opt(Int)`, or `Cat(c)` or
    `Map(c)` for a category `c` of the signature), a combine and an apply;
    per function, `valid`, `atom` and `respond`; every parameter, state
-   component, category value and `Name` declared by the `Program` (§1.2).
+   component declared by the `Program`, every `Name` in its family's frozen
+   list (§1.2), and every category and category value declared by the
+   signature (§1.1).
 2. **Well-typed:** every term has its §1.3 type, including the category of
    every `Cat`. Combine is a `Carrier` term over `S`, `T`, literals and
    the operators; apply is a term of the component's kind (§1.3, "the apply
@@ -72,7 +74,7 @@ a mutant (§3.8):
    evaluation, not a validation failure.
 
 Waived in checker form: membership in the library (§2.1, §2.2), the
-per-hole production restriction (§1.3's table), rules L and M (§1.6) and
+per-hole production lists (§1.3), rules L and M (§1.6) and
 the search limits (§2.4). **Reason:** these bound or tidy the search and
 enforce nothing (§1.6); applying them to a mutant would let it fail
 structurally instead of reaching the semantic checks it was written for.
@@ -85,7 +87,8 @@ form, the language of this list, and means only that wherever it is used.
    signature component, with exactly §2.1's carrier, combine and apply.
 5. **Holes:** every hole term uses only the productions its hole allows
    (§1.3).
-6. **Literals** are in the pool (rule L); tables are `Cat`-indexed (rule M).
+6. **Literals** are in the pool (rule L, §1.5). Rule M has no check of its
+   own (§1.6).
 7. **Search limits** of §2.4 hold.
 
 ### 3.2 Equivalence to `replay` over the checking domain
@@ -547,3 +550,11 @@ not scored.
 - **D9, manifest** (§2.5, §5.2, §5.3). One attempt; a crash fails closed;
   conditions are recorded, not assumed; the order is not smallest-first.
   Reason: a manifest records what the run is, not what it hopes.
+- **Clarifications of 16.10.2026, item #100,** made before any synthesis
+  attempt, so they void no result: frozen name sets (§1.2), typed key terms
+  and the category source (§1.1, §1.3, §3.1), hole production lists (§1.3),
+  pool bounds (§1.5), uniform size counting (§1.7, §2.4), rule M as hygiene
+  (§1.6). The frozen name tables are the only name source (§1.1, §1.2,
+  §1.3, §2.3, §3.1); key columns are excluded from the literal pool (§1.5);
+  dispatcher `transform` exceeds the search limit, so dispatcher's route to
+  admission is `rotate` (§2.4).

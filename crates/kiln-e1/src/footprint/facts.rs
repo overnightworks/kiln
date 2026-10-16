@@ -9,9 +9,19 @@ use super::ClassifyError;
 
 #[derive(Clone, Debug)]
 pub enum BindingKind {
-    PointRead { table: TableName, key: Vec<Operand> },
-    PrimaryRange { table: TableName },
-    IndexRange { table: TableName },
+    PointRead {
+        table: TableName,
+        key: Vec<Operand>,
+    },
+    /// A primary-key range, with the operands of its prefix: the iterated
+    /// row's key columns they cover are those operands.
+    PrimaryRange {
+        table: TableName,
+        prefix: Vec<Operand>,
+    },
+    IndexRange {
+        table: TableName,
+    },
     UndeclaredIndexRange(IndexName),
 }
 
@@ -20,7 +30,7 @@ impl BindingKind {
     pub fn table(&self) -> Option<&TableName> {
         match self {
             Self::PointRead { table, .. }
-            | Self::PrimaryRange { table }
+            | Self::PrimaryRange { table, .. }
             | Self::IndexRange { table } => Some(table),
             Self::UndeclaredIndexRange(_) => None,
         }
@@ -45,7 +55,7 @@ pub struct Binding {
     pub depends_on: Vec<ReadRef>,
 }
 
-/// The bounds of a range read, in the order the IR gives them.
+/// The bounds of a range read over an index, in the order the IR gives them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RangeBounds {
     pub start: Vec<Operand>,
@@ -77,6 +87,34 @@ fn renamed_all(
         .collect()
 }
 
+/// The bounds of a primary-key range read: an equality prefix, the interval
+/// on the next key component if there is one, and the row bound.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrimaryBounds {
+    pub prefix: Vec<Operand>,
+    pub interval: Option<(Operand, Operand)>,
+    pub bound: Operand,
+}
+
+impl PrimaryBounds {
+    pub fn all(&self) -> impl Iterator<Item = &Operand> {
+        let interval = self.interval.iter().flat_map(|(from, to)| [from, to]);
+        self.prefix.iter().chain(interval).chain([&self.bound])
+    }
+
+    fn renamed(&self, rename: &impl Fn(&RowOrigin) -> Option<RowOrigin>) -> Option<Self> {
+        let interval = match &self.interval {
+            Some((from, to)) => Some((from.renamed(rename)?, to.renamed(rename)?)),
+            None => None,
+        };
+        Some(Self {
+            prefix: renamed_all(&self.prefix, rename)?,
+            interval,
+            bound: self.bound.renamed(rename)?,
+        })
+    }
+}
+
 /// What an access touches, independent of whether it reads or writes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -86,7 +124,7 @@ pub enum Target {
     },
     PrimaryRange {
         table: TableName,
-        bounds: RangeBounds,
+        bounds: PrimaryBounds,
     },
     IndexRange {
         index: IndexName,
@@ -99,9 +137,8 @@ impl Target {
     pub fn operands(&self) -> Vec<&Operand> {
         match self {
             Self::Row { key, .. } => key.iter().collect(),
-            Self::PrimaryRange { bounds, .. } | Self::IndexRange { bounds, .. } => {
-                bounds.all().collect()
-            }
+            Self::PrimaryRange { bounds, .. } => bounds.all().collect(),
+            Self::IndexRange { bounds, .. } => bounds.all().collect(),
         }
     }
 

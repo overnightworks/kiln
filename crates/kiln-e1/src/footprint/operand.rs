@@ -53,6 +53,13 @@ pub enum Operand {
     /// A condition of a conditional value: whether `left` stands in the
     /// relation to `right`.
     Comparison(Relation, Box<Operand>, Box<Operand>),
+    /// A condition of a conditional value: whether the first operand's text
+    /// contains the second's.
+    Containment(Box<Operand>, Box<Operand>),
+    /// The first operand's text followed by the second's.
+    Concat(Box<Operand>, Box<Operand>),
+    /// The first operand's text cut to the second operand's length.
+    Truncate(Box<Operand>, Box<Operand>),
     /// The first operand is a condition; the value is the second when it
     /// holds and the third otherwise.
     Conditional(Box<Operand>, Box<Operand>, Box<Operand>),
@@ -78,6 +85,13 @@ impl Operand {
                 uses.extend(second.uses());
                 uses
             }
+            Self::Containment(first, second)
+            | Self::Concat(first, second)
+            | Self::Truncate(first, second) => {
+                let mut uses = first.uses();
+                uses.extend(second.uses());
+                uses
+            }
             Self::Conditional(condition, when_true, when_false) => {
                 let mut uses = condition.uses();
                 uses.extend(when_true.uses());
@@ -97,6 +111,13 @@ impl Operand {
             | Self::ReleasedColumn { .. } => Vec::new(),
             Self::Column { row, .. } => vec![row],
             Self::Arithmetic(_, first, second) | Self::Comparison(_, first, second) => {
+                let mut origins = first.origins();
+                origins.extend(second.origins());
+                origins
+            }
+            Self::Containment(first, second)
+            | Self::Concat(first, second)
+            | Self::Truncate(first, second) => {
                 let mut origins = first.origins();
                 origins.extend(second.origins());
                 origins
@@ -134,6 +155,18 @@ impl Operand {
                 Box::new(left.renamed(rename)?),
                 Box::new(right.renamed(rename)?),
             ),
+            Self::Containment(left, right) => Self::Containment(
+                Box::new(left.renamed(rename)?),
+                Box::new(right.renamed(rename)?),
+            ),
+            Self::Concat(left, right) => Self::Concat(
+                Box::new(left.renamed(rename)?),
+                Box::new(right.renamed(rename)?),
+            ),
+            Self::Truncate(text, length) => Self::Truncate(
+                Box::new(text.renamed(rename)?),
+                Box::new(length.renamed(rename)?),
+            ),
             Self::Conditional(condition, when_true, when_false) => Self::Conditional(
                 Box::new(condition.renamed(rename)?),
                 Box::new(when_true.renamed(rename)?),
@@ -142,10 +175,14 @@ impl Operand {
         })
     }
 
-    /// Arithmetic or a conditional over a read result: its value is no read's
-    /// column or key, so no declared foreign key or range identifies it.
+    /// Arithmetic, a conditional or a text form over a read result: its value
+    /// is no read's column or key, so no declared foreign key or range
+    /// identifies it.
     pub fn is_computed_from_reads(&self) -> bool {
-        matches!(self, Self::Arithmetic(..) | Self::Conditional(..)) && !self.uses().is_empty()
+        matches!(
+            self,
+            Self::Arithmetic(..) | Self::Conditional(..) | Self::Concat(..) | Self::Truncate(..)
+        ) && !self.uses().is_empty()
     }
 }
 
@@ -153,7 +190,8 @@ impl Operand {
 /// far. Every arm of a conditional counts, whichever the path runs: what a
 /// value is made of never depends on the arm chosen (`inputs.md` §5,
 /// Clarification 7(c)). A key column of a point-read row is the operand the
-/// read used for it (Clarification rule 1).
+/// read used for it, and one a primary-key range's static prefix covers is
+/// that prefix operand (Clarification rule 1).
 pub fn operand_of(
     schema: &Schema,
     facts: &PathFacts,
@@ -176,6 +214,14 @@ pub fn operand_of(
             *operator,
             Box::new(operand_of(schema, facts, left, at)?),
             Box::new(operand_of(schema, facts, right, at)?),
+        ),
+        Expr::Concat(first, second) => Operand::Concat(
+            Box::new(operand_of(schema, facts, first, at)?),
+            Box::new(operand_of(schema, facts, second, at)?),
+        ),
+        Expr::Truncate { text, length } => Operand::Truncate(
+            Box::new(operand_of(schema, facts, text, at)?),
+            Box::new(operand_of(schema, facts, length, at)?),
         ),
         Expr::Conditional {
             condition,
@@ -207,12 +253,17 @@ fn condition_operand(
             Box::new(operand_of(schema, facts, left, at)?),
             Box::new(operand_of(schema, facts, right, at)?),
         ),
+        Condition::Contains { text, part } => Operand::Containment(
+            Box::new(operand_of(schema, facts, text, at)?),
+            Box::new(operand_of(schema, facts, part, at)?),
+        ),
     })
 }
 
 /// `column` of the row `row`, which `read` produced: for a key column of a
-/// point-read row, the operand the read used for it (`inputs.md` §5,
-/// Clarification rule 1).
+/// point-read row, the operand the read used for it, and for one a
+/// primary-key range's static prefix covers, that prefix operand (`inputs.md`
+/// §5, Clarification rule 1).
 pub fn column_operand(
     schema: &Schema,
     facts: &PathFacts,
@@ -220,7 +271,7 @@ pub fn column_operand(
     row: RowOrigin,
     column: &ColumnName,
 ) -> Operand {
-    match point_read_key_operand(schema, facts, &read, column) {
+    match aliased_key_operand(schema, facts, &read, column) {
         Some(used) => used.clone(),
         None => Operand::Column {
             read,
@@ -230,18 +281,23 @@ pub fn column_operand(
     }
 }
 
-/// What a point read used for its key column `column`, if `read` is one.
-fn point_read_key_operand<'f>(
+/// The operand `read` fixed for its key column `column`: what a point read
+/// used for it, or what a primary-key range's prefix holds there when that
+/// reads nothing — a prefix derived from a read is no operand the path can
+/// compare with a key.
+fn aliased_key_operand<'f>(
     schema: &Schema,
     facts: &'f PathFacts,
     read: &ReadRef,
     column: &ColumnName,
 ) -> Option<&'f Operand> {
-    let Some(BindingKind::PointRead { table, key }) =
-        facts.binding_of(read).map(|binding| &binding.kind)
-    else {
-        return None;
+    let (table, fixed, must_be_static) = match &facts.binding_of(read)?.kind {
+        BindingKind::PointRead { table, key } => (table, key, false),
+        BindingKind::PrimaryRange { table, prefix } => (table, prefix, true),
+        BindingKind::IndexRange { .. } | BindingKind::UndeclaredIndexRange(_) => return None,
     };
     let position = schema.table(table)?.key_position(column)?;
-    key.get(position)
+    fixed
+        .get(position)
+        .filter(|operand| !must_be_static || operand.uses().is_empty())
 }

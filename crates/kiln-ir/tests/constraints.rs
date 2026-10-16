@@ -9,8 +9,8 @@ use kiln_ir::{
     Schema, SchemaError, Store, Terminal, UniqueConstraint, Value,
 };
 use support::{
-    call_under_test, column, columns_of, columns_of_values, keyed_by_id, literal_key, one_part,
-    program_with_schema, run_ok, table,
+    call_under_test, column, columns_of, columns_of_values, keyed_by_id, literal_interval,
+    literal_key, one_part, program_with_schema, run_ok, table,
 };
 
 fn text(value: &str) -> Value {
@@ -321,8 +321,8 @@ mod kiln_ir_43 {
             },
             Effect::ReadRange {
                 table: table("accounts"),
-                start: literal_key(0),
-                end: literal_key(9),
+                prefix: vec![],
+                interval: literal_interval(0, 9),
                 bound: literal(Value::Integer(9)),
                 into: kiln_ir::Slot(1),
             },

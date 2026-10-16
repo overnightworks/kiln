@@ -9,8 +9,8 @@ use kiln_e1::{
 };
 use kiln_ir::{
     ArithmeticOp, Block, Column, ColumnName, ColumnType, Condition, Effect, Expr, ForeignKey,
-    Function, FunctionName, Index, IndexName, IntegerWidth, KeyDeclaration, ParameterName, Program,
-    Relation, Schema, Slot, Table, TableName, Terminal, Value,
+    Function, FunctionName, Index, IndexName, IntegerWidth, KeyDeclaration, KeyInterval,
+    ParameterName, Program, Relation, Schema, Slot, Table, TableName, Terminal, Value,
 };
 
 pub const FUNCTION: &str = "f";
@@ -58,6 +58,14 @@ pub const SHIPMENTS: &str = "shipments";
 /// A table keyed by `(w_id, item_id)`, which a line names by its
 /// `(customer_id, item_id)` through a declared foreign key.
 pub const INVENTORY: &str = "inventory";
+
+/// A table keyed by the text column [`KEY_COLUMN`], with a text column
+/// `name` and an integer column `size`.
+pub const LABELS: &str = "labels";
+
+/// A table keyed by the text column [`KEY_COLUMN`] whose `name` column is
+/// an integer, where [`LABELS`] has a text one.
+pub const TAGS: &str = "tags";
 
 /// The key of [`LINES`] in declared order.
 pub const LINE_KEY: [&str; 3] = ["w_id", "d_id", "o_id"];
@@ -130,25 +138,31 @@ pub fn delete(table_name: &str, key: Expr) -> Effect {
     }
 }
 
-pub fn read_range(table_name: &str, start: Expr, end: Expr, into: u32) -> Effect {
-    read_range_at(table_name, vec![start], vec![end], into)
+/// A range over a table keyed by one column, between `from` and `to`.
+pub fn read_range(table_name: &str, from: Expr, to: Expr, into: u32) -> Effect {
+    read_prefix_range(table_name, vec![], Some((from, to)), into)
 }
 
-pub fn read_range_at(table_name: &str, start: Vec<Expr>, end: Vec<Expr>, into: u32) -> Effect {
-    read_range_bounded(table_name, start, end, literal(10), into)
+pub fn read_prefix_range(
+    table_name: &str,
+    prefix: Vec<Expr>,
+    interval: Option<(Expr, Expr)>,
+    into: u32,
+) -> Effect {
+    read_range_bounded(table_name, prefix, interval, literal(10), into)
 }
 
 pub fn read_range_bounded(
     table_name: &str,
-    start: Vec<Expr>,
-    end: Vec<Expr>,
+    prefix: Vec<Expr>,
+    interval: Option<(Expr, Expr)>,
     bound: Expr,
     into: u32,
 ) -> Effect {
     Effect::ReadRange {
         table: table(table_name),
-        start,
-        end,
+        prefix,
+        interval: interval.map(|(from, to)| KeyInterval { from, to }),
         bound,
         into: Slot(into),
     }
@@ -251,6 +265,33 @@ fn keyed_table(name: &str, key: &[&str], other_columns: &[&str]) -> Table {
     }
 }
 
+fn text_keyed_table(name: &str, name_column: Column, other_columns: Vec<Column>) -> Table {
+    let key_column = Column {
+        name: ColumnName(KEY_COLUMN.to_owned()),
+        kind: ColumnType::Text,
+    };
+    Table {
+        name: table(name),
+        columns: [key_column, name_column]
+            .into_iter()
+            .chain(other_columns)
+            .collect(),
+        key: KeyDeclaration::Columns(vec![ColumnName(KEY_COLUMN.to_owned())]),
+    }
+}
+
+fn labels_table() -> Table {
+    let name = Column {
+        name: ColumnName("name".to_owned()),
+        kind: ColumnType::Text,
+    };
+    text_keyed_table(LABELS, name, vec![integer_column("size")])
+}
+
+fn tags_table() -> Table {
+    text_keyed_table(TAGS, integer_column("name"), vec![])
+}
+
 /// Orders reference customers and products, customers reference regions; the
 /// declared indexes are per customer and per tenant. Every table is keyed by
 /// [`KEY_COLUMN`] but [`LINES`] and [`ARCHIVE`], which have the three-column
@@ -295,6 +336,8 @@ pub fn schema() -> Schema {
             keyed_table(ARCHIVE, &LINE_KEY, &["item_id"]),
             keyed_table(SHIPMENTS, &[KEY_COLUMN], &LINE_KEY),
             keyed_table(INVENTORY, &["w_id", "item_id"], &[]),
+            labels_table(),
+            tags_table(),
         ],
         foreign_keys: vec![
             foreign_key("orders", &["customer_id"], "customers"),
