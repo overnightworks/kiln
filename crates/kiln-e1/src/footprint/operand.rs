@@ -15,15 +15,43 @@ pub struct ReadRef {
     pub node: NodePath,
 }
 
+/// The binding occurrence of a row: the iteration that yielded it or the read
+/// that bound it, never the slot name, which may be bound again. It says which
+/// row a column came from, not what data the column names, so it is left out
+/// of equality: two arms that each access every row of a range by its full key
+/// name the same targets. Compare occurrences with `is_same_row_as`.
+#[derive(Clone, Debug)]
+pub struct RowOrigin(NodePath);
+
+impl RowOrigin {
+    pub fn new(binding: NodePath) -> Self {
+        Self(binding)
+    }
+
+    pub fn is_same_row_as(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl PartialEq for RowOrigin {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for RowOrigin {}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Operand {
     Literal(Value),
     Parameter(ParameterName),
-    /// `column` of the row `row` stands for, which `read` produced. Rows of
-    /// one read are many; only components of one `row` come from one row.
+    /// `column` of the row `row` identifies, which `read` produced. Rows of
+    /// one read are many; only components of one `row` come from one row. A
+    /// key column of a point-read row carries the binding occurrence of the
+    /// row the read's own key came from.
     Column {
         read: ReadRef,
-        row: Slot,
+        row: RowOrigin,
         column: ColumnName,
     },
     Arithmetic(ArithmeticOp, Box<Operand>, Box<Operand>),
@@ -67,8 +95,8 @@ pub fn operand_of(
             match point_read_key_operand(schema, facts, &read, column) {
                 Some(used) => used.clone(),
                 None => Operand::Column {
+                    row: facts.row_origin_of(*slot, at)?,
                     read,
-                    row: *slot,
                     column: column.clone(),
                 },
             }

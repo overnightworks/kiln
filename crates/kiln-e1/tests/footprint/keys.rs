@@ -238,6 +238,54 @@ mod kiln_e1_37 {
     }
 
     #[test]
+    fn a_key_mixing_the_rows_of_two_iterations_that_reuse_one_row_slot_is_unknown() {
+        let outer_read_into_slot_3 = read_at(LINES, line_key_of(1), 3);
+        let mixed_key = vec![
+            column_of(3, "w_id"),
+            column_of(1, "d_id"),
+            column_of(1, "o_id"),
+        ];
+        for range in [lines_of_one_order(), lines_of_one_item()] {
+            let body = returns(vec![
+                range,
+                iterate(
+                    0,
+                    1,
+                    vec![
+                        outer_read_into_slot_3.clone(),
+                        iterate(0, 1, vec![update_at(LINES, mixed_key.clone(), &[])]),
+                    ],
+                ),
+            ]);
+            assert_unknown(body, key_not_identified());
+        }
+    }
+
+    #[test]
+    fn arms_that_each_access_every_row_of_a_range_by_its_full_key_reach_the_same_targets() {
+        let each_row_in_slot = |row: u32| {
+            returns(vec![iterate(
+                0,
+                row,
+                vec![update_at(LINES, line_key_of(row), &[])],
+            )])
+        };
+        let expected = [
+            (lines_of_one_order(), STATIC),
+            (lines_of_one_item(), ONE_HOP),
+        ];
+        for (range, category) in expected {
+            let body = branch_on_presence(
+                vec![range, read("accounts", param("id"), 5)],
+                5,
+                each_row_in_slot(1),
+                each_row_in_slot(2),
+            );
+            assert_eq!(category_of(body.clone()), category, "{body:?}");
+        }
+    }
+
+    #[test]
     fn a_key_projected_from_a_range_over_another_table_with_the_same_key_columns_is_unknown() {
         let archive_ranges = [
             read_range_at(

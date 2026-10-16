@@ -4,7 +4,7 @@ use kiln_ir::{IndexName, Slot, TableName};
 
 use super::cause::UnknownCause;
 use super::node_path::NodePath;
-use super::operand::{Operand, ReadRef};
+use super::operand::{Operand, ReadRef, RowOrigin};
 use super::ClassifyError;
 
 #[derive(Clone, Debug)]
@@ -85,11 +85,20 @@ pub struct Obstacle {
     pub cause: UnknownCause,
 }
 
+/// `row` is the current row of the sequence bound at `origin`, as the iteration
+/// at `iteration` yields it.
+#[derive(Clone, Debug)]
+struct RowAlias {
+    row: Slot,
+    origin: Slot,
+    iteration: NodePath,
+}
+
 /// Everything learned about one feasible path through a function's body.
 #[derive(Clone, Debug, Default)]
 pub struct PathFacts {
     bindings: Vec<Binding>,
-    aliases: Vec<(Slot, Slot)>,
+    aliases: Vec<RowAlias>,
     presence: Vec<(NodePath, bool)>,
     argument_decisions: Vec<(NodePath, bool)>,
     pub accesses: Vec<Access>,
@@ -102,21 +111,30 @@ impl PathFacts {
         self.bindings.push(binding);
     }
 
-    /// `row` is the current row of the sequence `source` bound.
-    pub fn alias(&mut self, row: Slot, source: Slot, at: &NodePath) -> Result<(), ClassifyError> {
-        let origin = self.read_of(source, at)?.slot;
-        self.aliases.push((row, origin));
+    /// `row` is the current row of the sequence `source` bound, as the
+    /// iteration at `iteration` yields it.
+    pub fn alias(
+        &mut self,
+        row: Slot,
+        source: Slot,
+        iteration: &NodePath,
+    ) -> Result<(), ClassifyError> {
+        let origin = self.read_of(source, iteration)?.slot;
+        self.aliases.push(RowAlias {
+            row,
+            origin,
+            iteration: iteration.clone(),
+        });
         Ok(())
+    }
+
+    fn alias_of(&self, slot: Slot) -> Option<&RowAlias> {
+        self.aliases.iter().rev().find(|alias| alias.row == slot)
     }
 
     /// The read that produced `slot`'s rows.
     pub fn read_of(&self, slot: Slot, at: &NodePath) -> Result<ReadRef, ClassifyError> {
-        let origin = self
-            .aliases
-            .iter()
-            .rev()
-            .find(|(row, _)| *row == slot)
-            .map_or(slot, |(_, source)| *source);
+        let origin = self.alias_of(slot).map_or(slot, |alias| alias.origin);
         self.bindings
             .iter()
             .rev()
@@ -129,6 +147,16 @@ impl PathFacts {
                 slot,
                 at: at.to_string(),
             })
+    }
+
+    /// Which binding occurrence `slot` stands for: the iteration that yielded
+    /// the row, or the read that bound the slot itself. A slot name may be
+    /// bound again; the occurrence is what tells the rows apart.
+    pub fn row_origin_of(&self, slot: Slot, at: &NodePath) -> Result<RowOrigin, ClassifyError> {
+        match self.alias_of(slot) {
+            Some(alias) => Ok(RowOrigin::new(alias.iteration.clone())),
+            None => Ok(RowOrigin::new(self.read_of(slot, at)?.node)),
+        }
     }
 
     pub fn binding_of(&self, read: &ReadRef) -> Option<&Binding> {
