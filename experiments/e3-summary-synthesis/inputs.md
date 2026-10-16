@@ -83,23 +83,39 @@ abort").
 **Tabulation versus finite state** (head ruling on #77, 16.10.2026). Every
 family's checking domain is finite, so on that domain alone every family has
 a constant-size exact table of its transformer. E3's expected misses (§7,
-§8) and the bound class are therefore meaningful only under this rule:
+§8) and the bound class are therefore meaningful only under this rule, which
+classifies each state component:
 
-- A candidate **may** enumerate a state space that the family's frozen
-  semantics itself declares finite and fixed, independent of any checking
-  domain. The order lifecycle's four statuses (§6) and the dispatcher's five
-  cursor positions (§5) are such spaces, so a transformation table over
-  `{0, 1, 2, 3}` is a legitimate, natural representation of an order-lifecycle
-  summary, and a table over `{0, …, 4}` one of a dispatcher summary.
-- A candidate **may not** enumerate values that only the checking domain
-  bounds while the family's semantics leaves them unbounded or bounds them
-  only by a column width: balances (§7), quotas (§3), owners (§8) and
-  sequence values (§4). Withholding checking-domain values as inputs is not
-  enough; encoding the same lookup through literals, branches or a domain
-  derived from the schema is enumeration too.
+- A candidate summary **may** enumerate the values of a categorical or
+  control state component with at most 16 named values: the order
+  lifecycle's status (4 values, §6) and the dispatcher's cursor position
+  among its `N = 5` workers (§5).
+- A candidate **may never** enumerate the values of a quantity or identifier
+  component (balances, quotas, counts, sequence values, owner identifiers,
+  keys), even when the family's semantics fixes a finite range for it (quota
+  `[0, 1000]`, owners `[1, 1 000 000]`). Encoding such a lookup through
+  literals, branches or schema-derived domains counts as enumeration.
+- Semantic constants **may** appear in a candidate's arithmetic and guards:
+  `N = 5`, the wallet's overflow threshold 32 767, the quota ceiling 1000,
+  the owner validation bound 1 000 000. Using a threshold is not enumerating
+  the values below it.
+- Enumeration means a candidate whose size or structure grows with the
+  number of values of a component. S2's grammar enforces this (§10,
+  question 1).
 
-This document states the distinction; S2's grammar enforces it (§10,
-question 1).
+Classification of every family's components under the rule:
+
+- Quota (§3): `remaining` is a quantity (never enumerable; 1000 is a usable
+  constant).
+- Sequence (§4): `last_value` is a quantity (not enumerable; 1 000 000 is a
+  usable constant).
+- Dispatcher (§5): `cursor` is a control component (enumerable, 5 values).
+- Order lifecycle (§6): `status` is categorical (enumerable, 4 values).
+- Wallet (§7): `balance` is a quantity (not enumerable; 32 767 and 100 are
+  usable constants).
+- Lease (§8): row presence per resource is control (2 values, enumerable);
+  the stored `owner` and the argument `resource` key are identifiers (not
+  enumerable; 1 000 000 and `K = 2` are usable constants).
 
 **Mutants.** Each family's list is the preregistered set of invalid
 candidates against which E3's "zero false acceptances" condition is judged
@@ -874,8 +890,9 @@ itself exclude a representation of fixed size. The owner universe is finite,
 so a full-domain transformation table over `{free} ∪ [1, 1 000 000]` per
 resource has a size and a composition cost independent of batch length, and
 the growing lower bound stays below that table's size. Such a table
-enumerates owners, which the family's semantics bounds only through its
-check constraints, and §1's tabulation rule forbids exactly that. The miss
+enumerates owners, an identifier component, and §1's tabulation rule
+forbids that even though the family's semantics fixes the range
+`[1, 1 000 000]`. The miss
 is therefore an expectation that rests on that rule and on the concrete
 representation restrictions S2's grammar imposes, not a proof. Under them,
 the growing number of transformers is why this freeze expects no admissible
@@ -921,10 +938,12 @@ inside its family's checking domain.
 1. **No tabulation over the checking domain (§1).** On a finite checking
    domain every family has a constant-size exact table, so the bound class
    and both expected misses are meaningful only under the head's ruling
-   stated in §1: enumerating a semantically finite, fixed state space (order
-   statuses, dispatcher cursor positions) is legitimate; enumerating values
-   only the checking domain bounds (balances, quotas, owners, sequence
-   values) is forbidden. S2 owns its enforcement in the grammar.
+   stated in §1: categorical or control components with at most 16 named
+   values (order status, dispatcher cursor) may be enumerated; quantity and
+   identifier components (balances, quotas, counts, sequence values, owners,
+   keys) may not, even where their semantics fixes a finite range, while
+   semantic constants stay usable in arithmetic and guards. S2 owns its
+   enforcement in the grammar.
    Recommendation: S2's candidate language takes no checking-domain value as
    an input and offers no construct that encodes such a lookup through
    literals, branches or a schema-derived domain, a candidate's size is
