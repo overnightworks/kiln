@@ -7,14 +7,17 @@
 
 use std::ffi::CStr;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
 
 use libsqlite3_sys as ffi;
-use sha2::{Digest, Sha256};
 
+use crate::build_record::BuildRecord;
+use crate::builds::BuildEvidence;
+use crate::cli::ManifestTarget;
 use crate::machine;
+use crate::manifest::{self, Manifest};
 
 /// One check's outcome.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,20 +41,24 @@ pub struct PreflightReport {
     pub build_env: CheckResult,
     pub cpu_siblings: CheckResult,
     pub shim_vfs: CheckResult,
+    pub source_commit: CheckResult,
 }
 
 impl PreflightReport {
+    fn named_checks(&self) -> [(&'static str, &CheckResult); 6] {
+        [
+            ("rustc version", &self.rustc_version),
+            ("sqlite version", &self.sqlite_version),
+            ("build environment", &self.build_env),
+            ("CPU siblings", &self.cpu_siblings),
+            ("shim VFS", &self.shim_vfs),
+            ("source commit", &self.source_commit),
+        ]
+    }
+
     /// Fails closed: every check must pass.
     pub fn all_passed(&self) -> bool {
-        [
-            &self.rustc_version,
-            &self.sqlite_version,
-            &self.build_env,
-            &self.cpu_siblings,
-            &self.shim_vfs,
-        ]
-        .iter()
-        .all(|c| c.is_pass())
+        self.named_checks().iter().all(|(_, check)| check.is_pass())
     }
 }
 
@@ -173,28 +180,27 @@ pub fn check_shim_vfs(install_result: Result<(), String>, is_registered: bool) -
     }
 }
 
-/// SHA-256 of a file's bytes, as a lowercase hex string (protocol §12:
-/// "Preflight hashes the harness binary... into the manifest; the
-/// result-bearing run re-hashes and fails closed on a mismatch").
-pub fn hash_file(path: &Path) -> io::Result<String> {
-    let bytes = fs::read(path)?;
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect())
+/// The binary must come from a known, committed state of the source: a
+/// result needs a commit it can be reproduced from (protocol §12).
+pub fn check_source_commit(commit: &str) -> CheckResult {
+    if commit == "unknown" {
+        CheckResult::Fail("this binary was built outside a git checkout".to_string())
+    } else if commit.ends_with("-dirty") {
+        CheckResult::Fail(format!(
+            "this binary was built from uncommitted changes on top of {commit}"
+        ))
+    } else {
+        CheckResult::Pass
+    }
 }
 
-/// SHA-256 of the currently running binary's own bytes.
-pub fn hash_current_binary() -> io::Result<String> {
-    hash_file(&std::env::current_exe()?)
-}
+/// The repository's `rust-toolchain.toml` as of the commit this binary was
+/// compiled from, embedded so the pin is the reviewed commit's even when
+/// the build ran in a checkout that no longer exists.
+const PINNED_TOOLCHAIN_FILE: &str = include_str!("../../../../rust-toolchain.toml");
 
-fn pinned_toolchain_channel(repo_root: &Path) -> io::Result<String> {
-    let contents = fs::read_to_string(repo_root.join("rust-toolchain.toml"))?;
-    contents
+fn pinned_toolchain_channel(toolchain_file: &str) -> io::Result<String> {
+    toolchain_file
         .lines()
         .find_map(|line| {
             let rest = line.trim().strip_prefix("channel")?;
@@ -210,13 +216,6 @@ fn pinned_toolchain_channel(repo_root: &Path) -> io::Result<String> {
         })
 }
 
-/// This crate's directory, known at compile time — used only to find the
-/// repository root's `rust-toolchain.toml`, never baked into a check's
-/// pass/fail logic itself.
-fn crate_dir() -> &'static Path {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-}
-
 /// Runs every check against the real environment, filesystem, and
 /// `rustc`/`sqlite3` the process is actually running under. This is the
 /// thin adapter: each check it calls is independently unit-tested against
@@ -229,17 +228,7 @@ pub fn run_real() -> PreflightReport {
             let output = Command::new("rustc").arg("--version").output()?;
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         },
-        || {
-            // harness/ -> e4-sqlite-cost-anatomy/ -> experiments/ -> repo root.
-            let repo_root = crate_dir()
-                .parent()
-                .and_then(Path::parent)
-                .and_then(Path::parent)
-                .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::NotFound, "repo root not found above crate")
-                })?;
-            pinned_toolchain_channel(repo_root)
-        },
+        || pinned_toolchain_channel(PINNED_TOOLCHAIN_FILE),
     );
 
     let sqlite_version_actual = unsafe {
@@ -270,7 +259,100 @@ pub fn run_real() -> PreflightReport {
         build_env,
         cpu_siblings,
         shim_vfs,
+        source_commit: check_source_commit(crate::builds::SOURCE_COMMIT),
     }
+}
+
+/// Prints each check's outcome to `out`; when every check passed and
+/// there is a `target`, records the manifest there, for the binary at
+/// `instrumented_binary` and the target's passthrough binary, both held
+/// against the target's build record. `Err` is the message of a preflight
+/// that failed closed.
+pub fn conclude(
+    report: &PreflightReport,
+    target: Option<&ManifestTarget>,
+    instrumented_binary: &Path,
+    mut out: impl Write,
+) -> Result<(), String> {
+    for (name, check) in report.named_checks() {
+        let line = match check {
+            CheckResult::Pass => format!("PASS  {name}"),
+            CheckResult::Fail(reason) => format!("FAIL  {name}: {reason}"),
+        };
+        writeln!(out, "{line}").map_err(|err| format!("could not report {name}: {err}"))?;
+    }
+    if !report.all_passed() {
+        return Err("preflight failed closed; no frozen run may proceed".to_string());
+    }
+    let Some(target) = target else {
+        return Ok(());
+    };
+    let record = BuildRecord::read_file(&target.build_record)
+        .map_err(|err| format!("could not read the build record: {err}"))?;
+    let manifest = build_manifest(instrumented_binary, &target.passthrough_binary, &record)
+        .map_err(|err| format!("could not build manifest: {err}"))?;
+    manifest::write_manifest(&target.manifest_path, &manifest).map_err(|err| {
+        format!(
+            "could not write manifest to {}: {err}",
+            target.manifest_path.display()
+        )
+    })?;
+    writeln!(
+        out,
+        "manifest written to {} (source commit {}, instrumented sha256 {}, passthrough sha256 {})",
+        target.manifest_path.display(),
+        manifest.source_commit,
+        manifest.binary_sha256,
+        manifest.passthrough_binary_sha256
+    )
+    .map_err(|err| format!("could not report the manifest: {err}"))
+}
+
+/// What the process exits with when the preflight concluded as `conclusion`
+/// says: success only for a preflight that passed and recorded what was
+/// asked of it.
+pub fn exit_status(conclusion: &Result<(), String>) -> u8 {
+    match conclusion {
+        Ok(()) => 0,
+        Err(_) => FAILED_CLOSED_EXIT_STATUS,
+    }
+}
+
+const FAILED_CLOSED_EXIT_STATUS: u8 = 1;
+
+/// Builds the real manifest (protocol §12): the source commit and the
+/// SHA-256 of the instrumented binary and of the passthrough binary it
+/// will be compared with, `rustc --version`'s raw output, and
+/// `sqlite3_libversion()`. Called only once every preflight check has
+/// passed — a manifest recording a binary preflight has already rejected
+/// is not the record §12 means. Refuses binaries that are not the two
+/// builds `build_record` made from the reviewed commit.
+pub fn build_manifest(
+    instrumented_binary: &Path,
+    passthrough_binary: &Path,
+    build_record: &BuildRecord,
+) -> io::Result<Manifest> {
+    let instrumented = BuildEvidence::collect(instrumented_binary)?;
+    let passthrough = BuildEvidence::collect(passthrough_binary)?;
+    build_record
+        .check_builds(&instrumented, &passthrough)
+        .map_err(io::Error::other)?;
+    let rustc_version_output =
+        String::from_utf8_lossy(&Command::new("rustc").arg("--version").output()?.stdout)
+            .into_owned();
+    let sqlite_version = unsafe {
+        CStr::from_ptr(ffi::sqlite3_libversion())
+            .to_str()
+            .unwrap_or_default()
+            .to_string()
+    };
+    Manifest::record(
+        &instrumented,
+        &passthrough,
+        rustc_version_output,
+        sqlite_version,
+    )
+    .map_err(io::Error::other)
 }
 
 #[cfg(test)]
@@ -367,16 +449,21 @@ mod tests {
     }
 
     #[test]
-    fn hash_file_is_deterministic_and_sensitive_to_content() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let a = dir.path().join("a.bin");
-        let b = dir.path().join("b.bin");
-        fs::write(&a, b"same bytes").unwrap();
-        fs::write(&b, b"same bytes").unwrap();
-        assert_eq!(hash_file(&a).unwrap(), hash_file(&b).unwrap());
+    fn the_pinned_toolchain_channel_is_read_from_rust_toolchain_toml() {
+        let file = "[toolchain]\nchannel = \"1.99.1\"\ncomponents = [\"rustfmt\"]\n";
 
-        fs::write(&b, b"different bytes").unwrap();
-        assert_ne!(hash_file(&a).unwrap(), hash_file(&b).unwrap());
+        assert_eq!(pinned_toolchain_channel(file).unwrap(), "1.99.1");
+    }
+
+    #[test]
+    fn a_toolchain_file_without_a_channel_line_is_an_error() {
+        assert!(pinned_toolchain_channel("[toolchain]\n").is_err());
+        assert!(pinned_toolchain_channel("").is_err());
+    }
+
+    #[test]
+    fn the_embedded_toolchain_pin_names_a_channel() {
+        assert!(pinned_toolchain_channel(PINNED_TOOLCHAIN_FILE).is_ok());
     }
 
     #[test]
@@ -387,6 +474,7 @@ mod tests {
             build_env: CheckResult::Pass,
             cpu_siblings: CheckResult::Pass,
             shim_vfs: CheckResult::Fail("not registered".into()),
+            source_commit: CheckResult::Pass,
         };
         assert!(!report.all_passed());
     }
@@ -439,6 +527,7 @@ mod tests {
                 Err(io::Error::new(io::ErrorKind::NotFound, "no such path"))
             }),
             shim_vfs: check_shim_vfs(Ok(()), true),
+            source_commit: CheckResult::Pass,
         };
         assert!(!report.rustc_version.is_pass());
         assert!(!report.cpu_siblings.is_pass());
@@ -455,7 +544,20 @@ mod tests {
             build_env: CheckResult::Pass,
             cpu_siblings: CheckResult::Pass,
             shim_vfs: CheckResult::Pass,
+            source_commit: CheckResult::Pass,
         };
         assert!(report.all_passed());
+    }
+
+    mod kiln_e4_09 {
+        use super::*;
+
+        #[test]
+        fn source_commit_passes_only_for_a_committed_known_state() {
+            assert_eq!(check_source_commit(&"a".repeat(40)), CheckResult::Pass);
+            for refused in ["unknown", &format!("{}-dirty", "a".repeat(40))] {
+                assert!(!check_source_commit(refused).is_pass(), "{refused}");
+            }
+        }
     }
 }

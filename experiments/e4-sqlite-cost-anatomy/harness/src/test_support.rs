@@ -11,6 +11,10 @@
 
 use std::sync::{Mutex, MutexGuard};
 
+use crate::interference::TimedSample;
+use crate::machine;
+use crate::monitor::Sample;
+
 static VFS_COUNTERS_LOCK: Mutex<()> = Mutex::new(());
 
 /// Acquires the lock serializing every test that touches the VFS shim's
@@ -22,4 +26,22 @@ pub(crate) fn lock_vfs_counters() -> MutexGuard<'static, ()> {
     VFS_COUNTERS_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// `count` monitor samples of a machine that stays quiet: one per
+/// sampling interval, CPU 8 idle throughout, no scheduler wait, low load.
+pub(crate) fn quiet_samples(count: u64) -> Vec<TimedSample> {
+    let interval_ns = machine::SAMPLE_INTERVAL.as_nanos() as u64;
+    let idle_ticks_per_interval =
+        machine::SAMPLE_INTERVAL.as_millis() as u64 * machine::USER_HZ / 1000;
+    (0..count)
+        .map(|index| TimedSample {
+            at_ns: index * interval_ns,
+            sample: Sample {
+                sibling_idle_ticks: index * idle_ticks_per_interval,
+                pinned_wait_ns: 0,
+                load_average_1m: 1.0,
+            },
+        })
+        .collect()
 }
