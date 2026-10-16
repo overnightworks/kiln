@@ -109,7 +109,7 @@ or TypeORM extractor for E1, any future front end (§11).
 Every oracle this document and `docs/experiments.md` rely on — E1's
 lowering audit, E2's elementwise comparison, E3's checker, and
 `docs/verification.md`'s differential tests — interprets the IR against
-exactly these seven decisions; none of them may read a node kind above, or
+exactly these nine decisions; none of them may read a node kind above, or
 any decision below, differently from this section. This section is their
 single owner: a fact stated here is not restated in `docs/experiments.md`,
 `docs/verification.md`, or elsewhere in this document, which instead point
@@ -224,6 +224,96 @@ this meaning, one slice at a time.
   *Example.* A future crash-recovery harness marks one call in a replayed
   batch as a forced abort without changing `replay`'s own signature or
   adding a log, write-ahead buffer, or other durability mechanism here.
+- **D8 Keys.** A table declares its primary key as an ordered, non-empty
+  list of its own columns, or declares itself keyless (D9). A key is the
+  tuple of those columns' values, so each component has its column's kind
+  and width; keys are equal when every component is, and order
+  lexicographically, component by component. Key columns live only in the
+  key: a row's other columns never repeat them, an insert gives them only
+  through its key, and a projection, index, constraint or check naming a key
+  column reads it from the key, so no two copies can disagree. Keys are
+  unique per table (D6) and never change: an update naming a key column is
+  rejected before any call runs, so moving a row is a delete and an insert.
+  A key expression with the wrong number of components is rejected before
+  any call runs; a component of the wrong kind or outside its column's width
+  aborts with a typed reason naming the table and the component, and never
+  clamps (D3). A primary-key range read names an equality prefix — the first
+  k components, fewer than all — and optionally an inclusive interval on the
+  next component; it matches exactly the keys holding that prefix whose next
+  component lies in the interval, and an omitted interval matches every
+  value, never a sentinel bound (vector order alone cannot say "every key
+  under this prefix"). A foreign key maps an ordered list of the referencing
+  table's columns, one to one and kind for kind, onto the referenced table's
+  whole primary key; a row lacking any of those columns references nothing,
+  and since keys never change, only a delete removes a referenced key (D2).
+  A unique constraint names an ordered list of columns and binds only rows
+  holding all of them. A foreign key references a primary key only: a
+  reference to a unique tuple has no caller yet, its source construct is
+  refused (E1 Q4, `experiments/e1-classification-coverage/inputs.md` §5),
+  and whatever adds one must also abort an update that removes a referenced
+  value. A unique constraint enforces and is never an index: finding a row
+  by a unique tuple reads a declared index or scans (D9). The access log
+  (D5) names a key by all its components and a range by its prefix and
+  interval as written. A constraint check that looks up a primary key logs a
+  point read of it; one that looks up a unique tuple, or the rows still
+  naming a deleted key, logs a constraint lookup naming the constraint and
+  the tuple — never a scan.
+  *Example.* `order_line` is keyed by `(w, d, o, n)`. The range with
+  prefix `(1, 3, 3001)` and no interval holds every line of order 3001 of
+  district 3, and the log shows that prefix, not a bound such as
+  `(1, 3, 3001, MAX)`. An update of `order_line.n` is rejected before any
+  call runs.
+- **D9 Forms for OLTP transactions.** These refine §2.1's node kinds; none
+  adds a kind.
+  - *Append* (a write) adds a row to a keyless table and keeps duplicates.
+    The row's identity is internal: no column and no key, so no
+    expression projects it and no read, update or delete names it. A
+    per-table store counter gives one past the highest identity the table
+    holds (the first, when it holds none), so replay is deterministic; an
+    aborted call's appends consume nothing (D6), and a counter past `i64`
+    aborts with a typed reason. The log records one append naming the
+    table and its columns, without the identity, and the row's constraints
+    are checked like any written row's (D2).
+  - *Scan* (a read) binds the rows of a table, or of a primary-key prefix,
+    that satisfy a condition over their columns, in key order. It logs one
+    scan naming the table, prefix and condition, distinct from every range
+    read, so a scan never passes for a range. A scan or a range read may
+    bind only its first or last k rows in its order; it then needs no
+    row-count bound and logs the whole scan or range it consulted.
+  - *Local sequences.* A range, index or scan read binds a sequence of rows.
+    Filtering by a condition, mapping to values or records, sorting by
+    columns (ties by key), distinct values, counting, folding with checked
+    arithmetic (D3), and selecting the first, last or middle (1-based
+    position ⌈n/2⌉) element compute over a sequence: they read nothing, log
+    nothing and keep no durable state. A selection from an empty sequence is
+    absent, branchable like an absent row. Bounded iteration runs over any
+    bound sequence, and its body may yield one value per pass, giving a new
+    sequence.
+  - *Values.* A conditional value evaluates its condition and only the
+    chosen expression. Multiplication is checked like addition (D3). An
+    exact decimal is an integer at a declared scale; multiplying adds the
+    scales, and the IR never rounds — a source that rounds needs a
+    rounding operation, which waits for its first caller. Text has
+    concatenation, truncation to n characters, a containment condition, and
+    formatting of an integer at a scale as decimal text; lengths count
+    Unicode scalar values.
+  - *Responses and aborts.* A function returns a record of named fields,
+    each a value or a sequence of records. An abort carries its name and a
+    record of values computed before it, and still discards every effect
+    (D6). Both compare field by field (D4).
+  - *No null.* A missing value is an absent column: constraints and
+    indexes skip it, and projecting it aborts.
+  - *Host boundary.* Values from outside the database — the time, a
+    request input, a queue entry holding such inputs — enter as call
+    arguments; the IR has no clock and no queue. What the host must record
+    after commit, such as a result file, is a response field, and the host
+    records it only after the commit.
+
+  *Example.* `deliver(w, carrier, now)` takes, per district, the first
+  `new_order` row of prefix `(w, d)` with no row-count bound, iterates over
+  that zero-or-one-row sequence so an empty district is skipped, folds the
+  order's line amounts into one sum, and returns each delivered `(d, o)`
+  for the host to record after the commit.
 
 ## 3. The thesis: compile-time compatibility between transaction pairs
 

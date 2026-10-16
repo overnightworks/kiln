@@ -1050,3 +1050,100 @@ denominator, so both L and U are always reported.
 *Bias:* a Fail that refusals may have caused cannot falsify the thesis;
 a Pass is untouched. Realised in the `kiln-e1 verdict` command's
 application half in #2 slice 6.
+
+**Clarification 16.10.2026: keys, constraint accesses and the OLTP forms.**
+*Changes:* how Q1-Q4 apply to compound keys and to the forms of
+`docs/concept.md` §2.2 D8-D9, from the plan review of #61 (#64).
+*Grounding:* the frozen category definitions, Q1-Q4 and the reference
+meaning. Decided before any classification result states a category: the
+only classified output, #55's TPC-C scaffolding, refuses every unit for
+want of IR and is marked unsuitable for measurement (`data/README.md`).
+No rule adds a category or changes a threshold; none states a TPC-C
+category. The fidelity expectations for TPC-C are owned by
+[`tpcc-fidelity.md`](tpcc-fidelity.md).
+
+1. *Provenance per component.* A key, a range prefix and an interval are
+   judged component by component. A component from arguments or literals
+   is static; one projected from a read's row is read-derived; one computed
+   from a read result (arithmetic, a conditional value, a text operation) is
+   computed. Two aliases follow from the read's own meaning: a key column of
+   a point-read row is the operand that read used for it, and an equality
+   prefix component of a primary-key prefix range's row is that prefix
+   operand. Values merely observed equal are never aliases.
+2. *Lookups.* A read, update or delete key with read-derived components is
+   one resolution by read R only when a declared foreign key from R's table
+   maps its source columns, in order, onto the accessed table's whole key,
+   and each component projects the matching source column of R's row or
+   equals it by an alias. Matching only the read-derived components is not
+   enough; any other read-derived or computed lookup component is Unknown.
+   Example: ORDER read at `(w, d, o)`, then CUSTOMER at
+   `(w, d, ORDER.O_C_ID)`, matches `(O_W_ID, O_D_ID, O_C_ID)` with the first
+   two by alias: one resolution by the ORDER read. STOCK at
+   `(w, ORDER-LINE.OL_I_ID)` against `(OL_SUPPLY_W_ID, OL_I_ID)` fails: `w`
+   is not provably `OL_SUPPLY_W_ID`.
+3. *Counting.* Resolutions are distinct logical reads (Q3.1, Q3.3): any
+   number of components, keys or constraint targets fed by one read add one.
+4. *Preserved.* Static argument and literal keys; a same-table key whose
+   every component projects the matching key column of a primary-key range
+   row stays covered by that range; index ranges and their resolution into
+   base rows (Q2.2-Q2.4); Q3.5's read-derived insert keys, now any
+   component; a primary-key range whose prefix or interval comes from a
+   read stays Unknown, even when its prefix equals a foreign key's target
+   key — reverse foreign-key navigation is not decided here.
+5. *Constraint accesses.* The accesses a declared constraint makes (D2, D5)
+   belong to the function's footprint. Their targets come from the written
+   values or the deleted key; a read whose result reaches one is a resolving
+   read through that declared constraint, counted under rule 3.
+6. *Appends.* An append is static: its one access is a fresh row of its
+   table, which no key of any function can name (D9), so the logged append
+   (table, no identity) lies inside the inferred footprint "a fresh row of
+   T". The counter-chosen identity is never an argument-derived key; the
+   append's constraint accesses follow rule 5.
+7. *Scans and sequences.* A scan is Unknown (Q2.5) even when restricted to
+   an argument prefix or bound, and so is every value derived from it.
+   Filtering, mapping, sorting, distinct, counting, folding and selection
+   over a sequence are computation (Q3.6): over an argument-bounded
+   primary-key or declared-index range they keep that read's provenance, so
+   a selected key is one resolution. A first- or last-limited read is
+   judged as the whole range or scan it consulted.
+8. *Faithfulness conditions* (Q4.1). Exact decimals are integers at a
+   pinned scale per attribute, rounded only where and when the source
+   rounds, and the lowering shows that no legal input overflows `i64` where
+   the source would not fail. An unrolled argument-bounded repetition
+   covers every legal argument case with the source's accesses, logical
+   reads, failures (position and order) and responses for each. A bound is
+   at least what the source can reach — the declared key domain, or an
+   invariant every writer of the table keeps, cited — so it adds no abort
+   the source lacks; selecting first or last rows uses a limited read, not
+   a row-count bound. A source null lowers to an absent column where the
+   source's constraints and indexes treat it as missing, and to a sentinel
+   only where the source defines null as one fixed out-of-range value
+   (TPC-C Clause 1.3.1). A lowering meeting none of these refuses.
+9. *Host boundary and units.* A host-supplied argument is admissible only
+   for a value the source receives from outside the database within the
+   unit: a request input, a clock, a queue entry carrying such inputs. A
+   value the source reads from the database stays a read inside the unit,
+   so host work cannot hide a resolution, and no queue table enters a unit
+   whose source has none. TPC-C keeps five units: Delivery's is the
+   deferred business transaction of Clause 2.7.4.2, one function over its
+   ten districts although the clause permits up to ten database
+   transactions; its enqueue and dequeue lie outside it, because the queue
+   carries only the terminal's input (Clause 2.7.2.2, rule 2). What the
+   host records after commit is a response field (D9).
+10. *Unknown is not refusal.* A function lowered in full whose footprint is
+    Unknown counts in N only; a refused function counts in R as well. A
+    lowering never refuses a function it can express faithfully, never
+    approximates one (a scan as a range, a guessed bound) to reach either
+    outcome, and names the missing capability in every refusal.
+
+*Bias:* rules 2, 5 and 7 and the declared-only rules lower coverage; the
+aliases of rule 1, whole-key matching in rule 2 and rule 6 raise it,
+bounded by the read's own meaning and the containment audit. *TPC-C:* rule
+2 decides Delivery's ORDER and CUSTOMER keys and Stock-Level's STOCK keys;
+rule 4 leaves the read-bounded ORDER-LINE ranges of Order-Status, Delivery
+and Stock-Level Unknown, the conservative reading; rule 7 decides the
+by-name customer selection of Payment and Order-Status and Order-Status's
+last-order selection; rules 3 and 5 count New-Order's DISTRICT read once
+for every key and foreign-key target it feeds. Apart from that read and
+Payment's by-name customer (rule 7), no TPC-C write takes a foreign-key
+value from a read, so rule 5 moves no other TPC-C step.
