@@ -1,13 +1,16 @@
 //! Conditional inventory (inputs.md section 3): TPC-C's New-Order stock update on
 //! one hot row, whose response reveals the stock each caller finds.
 
+mod fold;
 mod generator;
 mod program;
 
-use kiln_ir::{Call, Store};
+use kiln_ir::{Call, Program, Store};
 
+use crate::oracle::{calls_of, FamilyBatch};
 use crate::rows::{call, integer_at, integer_row, store_of};
 
+pub use fold::{serial_fold, InventoryAbort};
 pub use generator::generate;
 pub use program::program;
 
@@ -63,4 +66,29 @@ impl From<InventoryCall> for Call {
 pub struct Batch {
     pub initial: StockState,
     pub calls: Vec<InventoryCall>,
+}
+
+impl FamilyBatch for Batch {
+    type Abort = InventoryAbort;
+    type State = StockState;
+
+    fn program() -> Program {
+        program()
+    }
+
+    fn initial_state(&self) -> StockState {
+        self.initial
+    }
+
+    fn store_of(state: StockState) -> Store {
+        state.to_store()
+    }
+
+    fn state_of(store: &Store) -> StockState {
+        StockState::from_store(store)
+    }
+
+    fn calls(&self) -> Vec<Call> {
+        calls_of(&self.calls)
+    }
 }

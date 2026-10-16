@@ -1,14 +1,17 @@
 //! Mixed account operations (inputs.md section 4): deposits, withdrawals,
 //! transfers and freezes over `K = 4` accounts, gated by status and funds.
 
+mod fold;
 mod generator;
 mod program;
 
-use kiln_ir::{Call, Store};
+use kiln_ir::{Call, Program, Store};
 
+use crate::oracle::{calls_of, FamilyBatch};
 use crate::rng::BATCH_SIZE_MAX;
 use crate::rows::{call, integer_at, integer_row, store_of};
 
+pub use fold::{serial_fold, AccountsAbort};
 pub use generator::generate;
 pub use program::program;
 
@@ -105,4 +108,29 @@ impl From<AccountCall> for Call {
 pub struct Batch {
     pub initial: AccountsState,
     pub calls: Vec<AccountCall>,
+}
+
+impl FamilyBatch for Batch {
+    type Abort = AccountsAbort;
+    type State = AccountsState;
+
+    fn program() -> Program {
+        program()
+    }
+
+    fn initial_state(&self) -> AccountsState {
+        self.initial
+    }
+
+    fn store_of(state: AccountsState) -> Store {
+        state.to_store()
+    }
+
+    fn state_of(store: &Store) -> AccountsState {
+        AccountsState::from_store(store)
+    }
+
+    fn calls(&self) -> Vec<Call> {
+        calls_of(&self.calls)
+    }
 }
