@@ -572,6 +572,7 @@ mod kiln_e4_04 {
     }
 
     #[test]
+    #[ignore = "needs the measuring machine's CPU topology (CPU 2, its sibling 8, a further CPU), protocol §9; run-pilot-night.sh runs it there"]
     fn a_comparison_whose_passthrough_build_cannot_start_is_an_error_not_interference() {
         let (_dir, evidence) = evidence();
         let fixture = fixture_with(
@@ -592,7 +593,8 @@ mod kiln_e4_04 {
             .expect_err("an unstartable build must stop the pilot")
             .to_string();
         assert!(
-            message.contains("measurement failed for point-update/small/full"),
+            message.contains("measurement failed for point-update/small/full")
+                && message.contains("No such file or directory"),
             "got: {message}"
         );
         assert!(

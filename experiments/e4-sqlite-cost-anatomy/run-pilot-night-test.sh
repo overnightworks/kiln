@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests run-pilot-night.sh's argument handling, build step and
-# preflight-failure path against a fake build step and fake "harness
+# preflight-failure path against a copy of the script that sits beside a
+# fake build step, a fake topology step and fake "harness
 # binaries" (plain shell scripts standing in for the real release
 # binaries) — never a real build or pilot run. Each fake binary's
 # `preflight`/`pilot` subcommands just record how they were called, so
@@ -11,7 +12,7 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-night_script="$script_dir/run-pilot-night.sh"
+real_night_script="$script_dir/run-pilot-night.sh"
 
 failures=0
 pass() { echo "PASS [KILN-E4-19]: $1"; }
@@ -29,7 +30,19 @@ calls_dir="$work_dir/calls"
 # a record in --output-dir. FAKE_BUILD_FAILS makes it fail, FAKE_NO_RECORD
 # makes it leave no record and FAKE_PREFLIGHT_EXIT makes the fake
 # instrumented binary's preflight exit with that code.
-fake_build_step="$work_dir/fake-build-step"
+# The script finds its steps next to itself, so the copy under test lives
+# in a throwaway repository beside the fakes; production has no override.
+night_dir="$work_dir/night"
+mkdir -p "$night_dir"
+git -C "$night_dir" init --quiet
+git -C "$night_dir" -c user.name=test -c user.email=test@example.com \
+  commit --quiet --allow-empty -m "the commit under test"
+git -C "$night_dir" branch --quiet -M main
+night_script="$night_dir/run-pilot-night.sh"
+cp "$real_night_script" "$night_script"
+commit_sha="$(git -C "$night_dir" rev-parse HEAD)"
+
+fake_build_step="$night_dir/build-pilot-binaries.sh"
 cat >"$fake_build_step" <<FAKE
 #!/usr/bin/env bash
 set -euo pipefail
@@ -68,7 +81,7 @@ lock_file="$work_dir/probe-stack.lock"
 output_root="$work_dir/pilot-output"
 
 # The fake topology step: records its arguments; FAKE_TOPOLOGY_FAILS makes it fail.
-fake_topology_step="$work_dir/fake-topology-step"
+fake_topology_step="$night_dir/run-topology-tests.sh"
 cat >"$fake_topology_step" <<FAKE
 #!/usr/bin/env bash
 set -euo pipefail
@@ -79,9 +92,9 @@ FAKE
 chmod +x "$fake_topology_step"
 
 night() {
-  # night ARGS...: the night script against the fake build step, any
+  # night ARGS...: the night script copy beside the fake steps, any
   # FAKE_* variable the caller set, and a private lock.
-  KILN_E4_BUILD_STEP="$fake_build_step" KILN_E4_TOPOLOGY_STEP="$fake_topology_step" KILN_E4_PROBE_LOCK="$lock_file" "$night_script" "$@"
+  KILN_E4_PROBE_LOCK="$lock_file" "$night_script" "$@"
 }
 
 no_calls() {
@@ -99,7 +112,7 @@ else
   fail "missing-commit message was not clear: $(cat "$work_dir/stderr-missing-args")"
 fi
 
-if night --commit abc123 --unknown-flag value >/dev/null 2>"$work_dir/stderr-unknown-flag"; then
+if night --commit "$commit_sha" --unknown-flag value >/dev/null 2>"$work_dir/stderr-unknown-flag"; then
   fail "an unknown flag must exit non-zero"
 else
   pass "an unknown flag exits non-zero"
@@ -112,9 +125,9 @@ fi
 
 # --- the build step -----------------------------------------------------
 
-FAKE_BUILD_FAILS=1 night --commit abc123 --output-root "$output_root" \
+FAKE_BUILD_FAILS=1 night --commit "$commit_sha" --output-root "$output_root" \
   >/dev/null 2>"$work_dir/stderr-build-fail" && build_fail_exit=0 || build_fail_exit=$?
-if [[ "$build_fail_exit" -ne 0 ]] && grep -qi "building commit 'abc123' failed" "$work_dir/stderr-build-fail"; then
+if [[ "$build_fail_exit" -ne 0 ]] && grep -qi "building commit '$commit_sha' failed" "$work_dir/stderr-build-fail"; then
   pass "a failing build exits non-zero with a clear message"
 else
   fail "build failure was not handled (exit $build_fail_exit): $(cat "$work_dir/stderr-build-fail")"
@@ -126,7 +139,7 @@ else
 fi
 rm -rf "$calls_dir"
 
-FAKE_NO_RECORD=1 night --commit abc123 --output-root "$output_root" \
+FAKE_NO_RECORD=1 night --commit "$commit_sha" --output-root "$output_root" \
   >/dev/null 2>"$work_dir/stderr-no-record" && no_record_exit=0 || no_record_exit=$?
 if [[ "$no_record_exit" -ne 0 ]] && grep -q "no build record" "$work_dir/stderr-no-record" \
     && no_calls preflight && no_calls pilot; then
@@ -138,7 +151,7 @@ rm -rf "$calls_dir"
 
 # --- the topology-bound tests -------------------------------------------
 
-FAKE_TOPOLOGY_FAILS=1 night --commit abc123 --output-root "$output_root" \
+FAKE_TOPOLOGY_FAILS=1 night --commit "$commit_sha" --output-root "$output_root" \
   >/dev/null 2>"$work_dir/stderr-topology-fail" && topology_fail_exit=0 || topology_fail_exit=$?
 if [[ "$topology_fail_exit" -ne 0 ]] && grep -q "topology-bound tests failed" "$work_dir/stderr-topology-fail"; then
   pass "failing topology-bound tests exit non-zero with a clear message"
@@ -152,17 +165,39 @@ else
 fi
 rm -rf "$calls_dir"
 
-night --commit abc123 --output-root "$output_root" >/dev/null 2>&1
-if [[ "$(cat "$calls_dir"/topology-* 2>/dev/null)" == "--commit abc123" ]]; then
+night --commit "$commit_sha" --output-root "$output_root" >/dev/null 2>&1
+if [[ "$(cat "$calls_dir"/topology-* 2>/dev/null)" == "--commit "$commit_sha"" ]]; then
   pass "the topology-bound tests run once, against the commit the night builds"
 else
   fail "the topology step was not called once with the commit: $(cat "$calls_dir"/topology-* 2>/dev/null || true)"
 fi
 rm -rf "$calls_dir" "$output_root"
 
+for symbolic in HEAD main; do
+  night --commit "$symbolic" --output-root "$output_root" >/dev/null 2>&1
+  build_arguments="$(cat "$calls_dir"/build-* 2>/dev/null || true)"
+  topology_arguments="$(cat "$calls_dir"/topology-* 2>/dev/null || true)"
+  if [[ "$build_arguments" == "--commit $commit_sha --output-dir "* \
+      && "$topology_arguments" == "--commit $commit_sha" ]]; then
+    pass "'$symbolic' is resolved once: the build and the topology tests both get the full SHA"
+  else
+    fail "'$symbolic' reached the steps unresolved: build '$build_arguments', topology '$topology_arguments'"
+  fi
+  rm -rf "$calls_dir" "$output_root"
+done
+
+if night --commit no-such-ref --output-root "$output_root" >/dev/null 2>&1; then
+  fail "an unknown ref must exit non-zero"
+elif no_calls build && no_calls topology; then
+  pass "an unknown ref starts neither the build nor the topology tests"
+else
+  fail "an unknown ref still started a step"
+fi
+rm -rf "$calls_dir" "$output_root"
+
 # --- preflight-failure path --------------------------------------------
 
-FAKE_PREFLIGHT_EXIT=1 night --commit abc123 --output-root "$output_root" \
+FAKE_PREFLIGHT_EXIT=1 night --commit "$commit_sha" --output-root "$output_root" \
   >"$work_dir/stdout-preflight-fail" 2>"$work_dir/stderr-preflight-fail" \
   && preflight_fail_exit=0 || preflight_fail_exit=$?
 
@@ -187,7 +222,7 @@ rm -rf "$calls_dir" "$output_root"
 
 # --- happy path builds first, then reaches the pilot with the right arguments
 
-night --commit abc123 --output-root "$output_root" \
+night --commit "$commit_sha" --output-root "$output_root" \
   >"$work_dir/stdout-happy" 2>"$work_dir/stderr-happy" \
   && happy_exit=0 || happy_exit=$?
 
@@ -201,7 +236,7 @@ build_call="$(cat "$calls_dir"/build-* 2>/dev/null || true)"
 pilot_call="$(cat "$calls_dir"/pilot-* 2>/dev/null || true)"
 preflight_call="$(cat "$calls_dir"/preflight-* 2>/dev/null || true)"
 build_dir="${build_call##*--output-dir }"
-if [[ "$build_call" == "--commit abc123 --output-dir "* && -n "$build_dir" ]]; then
+if [[ "$build_call" == "--commit "$commit_sha" --output-dir "* && -n "$build_dir" ]]; then
   pass "the build step is asked to build the given commit into a directory of its own"
 else
   fail "the build step was not called as expected: $build_call"
@@ -242,7 +277,7 @@ else
   fail "the build directory $build_dir was left behind"
 fi
 
-FAKE_PILOT_EXIT=1 night --commit abc123 --output-root "$work_dir/failing-pilot-output" \
+FAKE_PILOT_EXIT=1 night --commit "$commit_sha" --output-root "$work_dir/failing-pilot-output" \
   >/dev/null 2>&1 && pilot_fail_exit=0 || pilot_fail_exit=$?
 if [[ "$pilot_fail_exit" -eq 1 ]]; then
   pass "the script exits with the pilot's own status"
@@ -260,7 +295,7 @@ chmod +x "$work_dir/fixed-clock/date"
 same_second_root="$work_dir/same-second-output"
 
 for _ in 1 2; do
-  PATH="$work_dir/fixed-clock:$PATH" night --commit abc123 --output-root "$same_second_root" \
+  PATH="$work_dir/fixed-clock:$PATH" night --commit "$commit_sha" --output-root "$same_second_root" \
     >/dev/null 2>&1
   if [[ -z "${first_run_dir:-}" ]]; then
     first_run_dir="$(echo "$same_second_root"/*/)"

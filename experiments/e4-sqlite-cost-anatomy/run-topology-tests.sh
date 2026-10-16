@@ -27,10 +27,28 @@ commit="$(git -C "$repository" rev-parse --verify --quiet "$2^{commit}")" \
   || { echo "run-topology-tests.sh: '$2' is not a commit of $repository" >&2; exit 1; }
 
 work_dir="$(mktemp -d)"
-trap 'rm -rf "$work_dir"' EXIT
+tests_pid=""
+
+stop_tests() {
+  # The tests run in a process group of their own (setsid), so a signal
+  # aimed at this script alone still has to stop cargo, the compilers and
+  # the test processes before their directory goes away.
+  if [[ -n "$tests_pid" ]]; then
+    kill -TERM -- "-$tests_pid" 2>/dev/null || true
+    wait "$tests_pid" 2>/dev/null || true
+  fi
+}
+trap 'stop_tests; rm -rf "$work_dir"' EXIT
+trap 'exit 143' INT TERM
+
 git clone --quiet --no-checkout "$repository" "$work_dir/source"
 git -C "$work_dir/source" checkout --quiet --detach "$commit"
 
-CARGO_TARGET_DIR="$work_dir/target" cargo test --locked \
+CARGO_TARGET_DIR="$work_dir/target" setsid cargo test --locked \
   --manifest-path "$work_dir/source/experiments/e4-sqlite-cost-anatomy/harness/Cargo.toml" \
-  -- --ignored
+  -- --ignored &
+tests_pid=$!
+tests_status=0
+wait "$tests_pid" || tests_status=$?
+tests_pid=""
+exit "$tests_status"

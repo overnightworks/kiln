@@ -24,10 +24,14 @@
 #   run-pilot-night.sh --commit REV [--output-root DIR]
 #
 # KILN_E4_PROBE_LOCK overrides the probe-stack lock file path (default
-# /tmp/probe-stack.lock, the one shared across repositories) and
-# KILN_E4_BUILD_STEP the build script and KILN_E4_TOPOLOGY_STEP the
-# topology-test script — test seams only; a real night run
-# always uses the shared lock and the real build script.
+# /tmp/probe-stack.lock, the one shared across repositories) — a test seam
+# only. The build and topology steps are the scripts next to this one; a
+# test runs a copy of this script beside fake steps instead.
+#
+# --commit is resolved once to a full commit SHA before anything is built,
+# and both the build and the topology tests receive that SHA, so a branch
+# moving during the build or the wait for the lock cannot make them judge
+# different code.
 
 set -euo pipefail
 
@@ -67,8 +71,14 @@ if [[ -z "$output_root" ]]; then
   output_root="$script_dir/pilot"
 fi
 
-build_step="${KILN_E4_BUILD_STEP:-$script_dir/build-pilot-binaries.sh}"
-topology_step="${KILN_E4_TOPOLOGY_STEP:-$script_dir/run-topology-tests.sh}"
+build_step="$script_dir/build-pilot-binaries.sh"
+topology_step="$script_dir/run-topology-tests.sh"
+if ! commit_sha="$(git -C "$script_dir" rev-parse --verify --quiet "$commit^{commit}")"; then
+  echo "run-pilot-night.sh: '$commit' is not a commit of this repository" >&2
+  exit 1
+fi
+commit="$commit_sha"
+
 build_dir="$(mktemp -d)"
 trap 'rm -rf "$build_dir"' EXIT
 
