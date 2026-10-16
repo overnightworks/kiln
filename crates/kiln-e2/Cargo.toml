@@ -1,0 +1,9 @@
+[package]
+name = "kiln-e2"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "E2's oracle: the three frozen families as kiln-ir programs and their seeded batch generators (experiments/e2-parallel-ordered-transactions/inputs.md)."
+
+[dependencies]
+kiln-ir = { path = "../kiln-ir" }
