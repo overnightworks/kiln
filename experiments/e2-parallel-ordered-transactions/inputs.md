@@ -231,6 +231,14 @@ u)`:
 <= u <= 1000`. Atomic summaries: `allocate(q) = (-q, 0, 1000)`,
 `refill(q) = (q, 0, 1000)`, `ε = (0, 0, 1000)`.
 
+This representation is not canonical: distinct triples can denote the same
+transformer on `[0, 1000]`. For example `ε ⊕ allocate(7) = (-7, 0, 993)`
+while `allocate(7) = (-7, 0, 1000)`; both map every `x` in `[0, 1000]` to
+`clamp(x - 7, 0, 1000)`. The identity laws `ε ⊕ S = S ⊕ ε = S` therefore
+hold semantically (same transformer on the domain), not byte for byte, and
+a test checks them through `apply` on the domain, never by comparing
+values. Associativity, proven below, does hold on the values themselves.
+
 **Apply.** `apply((a, l, u), x) = clamp(x + a, l, u)`.
 
 **Combine.** `(a1, l1, u1) ⊕ (a2, l2, u2) = (a1 + a2, clamp(l1 + a2, l2,
@@ -936,14 +944,18 @@ the balances near its threshold, because a funds test that never fails is
 not exercised. Each call touches a
 given account's balance with probability `0.3` (a deposit to it, a
 withdrawal from it, a transfer from it, or a transfer to it, each `0.075`),
-so a batch of 256 makes about 77 such moves, of root-mean-square size about
-`5 800` (`amount = uniform(1, 10 000)`), and roughly balanced in sign. The
-balance therefore wanders by about `√77 · 5 800 ≈ 50 000` over a batch of
+so a batch of 256 draws about 77 candidate moves on it, of
+root-mean-square size about `5 800` (`amount = uniform(1, 10 000)`), and
+roughly balanced in sign. Fewer of them write: malformed amounts, frozen
+accounts and insufficient funds suppress some. As an illustration only, the
+balance wanders by at most about `√77 · 5 800 ≈ 50 000` over a batch of
 256, and by about half that over 64. Starting balances up to `1 000 000`
 would leave most accounts far from `0`, so `insufficient_funds` would
 rarely occur at the gating sizes; `uniform(0, 50 000)`, five times
-`X_MAX`, puts the funds test on both sides of its threshold at every gating
-size. This is an estimate from the stated distribution, not a measurement.
+`X_MAX`, encourages the funds test to fall on both sides of its threshold.
+It does not guarantee both outcomes at every gating size or in every
+batch. This is an estimate from the stated distribution, not a
+measurement, and the distribution is frozen as stated.
 The summary's size does not depend on the initial state, because a summary
 denotes its calls' transformer on every state.
 
