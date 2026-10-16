@@ -1,14 +1,14 @@
 # `kiln-e4`
 
 `experiments/e4-sqlite-cost-anatomy/harness` is E4's measurement harness:
-the run driver, the passthrough build, the feasibility pilot and the night
-script that runs it. This file owns the observable behavior of those parts.
+the run driver, the passthrough build, the feasibility pilot, the build step
+and the night script that runs it. This file owns the observable behavior of those parts.
 The frozen protocol (`experiments/e4-sqlite-cost-anatomy/protocol.md`, as
 amended in #30) owns the measurements, thresholds and rules; each criterion
 cites the section it derives from instead of restating it. A test claims a
 criterion by living in the module named for it: `mod kiln_e4_05 { #[test]
 fn ... }` claims `KILN-E4-05`; the night script's test claims `KILN-E4-19`
-in its check names. One criterion per module; several tests may share it.
+and the build script's test `KILN-E4-27` in their check names. One criterion per module; several tests may share it.
 
 ## Run driver
 
