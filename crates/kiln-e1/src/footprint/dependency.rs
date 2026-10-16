@@ -138,7 +138,7 @@ fn whole_key_of_one_row(
     let [Operand::Column { read, row, .. }, ..] = key else {
         return None;
     };
-    let matches_key_column = |(component, key_column): (&&Operand, &ColumnName)| matches!(component, Operand::Column { row: from, column, .. } if from.is_same_row_as(row) && column == key_column);
+    let matches_key_column = |(component, key_column): (&&Operand, &ColumnName)| matches!(component, Operand::Column { row: from, column, .. } if from == row && column == key_column);
     if key.len() != key_columns.len() || !key.iter().zip(key_columns).all(matches_key_column) {
         return None;
     }

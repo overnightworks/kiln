@@ -2,7 +2,8 @@
 //! each, the accesses and the reads their targets depend on.
 
 use kiln_ir::{
-    Block, Condition, Effect, Expr, Function, IndexName, Schema, Slot, TableName, Terminal,
+    slots_released_by_iteration, Block, Condition, Effect, Expr, Function, IndexName, Schema, Slot,
+    TableName, Terminal,
 };
 
 use super::cause::UnknownCause;
@@ -183,8 +184,10 @@ impl Walker<'_> {
                 self.read_range(range, *into, node, facts)
             }
             Effect::Iterate { source, row, body } => {
-                facts.alias(*row, *source, &node)?;
-                self.effects(body, &node.iteration_body(), facts)
+                facts.enter_iteration(*row, *source, &node)?;
+                self.effects(body, &node.iteration_body(), facts)?;
+                facts.end_iteration(slots_released_by_iteration(*row, body));
+                Ok(())
             }
         }
     }

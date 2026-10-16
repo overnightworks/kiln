@@ -85,3 +85,24 @@ pub enum Effect {
         body: Vec<Effect>,
     },
 }
+
+/// The slots an [`Effect::Iterate`] with row slot `row` and this `body`
+/// releases when its loop ends: the row slot and every slot the body binds,
+/// at any depth, so nothing an iteration read outlives it. After the loop a
+/// projection or branch on them sees an absence, whether the range held rows
+/// or not.
+pub fn slots_released_by_iteration(row: Slot, body: &[Effect]) -> Vec<Slot> {
+    let mut released = vec![row];
+    for effect in body {
+        match effect {
+            Effect::Read { into, .. }
+            | Effect::ReadRange { into, .. }
+            | Effect::ReadIndexRange { into, .. } => released.push(*into),
+            Effect::Iterate { row, body, .. } => {
+                released.extend(slots_released_by_iteration(*row, body));
+            }
+            Effect::Insert { .. } | Effect::Update { .. } | Effect::Delete { .. } => {}
+        }
+    }
+    released
+}

@@ -17,29 +17,16 @@ pub struct ReadRef {
 
 /// The binding occurrence of a row: the iteration that yielded it or the read
 /// that bound it, never the slot name, which may be bound again. It says which
-/// row a column came from, not what data the column names, so it is left out
-/// of equality: two arms that each access every row of a range by its full key
-/// name the same targets. Compare occurrences with `is_same_row_as`.
-#[derive(Clone, Debug)]
+/// row a column came from: two columns name components of one row exactly when
+/// their occurrences are equal.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RowOrigin(NodePath);
 
 impl RowOrigin {
     pub fn new(binding: NodePath) -> Self {
         Self(binding)
     }
-
-    pub fn is_same_row_as(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
 }
-
-impl PartialEq for RowOrigin {
-    fn eq(&self, _: &Self) -> bool {
-        true
-    }
-}
-
-impl Eq for RowOrigin {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Operand {
@@ -69,6 +56,37 @@ impl Operand {
                 uses
             }
         }
+    }
+
+    /// The row occurrences the operand's columns come from, in reading order.
+    pub fn origins(&self) -> Vec<&RowOrigin> {
+        match self {
+            Self::Literal(_) | Self::Parameter(_) => Vec::new(),
+            Self::Column { row, .. } => vec![row],
+            Self::Arithmetic(_, left, right) => {
+                let mut origins = left.origins();
+                origins.extend(right.origins());
+                origins
+            }
+        }
+    }
+
+    /// The operand with every row occurrence renamed by `rename`, or `None`
+    /// when `rename` has no name for one of them.
+    pub fn renamed(&self, rename: &impl Fn(&RowOrigin) -> Option<RowOrigin>) -> Option<Self> {
+        Some(match self {
+            Self::Literal(_) | Self::Parameter(_) => self.clone(),
+            Self::Column { read, row, column } => Self::Column {
+                read: read.clone(),
+                row: rename(row)?,
+                column: column.clone(),
+            },
+            Self::Arithmetic(operator, left, right) => Self::Arithmetic(
+                *operator,
+                Box::new(left.renamed(rename)?),
+                Box::new(right.renamed(rename)?),
+            ),
+        })
     }
 
     /// Arithmetic over a read result: its value is no read's column or key, so

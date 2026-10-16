@@ -262,6 +262,17 @@ mod kiln_e1_37 {
     }
 
     #[test]
+    fn a_row_slot_bound_again_by_a_later_read_names_that_read_s_row_not_the_range_s() {
+        let body = returns(vec![
+            lines_of_one_order(),
+            iterate(0, 1, vec![]),
+            read(LINE_REFS, param("id"), 1),
+            read_at(LINES, line_key_of(1), 2),
+        ]);
+        assert_unknown(body, key_not_identified());
+    }
+
+    #[test]
     fn arms_that_each_access_every_row_of_a_range_by_its_full_key_reach_the_same_targets() {
         let each_row_in_slot = |row: u32| {
             returns(vec![iterate(
@@ -325,5 +336,90 @@ mod kiln_e1_37 {
             ),
         ]);
         assert_unknown(body, key_not_identified());
+    }
+}
+
+mod kiln_e1_19 {
+    use super::*;
+
+    const SELECTOR: &str = "f/body/effects[1]";
+
+    fn lines_of_one_order() -> Effect {
+        read_range_at(
+            LINES,
+            line_at("w", "d", literal(0)),
+            line_at("w", "d", literal(9)),
+            0,
+        )
+    }
+
+    /// A branch on a data read whose arms run over the rows of one range read
+    /// before it.
+    fn arms_over_one_range(present: Vec<Effect>, absent: Vec<Effect>) -> kiln_ir::Block {
+        branch_on_presence(
+            vec![lines_of_one_order(), read("accounts", param("id"), 5)],
+            5,
+            returns(present),
+            returns(absent),
+        )
+    }
+
+    /// Every pair of rows of the range, the row in `outer` iterated around the
+    /// row in `inner`, archived under `key`.
+    fn every_pair(outer: u32, inner: u32, key: Vec<Expr>) -> Vec<Effect> {
+        vec![iterate(
+            0,
+            outer,
+            vec![iterate(0, inner, vec![insert_at(ARCHIVE, key)])],
+        )]
+    }
+
+    fn archive_key(w: u32, d: u32, o: u32) -> Vec<Expr> {
+        vec![
+            column_of(w, "w_id"),
+            column_of(d, "d_id"),
+            column_of(o, "o_id"),
+        ]
+    }
+
+    #[test]
+    fn arms_pairing_the_components_of_two_rows_differently_reach_incomparable_targets() {
+        let body = arms_over_one_range(
+            every_pair(1, 2, archive_key(1, 1, 2)),
+            every_pair(1, 2, archive_key(1, 2, 2)),
+        );
+        assert_unknown(
+            body,
+            UnknownCause::DataSelectedTargets {
+                selector: SELECTOR.to_owned(),
+            },
+        );
+    }
+
+    #[test]
+    fn arms_nesting_two_iterations_the_other_way_round_around_one_key_reach_the_same_targets() {
+        let body = arms_over_one_range(
+            every_pair(1, 2, archive_key(1, 1, 2)),
+            every_pair(2, 1, archive_key(1, 1, 2)),
+        );
+        assert_eq!(category_of(body), ONE_HOP);
+    }
+
+    #[test]
+    fn arms_reaching_the_same_targets_through_iterations_in_another_order_count_as_unknown() {
+        let lines_then_archive = vec![
+            iterate(0, 1, vec![update_at(LINES, line_key_of(1), &[])]),
+            iterate(0, 2, vec![insert_at(ARCHIVE, line_key_of(2))]),
+        ];
+        let archive_then_lines = vec![
+            iterate(0, 1, vec![insert_at(ARCHIVE, line_key_of(1))]),
+            iterate(0, 2, vec![update_at(LINES, line_key_of(2), &[])]),
+        ];
+        assert_unknown(
+            arms_over_one_range(lines_then_archive, archive_then_lines),
+            UnknownCause::DataSelectedTargets {
+                selector: SELECTOR.to_owned(),
+            },
+        );
     }
 }

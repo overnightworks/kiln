@@ -26,7 +26,7 @@ mod validation;
 mod value;
 
 pub use block::{Block, Terminal};
-pub use effect::Effect;
+pub use effect::{slots_released_by_iteration, Effect};
 pub use expression::{ArithmeticOp, Condition, Expr, Relation, Slot};
 pub use program::{Function, Parameter, ParameterType, Program};
 pub use schema::{

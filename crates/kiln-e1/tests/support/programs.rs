@@ -47,6 +47,10 @@ pub const LINES: &str = "lines";
 /// A table keyed by the same column names as [`LINES`].
 pub const ARCHIVE: &str = "lines_archive";
 
+/// A table keyed by [`KEY_COLUMN`] whose other columns carry the names of
+/// [`LINE_KEY`]: a row of it names a line without being one.
+pub const LINE_REFS: &str = "line_refs";
+
 /// The key of [`LINES`] in declared order.
 pub const LINE_KEY: [&str; 3] = ["w_id", "d_id", "o_id"];
 
@@ -202,8 +206,8 @@ fn keyed_table(name: &str, key: &[&str], other_columns: &[&str]) -> Table {
 
 /// Orders reference customers and products, customers reference regions; the
 /// declared indexes are per customer and per tenant. Every table is keyed by
-/// [`KEY_COLUMN`] but [`LINES`], which has the three-column [`LINE_KEY`] and
-/// is indexed by item.
+/// [`KEY_COLUMN`] but [`LINES`] and [`ARCHIVE`], which have the three-column
+/// [`LINE_KEY`] and are indexed by item.
 pub fn schema() -> Schema {
     let foreign_key = |from: &str, column: &str, to: &str| ForeignKey {
         table: table(from),
@@ -236,6 +240,7 @@ pub fn schema() -> Schema {
             single_key("a", &[]),
             single_key("b", &[]),
             single_key("shared", &[]),
+            single_key(LINE_REFS, &LINE_KEY),
             keyed_table(LINES, &LINE_KEY, &["customer_id", "item_id"]),
             keyed_table(ARCHIVE, &LINE_KEY, &["item_id"]),
         ],

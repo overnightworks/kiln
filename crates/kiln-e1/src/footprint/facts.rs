@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use kiln_ir::{IndexName, Slot, TableName};
 
@@ -37,6 +37,24 @@ impl RangeBounds {
     pub fn all(&self) -> impl Iterator<Item = &Operand> {
         self.start.iter().chain(&self.end).chain([&self.bound])
     }
+
+    fn renamed(&self, rename: &impl Fn(&RowOrigin) -> Option<RowOrigin>) -> Option<Self> {
+        Some(Self {
+            start: renamed_all(&self.start, rename)?,
+            end: renamed_all(&self.end, rename)?,
+            bound: self.bound.renamed(rename)?,
+        })
+    }
+}
+
+fn renamed_all(
+    operands: &[Operand],
+    rename: &impl Fn(&RowOrigin) -> Option<RowOrigin>,
+) -> Option<Vec<Operand>> {
+    operands
+        .iter()
+        .map(|operand| operand.renamed(rename))
+        .collect()
 }
 
 /// What an access touches, independent of whether it reads or writes.
@@ -54,6 +72,37 @@ pub enum Target {
         index: IndexName,
         bounds: RangeBounds,
     },
+}
+
+impl Target {
+    /// The key or bounds that say what the target is, in reading order.
+    pub fn operands(&self) -> Vec<&Operand> {
+        match self {
+            Self::Row { key, .. } => key.iter().collect(),
+            Self::PrimaryRange { bounds, .. } | Self::IndexRange { bounds, .. } => {
+                bounds.all().collect()
+            }
+        }
+    }
+
+    /// The target with every row occurrence renamed by `rename`, or `None`
+    /// when `rename` has no name for one of them.
+    pub fn renamed(&self, rename: &impl Fn(&RowOrigin) -> Option<RowOrigin>) -> Option<Self> {
+        Some(match self {
+            Self::Row { table, key } => Self::Row {
+                table: table.clone(),
+                key: renamed_all(key, rename)?,
+            },
+            Self::PrimaryRange { table, bounds } => Self::PrimaryRange {
+                table: table.clone(),
+                bounds: bounds.renamed(rename)?,
+            },
+            Self::IndexRange { index, bounds } => Self::IndexRange {
+                index: index.clone(),
+                bounds: bounds.renamed(rename)?,
+            },
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -85,20 +134,26 @@ pub struct Obstacle {
     pub cause: UnknownCause,
 }
 
-/// `row` is the current row of the sequence bound at `origin`, as the iteration
-/// at `iteration` yields it.
+/// What a bound slot holds at a point of the path, as the evaluator binds it.
+/// A slot holds nothing before a read binds it and after the iteration that
+/// bound it ends.
 #[derive(Clone, Debug)]
-struct RowAlias {
-    row: Slot,
-    origin: Slot,
-    iteration: NodePath,
+enum SlotContent {
+    /// The row or rows `read` bound.
+    Read(ReadRef),
+    /// The current row of the rows `source` bound, as the iteration at
+    /// `iteration` yields it.
+    IterationRow {
+        source: ReadRef,
+        iteration: NodePath,
+    },
 }
 
 /// Everything learned about one feasible path through a function's body.
 #[derive(Clone, Debug, Default)]
 pub struct PathFacts {
     bindings: Vec<Binding>,
-    aliases: Vec<RowAlias>,
+    slots: HashMap<Slot, SlotContent>,
     presence: Vec<(NodePath, bool)>,
     argument_decisions: Vec<(NodePath, bool)>,
     pub accesses: Vec<Access>,
@@ -107,56 +162,66 @@ pub struct PathFacts {
 }
 
 impl PathFacts {
+    /// Binds `binding.slot` to the read, ending whatever it held before.
     pub fn bind(&mut self, binding: Binding) {
+        let read = ReadRef {
+            slot: binding.slot,
+            node: binding.node.clone(),
+        };
+        self.slots.insert(binding.slot, SlotContent::Read(read));
         self.bindings.push(binding);
     }
 
-    /// `row` is the current row of the sequence `source` bound, as the
+    /// Binds `row` to the current row of the rows `source` holds, as the
     /// iteration at `iteration` yields it.
-    pub fn alias(
+    pub fn enter_iteration(
         &mut self,
         row: Slot,
         source: Slot,
         iteration: &NodePath,
     ) -> Result<(), ClassifyError> {
-        let origin = self.read_of(source, iteration)?.slot;
-        self.aliases.push(RowAlias {
-            row,
-            origin,
+        let source = self.read_of(source, iteration)?;
+        let content = SlotContent::IterationRow {
+            source,
             iteration: iteration.clone(),
-        });
+        };
+        self.slots.insert(row, content);
         Ok(())
     }
 
-    fn alias_of(&self, slot: Slot) -> Option<&RowAlias> {
-        self.aliases.iter().rev().find(|alias| alias.row == slot)
+    /// Empties the slots the evaluator releases when an iteration ends.
+    pub fn end_iteration(&mut self, released: impl IntoIterator<Item = Slot>) {
+        for slot in released {
+            self.slots.remove(&slot);
+        }
     }
 
     /// The read that produced `slot`'s rows.
     pub fn read_of(&self, slot: Slot, at: &NodePath) -> Result<ReadRef, ClassifyError> {
-        let origin = self.alias_of(slot).map_or(slot, |alias| alias.origin);
-        self.bindings
-            .iter()
-            .rev()
-            .find(|binding| binding.slot == origin)
-            .map(|binding| ReadRef {
-                slot: origin,
-                node: binding.node.clone(),
-            })
-            .ok_or_else(|| ClassifyError::UnboundSlot {
-                slot,
-                at: at.to_string(),
-            })
+        match self.content_of(slot, at)? {
+            SlotContent::Read(read) | SlotContent::IterationRow { source: read, .. } => {
+                Ok(read.clone())
+            }
+        }
     }
 
     /// Which binding occurrence `slot` stands for: the iteration that yielded
     /// the row, or the read that bound the slot itself. A slot name may be
     /// bound again; the occurrence is what tells the rows apart.
     pub fn row_origin_of(&self, slot: Slot, at: &NodePath) -> Result<RowOrigin, ClassifyError> {
-        match self.alias_of(slot) {
-            Some(alias) => Ok(RowOrigin::new(alias.iteration.clone())),
-            None => Ok(RowOrigin::new(self.read_of(slot, at)?.node)),
-        }
+        Ok(RowOrigin::new(match self.content_of(slot, at)? {
+            SlotContent::Read(read) => read.node.clone(),
+            SlotContent::IterationRow { iteration, .. } => iteration.clone(),
+        }))
+    }
+
+    fn content_of(&self, slot: Slot, at: &NodePath) -> Result<&SlotContent, ClassifyError> {
+        self.slots
+            .get(&slot)
+            .ok_or_else(|| ClassifyError::UnboundSlot {
+                slot,
+                at: at.to_string(),
+            })
     }
 
     pub fn binding_of(&self, read: &ReadRef) -> Option<&Binding> {

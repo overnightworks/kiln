@@ -31,10 +31,10 @@ pub use evaluator::{
 };
 pub use identifiers::{AbortName, ColumnName, FunctionName, IndexName, ParameterName, TableName};
 pub use ir::{
-    ArithmeticOp, Block, CheckConstraint, ClampDomain, Column, ColumnType, Comparison, Condition,
-    Effect, Expr, ForeignKey, Function, FunctionFault, Index, IntegerWidth, Key, KeyColumn,
-    KeyDeclaration, Parameter, ParameterType, Program, ProgramError, Relation, Row, Schema,
-    SchemaError, Slot, Table, Terminal, UniqueConstraint, Value,
+    slots_released_by_iteration, ArithmeticOp, Block, CheckConstraint, ClampDomain, Column,
+    ColumnType, Comparison, Condition, Effect, Expr, ForeignKey, Function, FunctionFault, Index,
+    IntegerWidth, Key, KeyColumn, KeyDeclaration, Parameter, ParameterType, Program, ProgramError,
+    Relation, Row, Schema, SchemaError, Slot, Table, Terminal, UniqueConstraint, Value,
 };
 pub use replay::replay;
 pub use store::{KeyedRow, Store};
