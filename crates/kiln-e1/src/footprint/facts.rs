@@ -15,6 +15,16 @@ pub enum BindingKind {
     UndeclaredIndexRange(IndexName),
 }
 
+impl BindingKind {
+    fn binds_a_range(&self) -> bool {
+        match self {
+            Self::PointRead { .. } => false,
+            Self::PrimaryRange { .. } | Self::IndexRange { .. } => true,
+            Self::UndeclaredIndexRange(_) => true,
+        }
+    }
+}
+
 /// A slot bound by a read: what it holds, where, and which earlier reads its
 /// own target depends on.
 #[derive(Clone, Debug)]
@@ -195,9 +205,23 @@ impl PathFacts {
     }
 
     /// Whether an ended iteration released `slot`, so a presence test on it
-    /// finds no row and a projection of it aborts.
+    /// finds no row.
     pub fn is_released(&self, slot: Slot) -> bool {
         self.released.contains(&slot)
+    }
+
+    /// Whether a projection of `slot` finds no current row here, so the
+    /// evaluator aborts at it: an ended iteration released the slot, a range
+    /// read bound it (its rows are current only inside an iteration over
+    /// them), or a presence test found the point read that bound it empty.
+    pub fn holds_no_row(&self, slot: Slot) -> bool {
+        match self.slots.get(&slot) {
+            None => self.is_released(slot),
+            Some(SlotContent::IterationRow { .. }) => false,
+            Some(SlotContent::Read(read)) => self.binding_of(read).is_some_and(|binding| {
+                binding.kind.binds_a_range() || self.presence_of(read) == Some(false)
+            }),
+        }
     }
 
     /// The read that produced `slot`'s rows.

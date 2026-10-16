@@ -154,6 +154,48 @@ mod kiln_e1_27 {
     }
 
     #[test]
+    fn a_projection_finds_no_row_in_a_range_slot_or_in_a_point_read_found_absent() {
+        // Where the projection of slot 2 finds no row, the evaluator logs the
+        // write of `audit` and aborts, so the read selects which table is
+        // written; where it finds one, the arm writes `b` too.
+        let writing_audit_from_2 = || {
+            returns(vec![
+                update("audit", param("x"), &[("c", key_of(2))]),
+                write_b(),
+            ])
+        };
+        let writing_b = || returns(vec![write_b()]);
+        let account = || vec![read("accounts", param("s"), 2)];
+        let range = vec![low_to_high("orders", 2)];
+        let selected = unknown_because(UnknownCause::DataSelectedTargets {
+            selector: "f/body/effects[0]".to_owned(),
+        });
+        let rows = [
+            (
+                "a range read's slot",
+                branch_on_presence(range, 2, writing_audit_from_2(), writing_b()),
+                selected.clone(),
+            ),
+            (
+                "a point read found absent",
+                branch_on_presence(account(), 2, writing_b(), writing_audit_from_2()),
+                selected,
+            ),
+            (
+                "a point read found present",
+                branch_on_presence(account(), 2, writing_audit_from_2(), writing_b()),
+                Ok(ProvenCategory::Static),
+            ),
+        ];
+        let failing: Vec<&str> = rows
+            .into_iter()
+            .filter(|(_, body, truncated)| label_of(body.clone()) != *truncated)
+            .map(|(source, ..)| source)
+            .collect();
+        assert!(failing.is_empty(), "{failing:?}");
+    }
+
+    #[test]
     fn a_write_aborting_at_its_written_column_in_an_iteration_body_forks_on_the_range() {
         // On the first iteration the evaluator logs the write of `audit`, then
         // aborts at its column: `b` is written only where the range is empty.

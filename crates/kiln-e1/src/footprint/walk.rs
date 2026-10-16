@@ -43,9 +43,10 @@ struct RangeRead<'e> {
 
 /// Why walking a block stopped short of deciding its terminal.
 enum Halt {
-    /// The evaluator aborts at `at`, which reads a released slot. Inside the
-    /// body of an iteration whose range may hold no row, it aborts only when
-    /// that range holds one: `unless_empty` is the read that bound the range.
+    /// The evaluator aborts at `at`, which projects a slot holding no row.
+    /// Inside the body of an iteration whose range may hold no row, it aborts
+    /// only when that range holds one: `unless_empty` is the read that bound
+    /// the range.
     Aborts {
         at: NodePath,
         unless_empty: Option<ReadRef>,
@@ -56,7 +57,7 @@ enum Halt {
 impl Halt {
     fn at(node: &NodePath) -> impl Fn(Unresolvable) -> Self + '_ {
         move |unresolvable| match unresolvable {
-            Unresolvable::ReleasedSource => Self::Aborts {
+            Unresolvable::AbsentSource => Self::Aborts {
                 at: node.clone(),
                 unless_empty: None,
             },
@@ -431,7 +432,7 @@ impl Walker<'_> {
     }
 
     /// The operand of what `at` reads. Every place the evaluator reads a slot
-    /// resolves through here, so each one aborts on a released slot alike.
+    /// resolves through here, so each one aborts alike on a slot holding no row.
     fn operand(
         &self,
         facts: &PathFacts,

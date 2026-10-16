@@ -99,9 +99,9 @@ impl Operand {
 /// Why an expression has no operand where the path reaches it.
 #[derive(Debug)]
 pub enum Unresolvable {
-    /// It projects a slot an ended iteration released: the evaluator aborts
-    /// there with `ProjectionSourceAbsent` (`KILN-IR-15`).
-    ReleasedSource,
+    /// It projects a slot that holds no current row where the path reads it:
+    /// the evaluator aborts there with `ProjectionSourceAbsent` (`KILN-IR-15`).
+    AbsentSource,
     Fault(ClassifyError),
 }
 
@@ -123,8 +123,8 @@ pub fn operand_of(
     Ok(match expression {
         Expr::Literal(value) => Operand::Literal(value.clone()),
         Expr::Parameter(parameter) => Operand::Parameter(parameter.clone()),
-        Expr::Projection { slot, .. } if facts.is_released(*slot) => {
-            return Err(Unresolvable::ReleasedSource)
+        Expr::Projection { slot, .. } if facts.holds_no_row(*slot) => {
+            return Err(Unresolvable::AbsentSource)
         }
         Expr::Projection { slot, column } => {
             let read = facts.read_of(*slot, at)?;

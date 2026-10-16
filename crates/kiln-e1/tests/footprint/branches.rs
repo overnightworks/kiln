@@ -160,13 +160,22 @@ mod kiln_e1_19 {
         }
     }
 
+    /// Branches on an account read, so an arm that projects the order never
+    /// projects a row the branch found absent.
+    fn on_an_account(present: Block, absent: Block) -> Block {
+        branch_on_presence(
+            vec![read_order(), read_accounts("k", 2)],
+            2,
+            present,
+            absent,
+        )
+    }
+
     #[test]
     fn a_resolving_arm_against_an_empty_arm_is_one_hop() {
         let resolving = || returns(vec![read_customer_of_order(1)]);
-        let present_resolves =
-            branch_on_presence(vec![read_order()], 0, resolving(), returns(vec![]));
-        let absent_resolves =
-            branch_on_presence(vec![read_order()], 0, returns(vec![]), resolving());
+        let present_resolves = on_an_account(resolving(), returns(vec![]));
+        let absent_resolves = on_an_account(returns(vec![]), resolving());
         assert_eq!(category_of(present_resolves), ONE_HOP);
         assert_eq!(category_of(absent_resolves), ONE_HOP);
     }
@@ -213,8 +222,10 @@ mod kiln_e1_19 {
     #[test]
     fn arms_that_resolve_the_same_read_the_same_way_are_one_hop() {
         let resolving = || returns(vec![read_customer_of_order(1)]);
-        let body = branch_on_presence(vec![read_order()], 0, resolving(), resolving());
-        assert_eq!(category_of(body), ONE_HOP);
+        assert_eq!(
+            category_of(on_an_account(resolving(), resolving())),
+            ONE_HOP
+        );
     }
 
     #[test]
@@ -278,8 +289,10 @@ mod kiln_e1_19 {
 
     #[test]
     fn an_unknown_arm_makes_the_function_unknown() {
-        let body = branch_on_presence(vec![read_order()], 0, static_arm(), unknown_arm());
-        assert_eq!(category_of(body), None);
+        assert_eq!(
+            category_of(on_an_account(static_arm(), unknown_arm())),
+            None
+        );
     }
 
     #[test]
