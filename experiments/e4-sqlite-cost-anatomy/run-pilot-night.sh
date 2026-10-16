@@ -15,13 +15,18 @@
 # overwrites or reuses the last one's record. The binaries and the build
 # record live in a temporary directory removed when the script ends; the
 # build record is copied into the run's directory as part of its evidence.
+# Under the lock and before preflight it also runs the harness tests that
+# need this machine's CPU topology (run-topology-tests.sh, protocol.md §9;
+# CI's two-CPU runner skips them) against the same commit; a failure stops
+# the night before preflight and the pilot.
 #
 # Usage:
 #   run-pilot-night.sh --commit REV [--output-root DIR]
 #
 # KILN_E4_PROBE_LOCK overrides the probe-stack lock file path (default
 # /tmp/probe-stack.lock, the one shared across repositories) and
-# KILN_E4_BUILD_STEP the build script — test seams only; a real night run
+# KILN_E4_BUILD_STEP the build script and KILN_E4_TOPOLOGY_STEP the
+# topology-test script — test seams only; a real night run
 # always uses the shared lock and the real build script.
 
 set -euo pipefail
@@ -63,6 +68,7 @@ if [[ -z "$output_root" ]]; then
 fi
 
 build_step="${KILN_E4_BUILD_STEP:-$script_dir/build-pilot-binaries.sh}"
+topology_step="${KILN_E4_TOPOLOGY_STEP:-$script_dir/run-topology-tests.sh}"
 build_dir="$(mktemp -d)"
 trap 'rm -rf "$build_dir"' EXIT
 
@@ -91,6 +97,11 @@ lock_file="${KILN_E4_PROBE_LOCK:-/tmp/probe-stack.lock}"
 # this script exits.
 exec 9>"$lock_file"
 flock 9
+
+if ! "$topology_step" --commit "$commit"; then
+  echo "run-pilot-night.sh: the topology-bound tests failed on this machine for commit '$commit'; no preflight or pilot started (see output above)" >&2
+  exit 1
+fi
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$output_root"

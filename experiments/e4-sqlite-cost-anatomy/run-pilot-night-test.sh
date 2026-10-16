@@ -67,10 +67,21 @@ chmod +x "$fake_build_step"
 lock_file="$work_dir/probe-stack.lock"
 output_root="$work_dir/pilot-output"
 
+# The fake topology step: records its arguments; FAKE_TOPOLOGY_FAILS makes it fail.
+fake_topology_step="$work_dir/fake-topology-step"
+cat >"$fake_topology_step" <<FAKE
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p "$calls_dir"
+echo "\$*" >>"$calls_dir/topology-\$\$"
+[[ -z "\${FAKE_TOPOLOGY_FAILS:-}" ]] || exit 1
+FAKE
+chmod +x "$fake_topology_step"
+
 night() {
   # night ARGS...: the night script against the fake build step, any
   # FAKE_* variable the caller set, and a private lock.
-  KILN_E4_BUILD_STEP="$fake_build_step" KILN_E4_PROBE_LOCK="$lock_file" "$night_script" "$@"
+  KILN_E4_BUILD_STEP="$fake_build_step" KILN_E4_TOPOLOGY_STEP="$fake_topology_step" KILN_E4_PROBE_LOCK="$lock_file" "$night_script" "$@"
 }
 
 no_calls() {
@@ -124,6 +135,30 @@ else
   fail "a missing build record was not refused (exit $no_record_exit): $(cat "$work_dir/stderr-no-record")"
 fi
 rm -rf "$calls_dir"
+
+# --- the topology-bound tests -------------------------------------------
+
+FAKE_TOPOLOGY_FAILS=1 night --commit abc123 --output-root "$output_root" \
+  >/dev/null 2>"$work_dir/stderr-topology-fail" && topology_fail_exit=0 || topology_fail_exit=$?
+if [[ "$topology_fail_exit" -ne 0 ]] && grep -q "topology-bound tests failed" "$work_dir/stderr-topology-fail"; then
+  pass "failing topology-bound tests exit non-zero with a clear message"
+else
+  fail "topology failure was not handled (exit $topology_fail_exit): $(cat "$work_dir/stderr-topology-fail")"
+fi
+if no_calls preflight && no_calls pilot && [[ ! -e "$output_root" ]]; then
+  pass "neither preflight nor the pilot runs, and no evidence directory exists, after failing topology-bound tests"
+else
+  fail "something ran after failing topology-bound tests"
+fi
+rm -rf "$calls_dir"
+
+night --commit abc123 --output-root "$output_root" >/dev/null 2>&1
+if [[ "$(cat "$calls_dir"/topology-* 2>/dev/null)" == "--commit abc123" ]]; then
+  pass "the topology-bound tests run once, against the commit the night builds"
+else
+  fail "the topology step was not called once with the commit: $(cat "$calls_dir"/topology-* 2>/dev/null || true)"
+fi
+rm -rf "$calls_dir" "$output_root"
 
 # --- preflight-failure path --------------------------------------------
 

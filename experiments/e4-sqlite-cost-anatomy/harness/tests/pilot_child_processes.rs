@@ -170,6 +170,7 @@ mod kiln_e4_07 {
     use super::*;
 
     #[test]
+    #[ignore = "needs the measuring machine's CPU topology (CPU 2, its sibling 8, a further CPU), protocol §9; run-pilot-night.sh runs it there"]
     fn every_workload_runs_in_a_child_and_reports_a_real_mean_wall_time() {
         for workload in Workload::ALL {
             let run = run_half(workload, TINY_PLAN);
@@ -184,6 +185,7 @@ mod kiln_e4_07 {
     }
 
     #[test]
+    #[ignore = "needs the measuring machine's CPU topology (CPU 2, its sibling 8, a further CPU), protocol §9; run-pilot-night.sh runs it there"]
     fn a_half_runs_the_passthrough_build_through_the_same_child_protocol() {
         let run = fixture()
             .host
@@ -214,6 +216,7 @@ mod kiln_e4_07 {
     }
 
     #[test]
+    #[ignore = "needs the measuring machine's CPU topology (CPU 2, its sibling 8, a further CPU), protocol §9; run-pilot-night.sh runs it there"]
     fn a_half_whose_child_fails_is_an_error_quoting_what_the_child_said() {
         let missing_snapshot = tempfile::tempdir().expect("tempdir");
         let fixture = fixture_with(harness_binary(), &missing_snapshot.path().join("absent"));
@@ -255,6 +258,7 @@ mod kiln_e4_07 {
     }
 
     #[test]
+    #[ignore = "needs the measuring machine's CPU topology (CPU 2, its sibling 8, a further CPU), protocol §9; run-pilot-night.sh runs it there"]
     fn a_child_that_exits_unsuccessfully_after_ready_fails_the_half_and_leaves_no_monitor() {
         let dir = tempfile::tempdir().expect("tempdir");
         let child = stand_in(dir.path(), "crashing", "echo ready\nread go\nexit 3");
@@ -302,6 +306,7 @@ mod kiln_e4_07 {
     }
 
     #[test]
+    #[ignore = "needs the measuring machine's CPU topology (CPU 2, its sibling 8, a further CPU), protocol §9; run-pilot-night.sh runs it there"]
     fn a_measurement_child_finishes_well_under_five_seconds() {
         let start = std::time::Instant::now();
         run_half(Workload::PointUpdate, TINY_PLAN);
@@ -309,6 +314,7 @@ mod kiln_e4_07 {
     }
 
     #[test]
+    #[ignore = "needs the measuring machine's CPU topology (CPU 2, its sibling 8, a further CPU), protocol §9; run-pilot-night.sh runs it there"]
     fn a_measurement_child_pins_itself_to_cpu_2_before_it_measures() {
         let scratch = tempfile::tempdir().expect("tempdir");
         let request = MeasureCellRequest {
@@ -343,6 +349,7 @@ mod kiln_e4_05 {
     use super::*;
 
     #[test]
+    #[ignore = "needs the measuring machine's CPU topology (CPU 2, its sibling 8, a further CPU), protocol §9; run-pilot-night.sh runs it there"]
     fn a_half_ends_its_window_at_the_childs_done_stamp_not_when_the_child_exits() {
         let dir = tempfile::tempdir().expect("tempdir");
         let slow_to_clean_up = stand_in(
@@ -370,6 +377,7 @@ mod kiln_e4_05 {
     }
 
     #[test]
+    #[ignore = "needs the measuring machine's CPU topology (CPU 2, its sibling 8, a further CPU), protocol §9; run-pilot-night.sh runs it there"]
     fn a_child_is_held_at_its_done_stamp_until_the_monitor_has_covered_it() {
         let dir = tempfile::tempdir().expect("tempdir");
         let released_at = dir.path().join("released_at");
@@ -412,6 +420,7 @@ mod kiln_e4_05 {
     }
 
     #[test]
+    #[ignore = "needs the measuring machine's CPU topology (CPU 2, its sibling 8, a further CPU), protocol §9; run-pilot-night.sh runs it there"]
     fn a_child_that_reports_a_mean_without_a_done_stamp_fails_the_half() {
         let dir = tempfile::tempdir().expect("tempdir");
         let no_stamp = stand_in(
@@ -439,6 +448,7 @@ mod kiln_e4_24 {
     use super::*;
 
     #[test]
+    #[ignore = "needs the measuring machine's CPU topology (CPU 2, its sibling 8, a further CPU), protocol §9; run-pilot-night.sh runs it there"]
     fn the_monitor_samples_across_the_whole_window_of_a_half() {
         let plan = OperationPlan {
             warmup: 20,
@@ -460,6 +470,7 @@ mod kiln_e4_24 {
     }
 
     #[test]
+    #[ignore = "needs the measuring machine's CPU topology (CPU 2, its sibling 8, a further CPU), protocol §9; run-pilot-night.sh runs it there"]
     fn consecutive_samples_are_at_least_one_interval_apart_and_in_order() {
         let plan = OperationPlan {
             warmup: 20,
@@ -474,6 +485,7 @@ mod kiln_e4_24 {
     }
 
     #[test]
+    #[ignore = "needs the measuring machine's CPU topology (CPU 2, its sibling 8, a further CPU), protocol §9; run-pilot-night.sh runs it there"]
     fn the_idle_machine_is_observed_for_one_interval_between_two_samples() {
         let samples = fixture()
             .host
@@ -486,6 +498,7 @@ mod kiln_e4_24 {
     }
 
     #[test]
+    #[ignore = "needs the measuring machine's CPU topology (CPU 2, its sibling 8, a further CPU), protocol §9; run-pilot-night.sh runs it there"]
     fn no_monitor_process_outlives_the_half_or_the_idle_observation_it_sampled() {
         let mut fixture = fixture();
         fixture.host.monitor_interval = Duration::from_millis(51);
@@ -507,6 +520,7 @@ mod kiln_e4_24 {
     }
 
     #[test]
+    #[ignore = "needs the measuring machine's CPU topology (CPU 2, its sibling 8, a further CPU), protocol §9; run-pilot-night.sh runs it there"]
     fn the_monitor_process_is_pinned_away_from_the_measured_core_and_its_sibling() {
         let mut monitor = Command::new(harness_binary())
             .args(["monitor-stream", "50"])
@@ -590,6 +604,7 @@ mod kiln_e4_04 {
     }
 
     #[test]
+    #[ignore = "needs the measuring machine's CPU topology (CPU 2, its sibling 8, a further CPU), protocol §9; run-pilot-night.sh runs it there"]
     fn real_children_and_a_real_monitor_feed_the_pair_logic_end_to_end() {
         let (_dir, evidence) = evidence();
         fs::write(&evidence.rejected_log, "preexisting line\n").expect("seed the log");
