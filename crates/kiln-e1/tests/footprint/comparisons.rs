@@ -151,7 +151,7 @@ mod kiln_e1_29 {
     fn arms_ordered_by_inclusion_classify_by_their_most_demanding_path() {
         let both = returns(vec![
             read("customers", param("customer_id"), 1),
-            read("orders", param("order_id"), 2),
+            update("ledger", param("entry_id"), &[]),
         ]);
         let cases = [
             (by_customer_id(), returns(vec![])),
