@@ -1,0 +1,11 @@
+--- Durable.tla
++++ Durable.tla
+@@ -190,7 +190,7 @@
+   /\ UNCHANGED <<pc, resp, widened, log, fsyncFailed, reservedAtUnknown, failuresUsed>>
+ 
+ (* What recovery rebuilds: the committed history is the durable log. *)
+-Recover == RecoverTo(log)
++Recover == RecoverTo(SubSeq(log, 1, Len(log) - 1))
+ 
+ DTerminating == Finished /\ Serving /\ UNCHANGED DVars
+ 

@@ -194,7 +194,14 @@ this meaning, one slice at a time.
   existing primary key aborts. A write (update or delete) targeting an
   absent row aborts — there is no implicit insert-on-update or
   no-op-on-delete. An absent key is itself a branchable value a
-  transaction may test and branch on, the same as any other value. Bounded
+  transaction may test and branch on, the same as any other value, and so
+  is a comparison of two expressions (equal, not equal, less, less or
+  equal, greater, greater or equal): the branch takes its first arm when
+  the comparison holds and its second otherwise. Integers compare
+  numerically and text by its bytes; an integer against text aborts with a
+  typed reason, never holds or fails silently. An operand that cannot be
+  resolved aborts with its own reason, and the comparison logs no access.
+  Bounded
   iteration proceeds in key order for a primary-key range and in index
   order for an index range. Write effects apply in program order
   within one transaction. An abort discards every effect the transaction
@@ -206,6 +213,9 @@ this meaning, one slice at a time.
   writes the debited balance, then a later read of the same key inside the
   same call sees that debit — not the balance the transaction started
   with — and the call returns the new balance as its response.
+  *Example (comparison).* `if kind = 0 then read by id else read by last
+  name` is decided by the call's argument alone; `if order.status = 1`
+  is decided by data an earlier read returned.
 - **D7 Reserved boundary.** Verification layer 4 will need a per-call
   disposition — execute it, or force an abort replayed as a no-op — and
   will wrap `replay` to add it later. This meaning's `replay` and `run`
@@ -589,6 +599,19 @@ not — is specified precisely in §9.2; this document's architecture-level
 commitment is a single append-only commit log per store, with recovery
 replaying only commit groups that validate completely.
 
+**Status: checked within bounds** — the unknown-outcome rule above is
+checked on the kernel model (`Durable.tla`, `specs/README.md`): an `fsync`
+failure answers `unknown`, the transaction keeps its footprint and
+reservations (each exactly as held when the flush failed) until recovery,
+recovery resolves it to whatever the log shows, and mutants that answer an
+abort and release the reservations, or release part of one, are refuted.
+Bounds: 3 transactions, one log, at most two failures; `Durable.tla` does
+not model the publication pointer, which `Publication.tla` checks (§9.1),
+and torn writes are not modelled. Not proved: that a caller
+is eventually acknowledged or that recovery eventually runs (fairness
+covers neither, and recovery discards queued requests; only undispatched
+ones stay runnable).
+
 ## 6. Trust model
 
 AI agents may propose new specializations — a new reservation type, a new
@@ -675,10 +698,28 @@ commits recorded in one log, never implied across two independent logs. It
 fails if a crash lands between a commit's log record and the completion of
 every derived-structure install and recovery advances the pointer past that
 commit anyway — recovery must finish installing first, or not advance the
-pointer past it at all. **Status: not yet specified** — the exact pointer
-representation, how far ahead installation may run, and the recovery
-procedure that re-derives or replays incomplete installation are
-engine-phase work.
+pointer past it at all. **Status: checked within bounds** — the pointer rule is checked on the
+kernel model (`Publication.tla`, `specs/README.md`): installation of a
+commit's two derived structures follows its durable record step by step
+and may run ahead of the pointer; the pointer passes a commit only when
+both are installed; and only then does the commit take effect and release
+its locks and reservations, so every read, protocol or snapshot, sees
+published state plus the reader's own writes. Recovery recomputes the
+pointer from the log and the installation state, never from the retained
+value, and installs every durable commit before the pointer passes it.
+`AtomicVisibility`, `ReaderConsistent` (a snapshot reader's observations
+across several steps), `PointerBelowInstalled`, `PointerMonotone` and the
+durability properties hold (`RecoveredPrefix` as adapted into
+`HistoryIsLogPrefix` and `RecoveryOpensOnWholeLog`), and `Serializable` with exact responses holds
+over a delete's reference check and a read racing a commit still being
+installed. Mutants that advance the pointer before installation (also
+across a crash), advance it first in recovery, or release a commit's locks
+when its record is durable are refuted. Bounds: one log, 2 or 3
+transactions with 2 structures each, at most two failures, which strike
+while the engine operates and never during recovery. Not checked: several
+logs, a failure during recovery, byte layout and the pointer's on-disk
+representation; no liveness (nothing proves installation or recovery
+eventually runs).
 
 ### 9.2 Storage failure model
 
@@ -718,10 +759,25 @@ truthful-flush assumption
 makes for the same reason. Because an `fsync` failure here does not tell
 the engine whether the bytes actually reached storage, it leaves the
 transaction's commit outcome unknown rather than a known abort; §5 states
-the resulting reservation-release and recovery contract. **Status: not yet
-specified** — the exact extent
-size, the allocation and reclaim policy, and the checkpoint layout that
-make "never overwrite acknowledged bytes" concrete are engine-phase work.
+the resulting reservation-release and recovery contract. **Status: checked within bounds, layout not yet specified** — TLC checks
+the commit, crash and recovery contract on the kernel model with up to two
+crashes or `fsync` failures at any step of 3 transactions and one log:
+every acknowledged commit is in the recovered history, the recovered history
+is a prefix of the log's commit order (and the whole log once the engine
+serves again), an `fsync` failure is answered `unknown` and never as an
+abort, and recovered histories are serializable with exact responses,
+including responses that depend on a predecessor whose commit is durable
+but unacknowledged (`specs/README.md`, `Durable.tla`; that module does not
+model the publication pointer, which `Publication.tla` checks, §9.1). Mutants (an `fsync`
+failure answered as an abort or shrinking a reservation, an acknowledgement
+before the flush, a recovery that drops a durable record, locks released
+before the flush, tentative effects shown to a dependent whose record then
+survives a crash without its predecessor's) are each refuted. Eventual acknowledgement and eventual
+recovery are not proved. That is a bounded check of an
+abstract log, not of bytes, framing, checksums or a device that lies; the
+visible-version pointer (§9.1) is not covered. The exact extent size, the
+allocation and reclaim policy, and the checkpoint layout that make "never
+overwrite acknowledged bytes" concrete are engine-phase work.
 
 ### 9.3 Migration watermark and rollback window
 

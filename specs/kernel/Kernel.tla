@@ -217,7 +217,8 @@ ASSUME \A k \in Keys : InitDb[k] \in Row /\ (~InitDb[k].present => InitDb[k] = A
 
 ----------------------------------------------------------------------------
 VARIABLES
-  status,   \* [Txns -> {"pending", "active", "committed", "rejected"}]
+  status,   \* [Txns -> {"pending", "active", "committed", "rejected", "aborted"}]
+            \* ("aborted": discarded by recovery, only the Durable module reaches it)
   seq,      \* [Txns -> Nat]: dispatch sequence number, 0 before dispatch
   pc,       \* [Txns -> Nat]: operations already executed
   held,     \* [Txns -> SUBSET Resource]: the footprint, held from admission to the end
@@ -481,7 +482,7 @@ RepeatSpec == Init /\ [][Next \/ \E t \in Txns : Rearrive(t)]_Vars /\ Fairness
 
 ----------------------------------------------------------------------------
 TypeOK ==
-  /\ status \in [Txns -> {"pending", "active", "committed", "rejected"}]
+  /\ status \in [Txns -> {"pending", "active", "committed", "rejected", "aborted"}]
   /\ seq \in [Txns -> Nat]
   /\ pc \in [Txns -> Nat]
   /\ \A t \in Txns : held[t] \subseteq Resource
@@ -528,7 +529,7 @@ NoWaitCycle == \A t \in Txns : <<t, t>> \notin Closure(WaitFor, Cardinality(Txns
    returned, exactly the terminal outcome each reached (committed, or
    rejected with its caller-visible failure as the last response), and
    exactly the committed state. *)
-Ended == {t \in Txns : ~Live(t)}
+Ended == {t \in Txns : status[t] \in {"committed", "rejected"}}
 
 Serializable ==
   \E perm \in Perms(Ended) :

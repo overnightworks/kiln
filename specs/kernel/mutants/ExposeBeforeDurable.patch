@@ -1,0 +1,126 @@
+--- Kernel.tla
++++ Kernel.tla
+@@ -275,8 +275,14 @@
+ Undrawn(t, k, row) ==
+   [row EXCEPT !.bal = @ + draws[t][k].bal, !.val = @ - draws[t][k].val]
+ 
++Finishing(u) == Active(u) /\ pc[u] = Len(Prog[u])
++
+ View(t) ==
+-  [k \in Keys |-> Drawn(t, k, IF k \in DOMAIN wr[t] THEN wr[t][k] ELSE db[k])]
++  [k \in Keys |-> Drawn(t, k,
++     IF k \in DOMAIN wr[t] THEN wr[t][k]
++     ELSE IF \E u \in Txns : Finishing(u) /\ k \in DOMAIN wr[u]
++     THEN wr[CHOOSE u \in Txns : Finishing(u) /\ k \in DOMAIN wr[u]][k]
++     ELSE db[k])]
+ 
+ (* One rule for draws (§4, rule 1). A draw consumes the transaction's own
+    reservation: the balance it sees is what remains of that reservation,
+@@ -297,7 +303,7 @@
+ (* Admission guard: every registered resource must be compatible with
+    every resource a live transaction holds. *)
+ Conflicting(t, R) ==
+-  {u \in Txns \ {t} : Active(u) /\ \E r \in R, h \in held[u] : ~Compatible(r, h)}
++  {u \in Txns \ {t} : Active(u) /\ ~Finishing(u) /\ \E r \in R, h \in held[u] : ~Compatible(r, h)}
+ 
+ (* Escrow admission (§4, rule 1; §5): a transaction's reservation on an
+    escrow key is min(budget, committed balance). Live reservations are
+--- Durable.tla
++++ Durable.tla
+@@ -41,9 +41,10 @@
+   fsyncFailed,   \* ghost: every transaction whose commit call met an fsync failure
+   unresolved,    \* ghost: the transactions whose outcome is unknown until recovery
+   reservedAtUnknown, \* ghost: every transaction's escrow reservations when the last fsync failure struck
++  readFrom,      \* mutation-only scheduling state: a conservative superset of a transaction's dependencies; gates Flush
+   failuresUsed
+ 
+-DVars == <<Vars, log, unflushed, history, engine, answer, fsyncFailed, unresolved, reservedAtUnknown, failuresUsed>>
++DVars == <<Vars, log, unflushed, history, engine, answer, fsyncFailed, unresolved, reservedAtUnknown, readFrom, failuresUsed>>
+ 
+ (* A commit record carries the transaction's effects as Commit applies
+    them: tentative rows and escrow deltas. Effects of transactions in the
+@@ -79,24 +80,29 @@
+   /\ fsyncFailed = {}
+   /\ unresolved = {}
+   /\ reservedAtUnknown = [t \in Txns |-> NoReservation]
++  /\ readFrom = [t \in Txns |-> {}]
+   /\ failuresUsed = 0
+ 
+ JournalUnchanged ==
+   UNCHANGED <<log, unflushed, history, engine, answer, fsyncFailed, unresolved, reservedAtUnknown, failuresUsed>>
+ 
++Exposing(t) == {u \in Txns \ {t} : Finishing(u)}  \* every finishing transaction, conservatively treated as a dependency
++
+ Serving == engine = "up"
+ 
+ (* The unchanged protocol steps, served only while the engine is up. *)
+-Dispatched(t) == Serving /\ Dispatch(t) /\ JournalUnchanged
+-Acquired(t) == Serving /\ Acquire(t) /\ JournalUnchanged
+-Executed(t) == Serving /\ DoOp(t) /\ JournalUnchanged
+-Restarted(t) == Serving /\ WidenAndRestart(t) /\ JournalUnchanged
++Dispatched(t) == Serving /\ Dispatch(t) /\ JournalUnchanged /\ UNCHANGED readFrom
++Acquired(t) == Serving /\ Acquire(t) /\ JournalUnchanged /\ UNCHANGED readFrom
++Executed(t) ==
++  /\ Serving /\ DoOp(t) /\ JournalUnchanged
++  /\ readFrom' = [readFrom EXCEPT ![t] = @ \cup Exposing(t)]  \* conservative: not only the rows actually read
++Restarted(t) == Serving /\ WidenAndRestart(t) /\ JournalUnchanged /\ UNCHANGED readFrom
+ 
+ Enqueue(t) ==
+   /\ Serving /\ Active(t) /\ pc[t] = Len(Prog[t])
+   /\ t \notin TxnsOf(unflushed) /\ t \notin TxnsOf(log)
+   /\ unflushed' = Append(unflushed, Record(t))
+-  /\ UNCHANGED <<Vars, log, history, engine, answer, fsyncFailed, unresolved, reservedAtUnknown, failuresUsed>>
++  /\ UNCHANGED <<Vars, log, history, engine, answer, fsyncFailed, unresolved, reservedAtUnknown, readFrom, failuresUsed>>
+ 
+ (* The oldest record of the tail becomes durable. *)
+ AppendToLog ==
+@@ -119,15 +125,18 @@
+ (* The flush of the oldest record succeeds: the commit is durable and,
+    here, takes effect at once. *)
+ Flush ==
+-  /\ Serving /\ unflushed # <<>>
+-  /\ AppendToLog
+-  /\ Publish(Head(unflushed))
+-  /\ UNCHANGED <<seq, pc, resp, widened, engine, answer, fsyncFailed, unresolved, reservedAtUnknown, failuresUsed>>
++  /\ Serving
++  /\ \E i \in 1..Len(unflushed) :
++     /\ \A u \in readFrom[unflushed[i].txn] : ~Active(u)
++     /\ log' = Append(log, unflushed[i])
++     /\ unflushed' = SubSeq(unflushed, 1, i - 1) \o SubSeq(unflushed, i + 1, Len(unflushed))
++     /\ Publish(unflushed[i])
++  /\ UNCHANGED <<seq, pc, resp, widened, engine, answer, fsyncFailed, unresolved, reservedAtUnknown, readFrom, failuresUsed>>
+ 
+ Ack(t) ==
+   /\ Serving /\ status[t] = "committed" /\ answer[t] = "none"
+   /\ answer' = [answer EXCEPT ![t] = "committed"]
+-  /\ UNCHANGED <<Vars, log, unflushed, history, engine, fsyncFailed, unresolved, reservedAtUnknown, failuresUsed>>
++  /\ UNCHANGED <<Vars, log, unflushed, history, engine, fsyncFailed, unresolved, reservedAtUnknown, readFrom, failuresUsed>>
+ 
+ FailureBudgetLeft == failuresUsed < Failures
+ 
+@@ -140,7 +149,7 @@
+   /\ unflushed' = <<>>
+   /\ engine' = "down"
+   /\ failuresUsed' = failuresUsed + 1
+-  /\ UNCHANGED <<Vars, history, answer, fsyncFailed, unresolved, reservedAtUnknown>>
++  /\ UNCHANGED <<Vars, history, answer, fsyncFailed, unresolved, reservedAtUnknown, readFrom>>
+ 
+ (* A flush fails (§9.2): the writer is fenced and every transaction in the
+    flush is answered "unknown" - the bytes may already be durable. They keep
+@@ -156,7 +165,7 @@
+   /\ unflushed' = <<>>
+   /\ engine' = "fenced"
+   /\ failuresUsed' = failuresUsed + 1
+-  /\ UNCHANGED <<Vars, history>>
++  /\ UNCHANGED <<Vars, history, readFrom>>
+ 
+ Undispatched(t) == Pending(t) /\ seq[t] = 0
+ 
+@@ -185,6 +194,7 @@
+   /\ draws' = [t \in Txns |-> NoDraws]
+   /\ seq' = [t \in Txns |-> 0]
+   /\ unresolved' = {}
++  /\ readFrom' = [t \in Txns |-> {}]
+   /\ unflushed' = <<>>
+   /\ engine' = "up"
+   /\ UNCHANGED <<pc, resp, widened, log, fsyncFailed, reservedAtUnknown, failuresUsed>>

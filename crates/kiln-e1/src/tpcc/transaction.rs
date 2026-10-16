@@ -1,10 +1,10 @@
 use std::fmt;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// TPC-C's transaction types with E1's frozen mix, which the freeze fixes in
 /// `inputs.md` §1; it is deliberately not configurable.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TpccTransaction {
     NewOrder,
