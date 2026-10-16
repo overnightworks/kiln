@@ -942,9 +942,11 @@ inside its family's checking domain.
    domain every family has a constant-size exact table, so the bound class
    and both expected misses are meaningful only under the head's ruling
    stated in §1: categorical or control components with at most 16 named
-   values (order status, dispatcher cursor) may be enumerated; quantity and
+   values (order status, dispatcher cursor, the lease table's resource keys with
+   `K = 2`) may be enumerated; quantity and
    identifier components (balances, quotas, counts, sequence values, owners,
-   keys) may not, even where their semantics fixes a finite range, while
+   keys whose value set is not a fixed semantic constant of at most 16 named
+   values) may not, even where their semantics fixes a finite range, while
    semantic constants stay usable in arithmetic and guards. S2 owns its
    enforcement in the grammar.
    Recommendation: S2's candidate language takes no checking-domain value as
