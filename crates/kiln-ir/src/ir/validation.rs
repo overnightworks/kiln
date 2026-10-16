@@ -28,6 +28,18 @@ impl From<SchemaError> for ProgramError {
     }
 }
 
+/// Why a text form (D9) aborts in every call that reaches it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextFormFault {
+    /// A truncation to a literal length below zero.
+    NegativeLength,
+    /// An operand of a concatenation or a containment, or the text of a
+    /// truncation, whose static kind is not text.
+    OperandNotText,
+    /// A truncation length whose static kind is not integer.
+    LengthNotInteger,
+}
+
 /// What is wrong with an effect of a function body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionFault {
@@ -56,6 +68,8 @@ pub enum FunctionFault {
         column: ColumnName,
         fault: KeyComponentFault,
     },
+    /// A text form no call can get past (`KILN-IR-96`).
+    TextForm(TextFormFault),
 }
 
 pub(super) fn check_block(scope: &FunctionScope, block: &Block) -> Result<(), FunctionFault> {
@@ -63,12 +77,14 @@ pub(super) fn check_block(scope: &FunctionScope, block: &Block) -> Result<(), Fu
         check_effect(scope, effect)?;
     }
     match &block.terminal {
-        Terminal::Return(_) | Terminal::Abort(_) => Ok(()),
+        Terminal::Return(response) => scope.check_text_forms(response),
+        Terminal::Abort(_) => Ok(()),
         Terminal::Branch {
+            condition,
             when_present,
             when_absent,
-            ..
         } => {
+            scope.check_condition_text_forms(condition)?;
             check_block(scope, when_present)?;
             check_block(scope, when_absent)
         }
@@ -76,6 +92,14 @@ pub(super) fn check_block(scope: &FunctionScope, block: &Block) -> Result<(), Fu
 }
 
 fn check_effect(scope: &FunctionScope, effect: &Effect) -> Result<(), FunctionFault> {
+    check_tables_and_keys(scope, effect)?;
+    effect
+        .expressions()
+        .into_iter()
+        .try_for_each(|expression| scope.check_text_forms(expression))
+}
+
+fn check_tables_and_keys(scope: &FunctionScope, effect: &Effect) -> Result<(), FunctionFault> {
     match effect {
         Effect::Read { table, key, .. } | Effect::Delete { table, key } => {
             check_key(scope, table, key).map(drop)

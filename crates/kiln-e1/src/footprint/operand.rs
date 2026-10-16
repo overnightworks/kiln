@@ -53,6 +53,13 @@ pub enum Operand {
     /// A condition of a conditional value: whether `left` stands in the
     /// relation to `right`.
     Comparison(Relation, Box<Operand>, Box<Operand>),
+    /// A condition of a conditional value: whether the first operand's text
+    /// contains the second's.
+    Containment(Box<Operand>, Box<Operand>),
+    /// The first operand's text followed by the second's.
+    Concat(Box<Operand>, Box<Operand>),
+    /// The first operand's text cut to the second operand's length.
+    Truncate(Box<Operand>, Box<Operand>),
     /// The first operand is a condition; the value is the second when it
     /// holds and the third otherwise.
     Conditional(Box<Operand>, Box<Operand>, Box<Operand>),
@@ -78,6 +85,13 @@ impl Operand {
                 uses.extend(second.uses());
                 uses
             }
+            Self::Containment(first, second)
+            | Self::Concat(first, second)
+            | Self::Truncate(first, second) => {
+                let mut uses = first.uses();
+                uses.extend(second.uses());
+                uses
+            }
             Self::Conditional(condition, when_true, when_false) => {
                 let mut uses = condition.uses();
                 uses.extend(when_true.uses());
@@ -97,6 +111,13 @@ impl Operand {
             | Self::ReleasedColumn { .. } => Vec::new(),
             Self::Column { row, .. } => vec![row],
             Self::Arithmetic(_, first, second) | Self::Comparison(_, first, second) => {
+                let mut origins = first.origins();
+                origins.extend(second.origins());
+                origins
+            }
+            Self::Containment(first, second)
+            | Self::Concat(first, second)
+            | Self::Truncate(first, second) => {
                 let mut origins = first.origins();
                 origins.extend(second.origins());
                 origins
@@ -134,6 +155,18 @@ impl Operand {
                 Box::new(left.renamed(rename)?),
                 Box::new(right.renamed(rename)?),
             ),
+            Self::Containment(left, right) => Self::Containment(
+                Box::new(left.renamed(rename)?),
+                Box::new(right.renamed(rename)?),
+            ),
+            Self::Concat(left, right) => Self::Concat(
+                Box::new(left.renamed(rename)?),
+                Box::new(right.renamed(rename)?),
+            ),
+            Self::Truncate(text, length) => Self::Truncate(
+                Box::new(text.renamed(rename)?),
+                Box::new(length.renamed(rename)?),
+            ),
             Self::Conditional(condition, when_true, when_false) => Self::Conditional(
                 Box::new(condition.renamed(rename)?),
                 Box::new(when_true.renamed(rename)?),
@@ -142,10 +175,14 @@ impl Operand {
         })
     }
 
-    /// Arithmetic or a conditional over a read result: its value is no read's
-    /// column or key, so no declared foreign key or range identifies it.
+    /// Arithmetic, a conditional or a text form over a read result: its value
+    /// is no read's column or key, so no declared foreign key or range
+    /// identifies it.
     pub fn is_computed_from_reads(&self) -> bool {
-        matches!(self, Self::Arithmetic(..) | Self::Conditional(..)) && !self.uses().is_empty()
+        matches!(
+            self,
+            Self::Arithmetic(..) | Self::Conditional(..) | Self::Concat(..) | Self::Truncate(..)
+        ) && !self.uses().is_empty()
     }
 }
 
@@ -178,6 +215,14 @@ pub fn operand_of(
             Box::new(operand_of(schema, facts, left, at)?),
             Box::new(operand_of(schema, facts, right, at)?),
         ),
+        Expr::Concat(first, second) => Operand::Concat(
+            Box::new(operand_of(schema, facts, first, at)?),
+            Box::new(operand_of(schema, facts, second, at)?),
+        ),
+        Expr::Truncate { text, length } => Operand::Truncate(
+            Box::new(operand_of(schema, facts, text, at)?),
+            Box::new(operand_of(schema, facts, length, at)?),
+        ),
         Expr::Conditional {
             condition,
             when_true,
@@ -207,6 +252,10 @@ fn condition_operand(
             *relation,
             Box::new(operand_of(schema, facts, left, at)?),
             Box::new(operand_of(schema, facts, right, at)?),
+        ),
+        Condition::Contains { text, part } => Operand::Containment(
+            Box::new(operand_of(schema, facts, text, at)?),
+            Box::new(operand_of(schema, facts, part, at)?),
         ),
     })
 }

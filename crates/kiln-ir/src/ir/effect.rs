@@ -90,6 +90,33 @@ pub enum Effect {
     },
 }
 
+impl Effect {
+    /// The expressions this effect resolves itself, not those of an
+    /// iteration's body.
+    pub(super) fn expressions(&self) -> Vec<&Expr> {
+        match self {
+            Self::Read { key, .. } | Self::Delete { key, .. } => key.iter().collect(),
+            Self::Insert { key, columns, .. } | Self::Update { key, columns, .. } => {
+                key.iter().chain(columns.values()).collect()
+            }
+            Self::ReadRange {
+                prefix,
+                interval,
+                bound,
+                ..
+            } => prefix
+                .iter()
+                .chain(interval.iter().flat_map(|k| [&k.from, &k.to]))
+                .chain([bound])
+                .collect(),
+            Self::ReadIndexRange {
+                start, end, bound, ..
+            } => start.iter().chain(end).chain([bound]).collect(),
+            Self::Iterate { .. } => Vec::new(),
+        }
+    }
+}
+
 /// An inclusive interval on the key component after a range's prefix.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyInterval {

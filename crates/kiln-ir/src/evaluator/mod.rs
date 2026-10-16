@@ -89,6 +89,11 @@ pub enum AbortReason {
     /// `Text` reaching either is a fact about the data this call ran
     /// against, never a panic.
     NonIntegerOperand,
+    /// A text form's operand (a concatenation, a truncation's text or a
+    /// containment's text or part) resolved to a value that was not text.
+    NonTextOperand,
+    /// A truncation's length resolved to a negative integer.
+    NegativeTextLength,
     /// The argument bound to `parameter` is not the kind its declared
     /// [`ParameterType`](crate::ir::ParameterType) requires (an integer
     /// where text was declared, or text where an integer was declared).

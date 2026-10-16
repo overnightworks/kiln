@@ -59,6 +59,14 @@ pub const SHIPMENTS: &str = "shipments";
 /// `(customer_id, item_id)` through a declared foreign key.
 pub const INVENTORY: &str = "inventory";
 
+/// A table keyed by the text column [`KEY_COLUMN`], with a text column
+/// `name` and an integer column `size`.
+pub const LABELS: &str = "labels";
+
+/// A table keyed by the text column [`KEY_COLUMN`] whose `name` column is
+/// an integer, where [`LABELS`] has a text one.
+pub const TAGS: &str = "tags";
+
 /// The key of [`LINES`] in declared order.
 pub const LINE_KEY: [&str; 3] = ["w_id", "d_id", "o_id"];
 
@@ -257,6 +265,33 @@ fn keyed_table(name: &str, key: &[&str], other_columns: &[&str]) -> Table {
     }
 }
 
+fn text_keyed_table(name: &str, name_column: Column, other_columns: Vec<Column>) -> Table {
+    let key_column = Column {
+        name: ColumnName(KEY_COLUMN.to_owned()),
+        kind: ColumnType::Text,
+    };
+    Table {
+        name: table(name),
+        columns: [key_column, name_column]
+            .into_iter()
+            .chain(other_columns)
+            .collect(),
+        key: KeyDeclaration::Columns(vec![ColumnName(KEY_COLUMN.to_owned())]),
+    }
+}
+
+fn labels_table() -> Table {
+    let name = Column {
+        name: ColumnName("name".to_owned()),
+        kind: ColumnType::Text,
+    };
+    text_keyed_table(LABELS, name, vec![integer_column("size")])
+}
+
+fn tags_table() -> Table {
+    text_keyed_table(TAGS, integer_column("name"), vec![])
+}
+
 /// Orders reference customers and products, customers reference regions; the
 /// declared indexes are per customer and per tenant. Every table is keyed by
 /// [`KEY_COLUMN`] but [`LINES`] and [`ARCHIVE`], which have the three-column
@@ -301,6 +336,8 @@ pub fn schema() -> Schema {
             keyed_table(ARCHIVE, &LINE_KEY, &["item_id"]),
             keyed_table(SHIPMENTS, &[KEY_COLUMN], &LINE_KEY),
             keyed_table(INVENTORY, &["w_id", "item_id"], &[]),
+            labels_table(),
+            tags_table(),
         ],
         foreign_keys: vec![
             foreign_key("orders", &["customer_id"], "customers"),

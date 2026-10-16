@@ -35,7 +35,7 @@ pub use ir::{
     ColumnType, Comparison, Condition, Effect, Expr, ForeignKey, Function, FunctionFault, Index,
     IntegerWidth, Key, KeyColumn, KeyComponentFault, KeyDeclaration, KeyInterval, Parameter,
     ParameterType, Program, ProgramError, Relation, Row, Schema, SchemaError, Slot, Table,
-    Terminal, UniqueConstraint, Value,
+    Terminal, TextFormFault, UniqueConstraint, Value,
 };
 pub use replay::replay;
 pub use store::{KeyedRow, Store};

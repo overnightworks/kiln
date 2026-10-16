@@ -171,7 +171,9 @@ impl<'a> Walker<'a> {
                 let arms = [&**when_present, &**when_absent];
                 match condition {
                     Condition::RowPresent(slot) => self.branch(*slot, arms, at, facts),
-                    Condition::Compare { .. } => self.comparison_branch(operands, arms, at, facts),
+                    Condition::Compare { .. } | Condition::Contains { .. } => {
+                        self.comparison_branch(operands, arms, at, facts)
+                    }
                 }
             }
         }
@@ -518,9 +520,13 @@ impl<'a> Walker<'a> {
         terminal: &Terminal,
         at: &NodePath,
     ) -> Result<Vec<Operand>, Halt> {
-        let reads = read_by(terminal);
-        self.passes(facts, unkeyed(reads.iter().copied()), at)?;
-        self.operands_of(facts, reads, at)
+        let evaluation = Evaluation {
+            schema: self.schema,
+            facts,
+            at,
+        };
+        Self::halt_unless_past(evaluation.terminal_aborts(terminal)?, at)?;
+        self.operands_of(facts, read_by(terminal), at)
     }
 
     /// Whether the evaluator gets past resolving `resolved` at `at`. A
@@ -538,7 +544,11 @@ impl<'a> Walker<'a> {
             facts,
             at,
         };
-        match evaluation.aborts(resolved)? {
+        Self::halt_unless_past(evaluation.aborts(resolved)?, at)
+    }
+
+    fn halt_unless_past(aborts: Aborts, at: &NodePath) -> Result<(), Halt> {
+        match aborts {
             Aborts::Never => Ok(()),
             Aborts::Always => Err(Halt::aborting_at(at)),
             Aborts::OnOneArm => Err(Halt::Refuses { at: at.clone() }),
@@ -571,15 +581,8 @@ fn unkeyed<'e>(expressions: impl IntoIterator<Item = &'e Expr>) -> Vec<Resolved<
 fn read_by(terminal: &Terminal) -> Vec<&Expr> {
     match terminal {
         Terminal::Return(response) => vec![response],
-        Terminal::Branch {
-            condition: Condition::Compare { left, right, .. },
-            ..
-        } => vec![left, right],
-        Terminal::Abort(_)
-        | Terminal::Branch {
-            condition: Condition::RowPresent(_),
-            ..
-        } => Vec::new(),
+        Terminal::Branch { condition, .. } => condition.operands(),
+        Terminal::Abort(_) => Vec::new(),
     }
 }
 
