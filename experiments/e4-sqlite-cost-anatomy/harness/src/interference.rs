@@ -35,7 +35,11 @@ pub fn monotonic_ns() -> u64 {
     // CLOCK_MONOTONIC exists on every Linux kernel this harness targets.
     let rc = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
     assert_eq!(rc, 0, "clock_gettime(CLOCK_MONOTONIC) failed");
-    ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
+    nanoseconds(ts.tv_sec as u64, ts.tv_nsec as u64)
+}
+
+fn nanoseconds(seconds: u64, nanoseconds: u64) -> u64 {
+    seconds * 1_000_000_000 + nanoseconds
 }
 
 /// Judges the samples of one window against protocol §9's frozen limits,
@@ -330,6 +334,12 @@ mod tests {
 
             assert_eq!(ended.kind(), io::ErrorKind::NotFound);
             assert!(out.is_empty());
+        }
+
+        #[test]
+        fn a_timespec_is_its_seconds_in_nanoseconds_plus_its_nanoseconds() {
+            assert_eq!(nanoseconds(0, 0), 0);
+            assert_eq!(nanoseconds(3, 500), 3_000_000_500);
         }
 
         #[test]

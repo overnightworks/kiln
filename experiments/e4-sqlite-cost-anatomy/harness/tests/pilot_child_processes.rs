@@ -149,7 +149,7 @@ fn processes_started_with(arguments: &[&str]) -> usize {
                 .split(|byte| *byte == 0)
                 .filter(|part| !part.is_empty())
                 .collect();
-            parts.len() > arguments.len()
+            parts.len() >= arguments.len()
                 && parts[parts.len() - arguments.len()..]
                     .iter()
                     .zip(arguments)
