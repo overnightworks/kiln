@@ -3,6 +3,6 @@ agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
 role = "builder"
 base = "4e85e657ad6ac14bba2f7f7e1fdaa97051be8ce7"
 branch = "claude/issue-97-s4b-text-forms"
-scope = ["crates/kiln-e1/src/footprint/abort.rs", "crates/kiln-e1/src/footprint/carried.rs", "crates/kiln-e1/src/footprint/operand.rs", "crates/kiln-e1/tests", "crates/kiln-ir/src/evaluator/effects/terminal.rs", "crates/kiln-ir/src/evaluator/resolve.rs", "crates/kiln-ir/src/ir/expression.rs", "crates/kiln-ir/src/ir/key_kinds.rs", "crates/kiln-ir/tests", "specs/kiln-e1.spec.md", "specs/kiln-ir.spec.md"]
+scope = ["crates/kiln-e1/src/footprint/abort.rs", "crates/kiln-e1/src/footprint/carried.rs", "crates/kiln-e1/src/footprint/operand.rs", "crates/kiln-e1/src/footprint/walk.rs", "crates/kiln-e1/tests", "crates/kiln-ir/src/evaluator/effects/terminal.rs", "crates/kiln-ir/src/evaluator/mod.rs", "crates/kiln-ir/src/evaluator/resolve.rs", "crates/kiln-ir/src/ir/expression.rs", "crates/kiln-ir/src/ir/key_kinds.rs", "crates/kiln-ir/tests", "specs/kiln-e1.spec.md", "specs/kiln-ir.spec.md"]
 opened_commit = "6f15737ad95b28c2539a683de3f8dffa9cdd30a5"
 whole_reason = "three text forms touch the expression type, its kind inference, evaluation, conditions, and the classifier's operand, abort and carried-slot analyses"
