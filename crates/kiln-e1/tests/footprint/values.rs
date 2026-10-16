@@ -1,8 +1,12 @@
-use kiln_e1::{Classification, Evidence, Reason, UnknownCause};
-use kiln_ir::{ArithmeticOp, Block, Condition, Effect, Expr, Relation, Slot};
+use kiln_e1::{Classification, Evidence, ProvenCategory, Reason, UnknownCause};
+use kiln_ir::{
+    ArithmeticOp, Block, ColumnType, Condition, Effect, Expr, Program, Relation, Slot, Value,
+};
 
 use super::programs::*;
-use crate::keys::kiln_e1_27::{classification_of, point_read_of_u, slot_bound_by_either_arm};
+use crate::keys::kiln_e1_27::{
+    classification_of, point_read_of_u, slot_bound_by_either_arm, table_keyed_by,
+};
 
 fn times(left: Expr, right: Expr) -> Expr {
     Expr::Arithmetic(ArithmeticOp::Multiply, Box::new(left), Box::new(right))
@@ -14,6 +18,10 @@ fn when(condition: Condition, when_true: Expr, when_false: Expr) -> Expr {
         when_true: Box::new(when_true),
         when_false: Box::new(when_false),
     }
+}
+
+fn computed_from_read(name: &str) -> UnknownCause {
+    UnknownCause::KeyComputedFromRead { table: table(name) }
 }
 
 fn equal(left: Expr, right: Expr) -> Condition {
@@ -106,10 +114,6 @@ mod kiln_e1_38 {
 
         assert_eq!(category_of(returns(vec![read("accounts", key, 0)])), STATIC);
     }
-
-    fn computed_from_read(name: &str) -> UnknownCause {
-        UnknownCause::KeyComputedFromRead { table: table(name) }
-    }
 }
 
 mod kiln_e1_39 {
@@ -174,24 +178,27 @@ mod kiln_e1_39 {
 
     #[test]
     fn a_presence_test_the_path_already_settled_chooses_its_arm() {
-        let key = when(Condition::RowPresent(Slot(0)), param("x"), released());
-        let absent = returns(vec![
-            low_to_high("orders", 1),
-            iterate(1, 2, vec![]),
-            read("accounts", key, 3),
-            update("b", param("y"), &[]),
-        ]);
-        let body = branch_on_presence(
-            vec![read("accounts", param("k"), 0)],
-            0,
-            returns(vec![]),
-            absent,
-        );
+        let reading = || {
+            let key = when(Condition::RowPresent(Slot(0)), param("x"), released());
+            returns(vec![
+                low_to_high("orders", 1),
+                iterate(1, 2, vec![]),
+                read("accounts", key, 3),
+                update("b", param("y"), &[]),
+            ])
+        };
+        let settled = |present, absent| {
+            branch_on_presence(vec![read("accounts", param("k"), 0)], 0, present, absent)
+        };
 
-        let nodes = evidence_of(body);
+        let nodes = evidence_of(settled(returns(vec![]), reading()));
 
         assert!(nodes.contains(&"f/body/terminal/when_absent/effects[2]".to_owned()));
         assert!(!nodes.contains(&"f/body/terminal/when_absent/effects[3]".to_owned()));
+        assert_unknown(
+            settled(reading(), returns(vec![])),
+            computed_from_read("accounts"),
+        );
     }
 
     /// After common setup releases slot 1, a read of `accounts` decides
@@ -304,5 +311,121 @@ mod kiln_e1_39 {
             body,
             UnknownCause::SlotCarriedAcrossIterations { slot: Slot(3) },
         );
+    }
+
+    #[test]
+    fn a_decided_conditional_is_computed_from_the_reads_of_its_unchosen_arm_even_where_that_arm_aborts(
+    ) {
+        let order_plus_released = plus(column_of(3, "customer_id"), released());
+        let key = when(
+            equal(literal(1), literal(1)),
+            param("k"),
+            order_plus_released,
+        );
+        let body = returns(vec![
+            low_to_high("orders", 0),
+            iterate(0, 1, vec![]),
+            read("orders", param("order_id"), 3),
+            read("accounts", key, 2),
+        ]);
+
+        assert_unknown(body, computed_from_read("accounts"));
+    }
+
+    #[test]
+    fn a_conditional_inside_the_arm_a_decided_condition_leaves_never_refuses() {
+        let unreached = when(equal(param("flag"), literal(1)), released(), param("k"));
+        let key = when(equal(literal(1), literal(1)), param("k"), unreached);
+
+        let body = reading_by(key);
+
+        assert_eq!(category_of(body.clone()), STATIC);
+        assert!(reaches_the_access_after(body));
+    }
+
+    /// Slot 2 holds a row of `t1`, keyed by the text `c`; slot 1 is released.
+    /// `accesses` come after both, and an `accounts` key, an integer, picks
+    /// the released column on one arm and the text column on the other.
+    fn picking_a_released_or_a_text_column(accesses: impl FnOnce(Expr) -> Vec<Effect>) -> Program {
+        let key = when(
+            equal(param("flag"), literal(1)),
+            released(),
+            column_of(2, "c"),
+        );
+        let mut effects = vec![
+            read("t1", Expr::Literal(Value::Text("k".to_owned())), 2),
+            low_to_high("a", 0),
+            iterate(0, 1, vec![]),
+        ];
+        effects.extend(accesses(key));
+        let mut program = program(returns(effects));
+        program
+            .schema
+            .tables
+            .push(table_keyed_by("t1", "c", ColumnType::Text));
+        program
+    }
+
+    #[test]
+    fn an_undecided_conditional_whose_arms_abort_for_different_causes_aborts_like_the_evaluator() {
+        let straight = picking_a_released_or_a_text_column(|key| {
+            vec![read("accounts", key, 3), update("b", param("y"), &[])]
+        });
+        let in_a_loop = picking_a_released_or_a_text_column(|key| {
+            vec![
+                low_to_high("a", 4),
+                iterate(4, 5, vec![read("accounts", key, 3)]),
+                update("b", param("y"), &[]),
+            ]
+        });
+
+        let ends_at_the_read = classification_of(&straight);
+        let forks_on_the_loop = classification_of(&in_a_loop);
+
+        assert_eq!(
+            ends_at_the_read,
+            Classification::Proven {
+                category: ProvenCategory::Static,
+                evidence: Evidence::new(
+                    [
+                        "f/body/effects[0]",
+                        "f/body/effects[1]",
+                        "f/body/effects[3]"
+                    ]
+                    .map(str::to_owned)
+                    .to_vec()
+                )
+                .unwrap(),
+            }
+        );
+        let paths = evidence_paths(&forks_on_the_loop);
+        assert!(matches!(forks_on_the_loop, Classification::Proven { .. }));
+        assert!(paths.contains(&"f/body/effects[4]/body/effects[0]".to_owned()));
+        assert!(paths.contains(&"f/body/effects[5]".to_owned()));
+    }
+
+    #[test]
+    fn an_iteration_the_path_knows_is_empty_never_refuses_for_its_body() {
+        let refusing = |rows, row| {
+            let key = when(equal(param("flag"), literal(1)), param("k"), released());
+            iterate(rows, row, vec![read("accounts", key, 6)])
+        };
+        let common = || {
+            vec![
+                low_to_high("a", 0),
+                iterate(0, 1, vec![]),
+                low_to_high("b", 2),
+            ]
+        };
+        let tested_empty =
+            branch_on_presence(common(), 2, returns(vec![]), returns(vec![refusing(2, 3)]));
+        let mut replayed_empty = common();
+        replayed_empty.extend([
+            iterate(2, 3, vec![read("accounts", released(), 4)]),
+            refusing(2, 5),
+        ]);
+
+        assert_eq!(category_of(tested_empty), STATIC);
+        assert_eq!(category_of(returns(replayed_empty)), STATIC);
     }
 }

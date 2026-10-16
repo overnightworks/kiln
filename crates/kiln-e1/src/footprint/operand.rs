@@ -1,6 +1,7 @@
 //! A key or bound as the classifier reasons about it: the IR expression with
 //! every slot replaced by the read that bound it, so two accesses compare equal
-//! exactly when they name the same data.
+//! exactly when they name the same data. It is read from the expression's
+//! syntax, every arm of every conditional included, reached or not.
 
 use kiln_ir::{
     ArithmeticOp, ColumnName, Condition, Expr, ParameterName, Relation, Schema, Slot, Value,
@@ -55,13 +56,22 @@ pub enum Operand {
     /// The first operand is a condition; the value is the second when it
     /// holds and the third otherwise.
     Conditional(Box<Operand>, Box<Operand>, Box<Operand>),
+    /// `column` of a slot an ended iteration released: the slot holds no row,
+    /// so it names no read result. Resolving it aborts, so it stands only in
+    /// an arm the path never runs.
+    ReleasedColumn {
+        slot: Slot,
+        column: ColumnName,
+    },
 }
 
 impl Operand {
     /// The reads whose results the operand reads.
     pub fn uses(&self) -> Vec<ReadRef> {
         match self {
-            Self::Literal(_) | Self::Parameter(_) | Self::Absence => Vec::new(),
+            Self::Literal(_) | Self::Parameter(_) | Self::Absence | Self::ReleasedColumn { .. } => {
+                Vec::new()
+            }
             Self::Column { read, .. } | Self::Presence(read) => vec![read.clone()],
             Self::Arithmetic(_, first, second) | Self::Comparison(_, first, second) => {
                 let mut uses = first.uses();
@@ -80,7 +90,11 @@ impl Operand {
     /// The row occurrences the operand's columns come from, in reading order.
     pub fn origins(&self) -> Vec<&RowOrigin> {
         match self {
-            Self::Literal(_) | Self::Parameter(_) | Self::Presence(_) | Self::Absence => Vec::new(),
+            Self::Literal(_)
+            | Self::Parameter(_)
+            | Self::Presence(_)
+            | Self::Absence
+            | Self::ReleasedColumn { .. } => Vec::new(),
             Self::Column { row, .. } => vec![row],
             Self::Arithmetic(_, first, second) | Self::Comparison(_, first, second) => {
                 let mut origins = first.origins();
@@ -100,9 +114,11 @@ impl Operand {
     /// when `rename` has no name for one of them.
     pub fn renamed(&self, rename: &impl Fn(&RowOrigin) -> Option<RowOrigin>) -> Option<Self> {
         Some(match self {
-            Self::Literal(_) | Self::Parameter(_) | Self::Presence(_) | Self::Absence => {
-                self.clone()
-            }
+            Self::Literal(_)
+            | Self::Parameter(_)
+            | Self::Presence(_)
+            | Self::Absence
+            | Self::ReleasedColumn { .. } => self.clone(),
             Self::Column { read, row, column } => Self::Column {
                 read: read.clone(),
                 row: rename(row)?,
@@ -133,39 +149,24 @@ impl Operand {
     }
 }
 
-/// Why an expression has no operand where the path reaches it.
-#[derive(Debug)]
-pub enum Unresolvable {
-    /// It projects a slot that holds no current row where the path reads it:
-    /// the evaluator aborts there with `ProjectionSourceAbsent` (`KILN-IR-15`).
-    AbsentSource,
-    /// A conditional the path does not decide has an arm that aborts and an
-    /// arm that does not (`KILN-E1-39`).
-    ConditionalAbortsOnOneArm,
-    Fault(ClassifyError),
-}
-
-impl From<ClassifyError> for Unresolvable {
-    fn from(error: ClassifyError) -> Self {
-        Self::Fault(error)
-    }
-}
-
-/// `expression` with its slots resolved against what the path has read so far.
-/// A key column of a point-read row is the operand the read used for it
-/// (`inputs.md` §5, Clarification rule 1).
+/// `expression` with its slots resolved against what the path has read so
+/// far. Every arm of a conditional counts, whichever the path runs: what a
+/// value is made of never depends on the arm chosen (`inputs.md` §5,
+/// Clarification 7(c)). A key column of a point-read row is the operand the
+/// read used for it (Clarification rule 1).
 pub fn operand_of(
     schema: &Schema,
     facts: &PathFacts,
     expression: &Expr,
     at: &NodePath,
-) -> Result<Operand, Unresolvable> {
+) -> Result<Operand, ClassifyError> {
     Ok(match expression {
         Expr::Literal(value) => Operand::Literal(value.clone()),
         Expr::Parameter(parameter) => Operand::Parameter(parameter.clone()),
-        Expr::Projection { slot, .. } if facts.holds_no_row(*slot) => {
-            return Err(Unresolvable::AbsentSource)
-        }
+        Expr::Projection { slot, column } if facts.is_released(*slot) => Operand::ReleasedColumn {
+            slot: *slot,
+            column: column.clone(),
+        },
         Expr::Projection { slot, column } => {
             let read = facts.read_of(*slot, at)?;
             match point_read_key_operand(schema, facts, &read, column) {
@@ -186,7 +187,11 @@ pub fn operand_of(
             condition,
             when_true,
             when_false,
-        } => conditional_operand(schema, facts, condition, [when_true, when_false], at)?,
+        } => Operand::Conditional(
+            Box::new(condition_operand(schema, facts, condition, at)?),
+            Box::new(operand_of(schema, facts, when_true, at)?),
+            Box::new(operand_of(schema, facts, when_false, at)?),
+        ),
     })
 }
 
@@ -195,7 +200,7 @@ fn condition_operand(
     facts: &PathFacts,
     condition: &Condition,
     at: &NodePath,
-) -> Result<Operand, Unresolvable> {
+) -> Result<Operand, ClassifyError> {
     Ok(match condition {
         Condition::RowPresent(slot) if facts.is_released(*slot) => Operand::Absence,
         Condition::RowPresent(slot) => Operand::Presence(facts.read_of(*slot, at)?),
@@ -209,58 +214,6 @@ fn condition_operand(
             Box::new(operand_of(schema, facts, right, at)?),
         ),
     })
-}
-
-/// A conditional value is computed whatever its condition: the arm a decided
-/// condition chooses settles which projections the evaluator reaches, never
-/// what the value is made of (`inputs.md` §5, Clarification 7(c)).
-fn conditional_operand(
-    schema: &Schema,
-    facts: &PathFacts,
-    condition: &Condition,
-    arms: [&Expr; 2],
-    at: &NodePath,
-) -> Result<Operand, Unresolvable> {
-    let chosen = decided_arm(facts, condition, at);
-    let condition = condition_operand(schema, facts, condition, at)?;
-    let [when_true, when_false] = arms.map(|arm| match operand_of(schema, facts, arm, at) {
-        Err(Unresolvable::AbsentSource) => Ok(None),
-        resolved => resolved.map(Some),
-    });
-    let (when_true, when_false) = match (chosen, when_true?, when_false?) {
-        (_, Some(when_true), Some(when_false)) => (when_true, when_false),
-        (Some(true), Some(chosen), None) | (Some(false), None, Some(chosen)) => {
-            (chosen.clone(), chosen)
-        }
-        (None, Some(_), None) | (None, None, Some(_)) => {
-            return Err(Unresolvable::ConditionalAbortsOnOneArm)
-        }
-        _ => return Err(Unresolvable::AbsentSource),
-    };
-    Ok(Operand::Conditional(
-        Box::new(condition),
-        Box::new(when_true),
-        Box::new(when_false),
-    ))
-}
-
-/// The arm `condition` chooses on this path, if it chooses one statically: a
-/// condition that compares two literals, or tests a slot whose presence the
-/// path knows (`KILN-E1-19`) or an ended iteration released.
-pub fn decided_arm(facts: &PathFacts, condition: &Condition, at: &NodePath) -> Option<bool> {
-    match condition {
-        Condition::Compare {
-            left: Expr::Literal(left),
-            relation,
-            right: Expr::Literal(right),
-        } => relation.holds(left, right),
-        Condition::Compare { .. } => None,
-        Condition::RowPresent(slot) if facts.is_released(*slot) => Some(false),
-        Condition::RowPresent(slot) => facts
-            .read_of(*slot, at)
-            .ok()
-            .and_then(|read| facts.presence_of(&read)),
-    }
 }
 
 /// What a point read used for its key column `column`, if `read` is one.

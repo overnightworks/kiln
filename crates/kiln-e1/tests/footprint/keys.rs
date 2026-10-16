@@ -460,7 +460,7 @@ pub(super) mod kiln_e1_27 {
         domain: None,
     };
 
-    fn table_keyed_by(name: &str, key: &str, kind: ColumnType) -> Table {
+    pub(crate) fn table_keyed_by(name: &str, key: &str, kind: ColumnType) -> Table {
         let key = ColumnName(key.to_owned());
         Table {
             name: table(name),
