@@ -194,9 +194,13 @@ pub fn check_source_commit(commit: &str) -> CheckResult {
     }
 }
 
-fn pinned_toolchain_channel(repo_root: &Path) -> io::Result<String> {
-    let contents = fs::read_to_string(repo_root.join("rust-toolchain.toml"))?;
-    contents
+/// The repository's `rust-toolchain.toml` as of the commit this binary was
+/// compiled from, embedded so the pin is the reviewed commit's even when
+/// the build ran in a checkout that no longer exists.
+const PINNED_TOOLCHAIN_FILE: &str = include_str!("../../../../rust-toolchain.toml");
+
+fn pinned_toolchain_channel(toolchain_file: &str) -> io::Result<String> {
+    toolchain_file
         .lines()
         .find_map(|line| {
             let rest = line.trim().strip_prefix("channel")?;
@@ -212,13 +216,6 @@ fn pinned_toolchain_channel(repo_root: &Path) -> io::Result<String> {
         })
 }
 
-/// This crate's directory, known at compile time — used only to find the
-/// repository root's `rust-toolchain.toml`, never baked into a check's
-/// pass/fail logic itself.
-fn crate_dir() -> &'static Path {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-}
-
 /// Runs every check against the real environment, filesystem, and
 /// `rustc`/`sqlite3` the process is actually running under. This is the
 /// thin adapter: each check it calls is independently unit-tested against
@@ -231,17 +228,7 @@ pub fn run_real() -> PreflightReport {
             let output = Command::new("rustc").arg("--version").output()?;
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         },
-        || {
-            // harness/ -> e4-sqlite-cost-anatomy/ -> experiments/ -> repo root.
-            let repo_root = crate_dir()
-                .parent()
-                .and_then(Path::parent)
-                .and_then(Path::parent)
-                .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::NotFound, "repo root not found above crate")
-                })?;
-            pinned_toolchain_channel(repo_root)
-        },
+        || pinned_toolchain_channel(PINNED_TOOLCHAIN_FILE),
     );
 
     let sqlite_version_actual = unsafe {
@@ -451,23 +438,20 @@ mod tests {
 
     #[test]
     fn the_pinned_toolchain_channel_is_read_from_rust_toolchain_toml() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        fs::write(
-            dir.path().join("rust-toolchain.toml"),
-            "[toolchain]\nchannel = \"1.99.1\"\ncomponents = [\"rustfmt\"]\n",
-        )
-        .unwrap();
+        let file = "[toolchain]\nchannel = \"1.99.1\"\ncomponents = [\"rustfmt\"]\n";
 
-        assert_eq!(pinned_toolchain_channel(dir.path()).unwrap(), "1.99.1");
+        assert_eq!(pinned_toolchain_channel(file).unwrap(), "1.99.1");
     }
 
     #[test]
-    fn a_missing_toolchain_file_or_channel_line_is_an_error() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        assert!(pinned_toolchain_channel(dir.path()).is_err());
+    fn a_toolchain_file_without_a_channel_line_is_an_error() {
+        assert!(pinned_toolchain_channel("[toolchain]\n").is_err());
+        assert!(pinned_toolchain_channel("").is_err());
+    }
 
-        fs::write(dir.path().join("rust-toolchain.toml"), "[toolchain]\n").unwrap();
-        assert!(pinned_toolchain_channel(dir.path()).is_err());
+    #[test]
+    fn the_embedded_toolchain_pin_names_a_channel() {
+        assert!(pinned_toolchain_channel(PINNED_TOOLCHAIN_FILE).is_ok());
     }
 
     #[test]
