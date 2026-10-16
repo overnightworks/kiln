@@ -21,7 +21,8 @@ impl ValidCheckerForm {
 /// that fails: 1, every name a term mentions and every count and carrier field
 /// is declared; 2, every term and each component's shape is well-typed; 3,
 /// every operation is total and no part is missing. The failure is that
-/// check's first defect in the order the form is written.
+/// check's first defect: check 1 reports undeclared references before counts
+/// and carrier fields, and each check otherwise follows the written order.
 pub fn validate(family: &Family, form: &CheckerForm) -> Result<ValidCheckerForm, Malformed> {
     references::declared(family, form)?;
     structure::declared(family, form)?;
