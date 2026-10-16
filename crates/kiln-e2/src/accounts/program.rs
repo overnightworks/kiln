@@ -3,7 +3,7 @@ use kiln_ir::{
     IntegerWidth, Program, Relation, Schema, Table, Value,
 };
 
-use super::{Status, ACCOUNTS_TABLE, AMOUNT_MAX, BALANCE_COLUMN, STATUS_COLUMN};
+use super::{AccountsAbort, Status, ACCOUNTS_TABLE, AMOUNT_MAX, BALANCE_COLUMN, STATUS_COLUMN};
 use crate::builders::{
     abort_if, abort_if_absent, abort_unless_in_range, argument, field, integer_parameter, minus,
     number, plus, read, returning, sequence, update, Step,
@@ -79,11 +79,11 @@ fn balance(slot: u32) -> Expr {
 }
 
 fn amount_in_range() -> [Step; 2] {
-    abort_unless_in_range("amount", 1, AMOUNT_MAX, "invalid_amount")
+    abort_unless_in_range("amount", 1, AMOUNT_MAX, AccountsAbort::InvalidAmount.name())
 }
 
 fn account_must_exist(account: &str, slot: u32) -> Step {
-    abort_if_absent(slot, "account_not_found").after(read_account(account, slot))
+    abort_if_absent(slot, AccountsAbort::AccountNotFound.name()).after(read_account(account, slot))
 }
 
 fn abort_if_status(slot: u32, status: Status, name: &'static str) -> Step {
@@ -100,14 +100,14 @@ fn abort_if_short_of(slot: u32) -> Step {
         balance(slot),
         Relation::Less,
         argument("amount"),
-        "insufficient_funds",
+        AccountsAbort::InsufficientFunds.name(),
     )
 }
 
 fn deposit() -> Function {
     let steps = amount_in_range().into_iter().chain([
         account_must_exist("account", 0),
-        abort_if_status(0, Status::Frozen, "account_frozen"),
+        abort_if_status(0, Status::Frozen, AccountsAbort::AccountFrozen.name()),
     ]);
     let credited = plus(balance(0), argument("amount"));
     let finish = returning(
@@ -120,7 +120,7 @@ fn deposit() -> Function {
 fn withdraw() -> Function {
     let steps = amount_in_range().into_iter().chain([
         account_must_exist("account", 0),
-        abort_if_status(0, Status::Frozen, "account_frozen"),
+        abort_if_status(0, Status::Frozen, AccountsAbort::AccountFrozen.name()),
         abort_if_short_of(0),
     ]);
     let debited = minus(balance(0), argument("amount"));
@@ -137,12 +137,12 @@ fn transfer() -> Function {
             argument("from"),
             Relation::Equal,
             argument("to"),
-            "same_account",
+            AccountsAbort::SameAccount.name(),
         ),
         account_must_exist("from", 0),
         account_must_exist("to", 1),
-        abort_if_status(0, Status::Frozen, "account_frozen"),
-        abort_if_status(1, Status::Frozen, "account_frozen"),
+        abort_if_status(0, Status::Frozen, AccountsAbort::AccountFrozen.name()),
+        abort_if_status(1, Status::Frozen, AccountsAbort::AccountFrozen.name()),
         abort_if_short_of(0),
     ]);
     let debited = minus(balance(0), argument("amount"));
@@ -170,9 +170,13 @@ fn status_change(name: &str, to: Status, already: &'static str) -> Function {
 }
 
 fn freeze() -> Function {
-    status_change("freeze", Status::Frozen, "already_frozen")
+    status_change(
+        "freeze",
+        Status::Frozen,
+        AccountsAbort::AlreadyFrozen.name(),
+    )
 }
 
 fn unfreeze() -> Function {
-    status_change("unfreeze", Status::Open, "not_frozen")
+    status_change("unfreeze", Status::Open, AccountsAbort::NotFrozen.name())
 }
