@@ -1,0 +1,8 @@
+claim_id = "7a95701b2aad49f79a636f509ab4f9e5"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "c4c5319af0d1f7600c1fee27c74130bc6178c1fe"
+branch = "claude/issue-86-s1c-composite-constraints"
+scope = ["crates/kiln-e1/src/footprint/cause.rs", "crates/kiln-e1/src/footprint/dependency.rs", "crates/kiln-e1/src/tpcc/profile.rs", "crates/kiln-e1/src/tpcc/tables.rs", "crates/kiln-e1/tests", "crates/kiln-ir/src/evaluator/foreign_key.rs", "crates/kiln-ir/src/evaluator/mod.rs", "crates/kiln-ir/src/evaluator/unique.rs", "crates/kiln-ir/src/evaluator/written.rs", "crates/kiln-ir/src/ir/mod.rs", "crates/kiln-ir/src/ir/schema.rs", "crates/kiln-ir/src/lib.rs", "crates/kiln-ir/tests", "specs/kiln-e1.spec.md", "specs/kiln-ir.spec.md"]
+opened_commit = "8710f432c151f7271e678fa7f58248916caab2c6"
+whole_reason = "composite constraints span the schema, the three constraint evaluators, abort payloads, the classifier's dependency rule and TPC-C's table declarations"
