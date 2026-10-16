@@ -1,0 +1,8 @@
+claim_id = "7d85ff9c746040859b4b8ef0578768c4"
+agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
+role = "builder"
+base = "f206bdc9a73e34be5fb41a7cc0d204d7b1884290"
+branch = "claude/issue-93-e2-accounts-summary"
+scope = ["crates/kiln-e2/src/accounts", "crates/kiln-e2/tests", "specs/kiln-e2.spec.md"]
+opened_commit = "cb1a1e3c91a0e9c20de24e49c9acd50d512337ed"
+whole_reason = "one family's summary module plus its tests in the crate's test directory"
