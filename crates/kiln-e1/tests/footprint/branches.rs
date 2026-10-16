@@ -54,6 +54,25 @@ mod kiln_e1_19 {
     }
 
     #[test]
+    fn a_presence_test_on_a_slot_an_ended_iteration_released_takes_only_the_absent_arm() {
+        for released in [1, 2] {
+            let body = branch_on_presence(
+                vec![
+                    read_range("orders", param("low"), param("high"), 0),
+                    iterate(0, 1, vec![read("orders", key_of(1), 2)]),
+                ],
+                released,
+                writing("a", "x"),
+                writing("b", "y"),
+            );
+            assert_eq!(category_of(body.clone()), STATIC, "{body:?}");
+            assert!(!evidence_of(body)
+                .iter()
+                .any(|node| node.contains("when_present")));
+        }
+    }
+
+    #[test]
     fn arms_ordered_by_inclusion_classify_by_their_most_demanding_path() {
         let both = || {
             returns(vec![

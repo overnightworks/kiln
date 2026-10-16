@@ -70,7 +70,9 @@ impl Walker<'_> {
     }
 
     /// Explores the arms an enclosing test has not already ruled out. Each arm
-    /// stays a separate path, so `selection` can compare them (Q1, Q3).
+    /// stays a separate path, so `selection` can compare them (Q1, Q3). A slot
+    /// an ended iteration released holds an absent row, so only the absent arm
+    /// runs.
     fn branch(
         &self,
         selector: Slot,
@@ -78,6 +80,9 @@ impl Walker<'_> {
         terminal: NodePath,
         facts: PathFacts,
     ) -> Result<Vec<FeasiblePath>, ClassifyError> {
+        if facts.is_released(selector) {
+            return self.block(when_absent, &terminal.when_absent(), facts);
+        }
         let selector = facts.read_of(selector, &terminal)?;
         match facts.presence_of(&selector) {
             Some(true) => return self.block(when_present, &terminal.when_present(), facts),

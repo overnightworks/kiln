@@ -642,19 +642,13 @@ mod kiln_e1_27 {
     }
 
     #[test]
-    fn a_read_of_a_slot_an_ended_iteration_released_is_reported() {
+    fn a_projection_of_a_slot_an_ended_iteration_released_classifies_through_its_last_read() {
         let body = returns(vec![
             read_range("orders", param("low"), param("high"), 0),
             iterate(0, 1, vec![read("orders", key_of(1), 2)]),
             read("customers", column_of(2, "customer_id"), 3),
         ]);
-        assert_eq!(
-            classify_function(&program(body), &FunctionName(FUNCTION.to_owned())),
-            Err(ClassifyError::UnboundSlot {
-                slot: Slot(2),
-                at: "f/body/effects[2]".to_owned()
-            })
-        );
+        assert_eq!(category_of(body), ONE_HOP);
     }
 
     #[test]

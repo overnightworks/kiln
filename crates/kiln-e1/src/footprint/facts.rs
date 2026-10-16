@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use kiln_ir::{IndexName, Slot, TableName};
 
@@ -134,9 +134,7 @@ pub struct Obstacle {
     pub cause: UnknownCause,
 }
 
-/// What a bound slot holds at a point of the path, as the evaluator binds it.
-/// A slot holds nothing before a read binds it and after the iteration that
-/// bound it ends.
+/// What a slot last held at a point of the path, as the evaluator binds it.
 #[derive(Clone, Debug)]
 enum SlotContent {
     /// The row or rows `read` bound.
@@ -154,6 +152,7 @@ enum SlotContent {
 pub struct PathFacts {
     bindings: Vec<Binding>,
     slots: HashMap<Slot, SlotContent>,
+    released: HashSet<Slot>,
     presence: Vec<(NodePath, bool)>,
     argument_decisions: Vec<(NodePath, bool)>,
     pub accesses: Vec<Access>,
@@ -169,6 +168,7 @@ impl PathFacts {
             node: binding.node.clone(),
         };
         self.slots.insert(binding.slot, SlotContent::Read(read));
+        self.released.remove(&binding.slot);
         self.bindings.push(binding);
     }
 
@@ -186,14 +186,20 @@ impl PathFacts {
             iteration: iteration.clone(),
         };
         self.slots.insert(row, content);
+        self.released.remove(&row);
         Ok(())
     }
 
-    /// Empties the slots the evaluator releases when an iteration ends.
+    /// Marks the slots the evaluator releases when an iteration ends: they
+    /// hold an absent row until a read binds them again.
     pub fn end_iteration(&mut self, released: impl IntoIterator<Item = Slot>) {
-        for slot in released {
-            self.slots.remove(&slot);
-        }
+        self.released.extend(released);
+    }
+
+    /// Whether an ended iteration released `slot`, so a presence test on it
+    /// finds no row. A projection of it still resolves to what it last held.
+    pub fn is_released(&self, slot: Slot) -> bool {
+        self.released.contains(&slot)
     }
 
     /// The read that produced `slot`'s rows.
