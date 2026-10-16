@@ -23,7 +23,11 @@ by itself establish the owner's "fixed, stated bound": quota and inventory
 have their frozen constants, checked by measurement, and accounts has no
 stated bound (`inputs.md` §6), so a pass there claims no batch-independent
 bound. Growth slower than `τ` over the window, or beginning beyond 256, is
-outside what it can see (§5 states the blind spots).
+outside what it can see (§5 states the blind spots). For accounts, "no growth
+detected" is necessary but not sufficient for E2's overall pass: the owner's
+fixed, stated bound must still be stated before measurement and checked. The
+part of this protocol that freezes throughput states it; until then an
+accounts pass cannot make E2 pass.
 
 ## 2. Batches
 
@@ -157,10 +161,11 @@ independent samples (§2).
 two endpoints are identically distributed and interchangeable), a rise and a
 fall are equally likely. The difference is at least 20 with no neutral seeds
 exactly when at least 60 of 100 seeds rise, so the false-fail probability is
-at most `P(Bin(100, ½) ≥ 60) = 0.0284` (neutral seeds lower it). Without
-exchangeability the false-fail probability is **not controlled**. Prefix
-extension can break it: the extra calls can change a summary's final
-evaluation path, so the endpoints of one prefix need not be interchangeable.
+at most `P(Bin(100, ½) ≥ 60) = 0.0284` per quantity (neutral seeds lower it).
+A family has three quantities, so its false-fail probability is at most
+three times that (union bound), about 0.085, under the same assumptions.
+Without exchangeability it is **not controlled**; extra calls can change a
+summary's final evaluation path, so endpoints need not be interchangeable.
 
 **Detection.** A share `s` of rising seeds and no falling seeds is missed with
 probability `P(Bin(100, s) ≤ 19)`. Falling seeds subtract from the
@@ -223,8 +228,8 @@ and says nothing about larger domains.
 - *At least 20 of 100 seeds rise, ignoring falls:* a noisy plateau fails often.
 - *Any strict increase from some size onwards:* "from some size" is a free
   parameter chosen after seeing sizes.
-- *Comparison with size 1 or the smallest sizes:* any saturating quantity
-  would fail against an atomic summary.
+- *Comparison with size 1 or the smallest sizes:* a quantity whose early
+  growth is large enough to cross `τ` would fail against an atomic summary.
 - *Judging 1-256:* contradicts the aggregation `docs/experiments.md` fixes.
 - *Wall time for cost:* needs hardware limits the throughput part owns.
 - *A size-derived cost proxy (nodes plus edges of operands and result):* a
@@ -249,9 +254,10 @@ the representation of each candidate, and applies §4 and §5 unchanged to the
 quantities it measures: the same prefix pairing where its generator has the
 property of §2 (calls independent of position and of `n`), the sizes 64 and
 256 among its sizes, `τ` and the sign-test criterion of §5, with the counting
-boundaries and cache lifecycle of §3 restated for its representations. Its other choices are
-E3's to freeze. Where E3's generator lacks the pairing property it states
-its own error criterion. Its stated bound, if any, is E3's to freeze.
+boundaries and cache lifecycle of §3 restated for its representations. Its
+other choices are E3's to freeze. Where its generator lacks the pairing
+property it states its own error criterion. E3 must state and freeze a bound
+for every family it admits, as `docs/experiments.md` requires.
 
 This rule does **not** replace E3 §1's separate prohibition on enumerating
 quantity and identifier components of the checking domain. A full-domain
