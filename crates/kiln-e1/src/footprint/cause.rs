@@ -32,6 +32,10 @@ pub enum UnknownCause {
     /// The outcome of the read at `selector` changes which targets the
     /// function accesses, which no index or foreign key identifies (Q3).
     DataSelectedTargets { selector: String },
+    /// A conditional value whose condition the path does not decide aborts on
+    /// one arm and not on the other, so the data decides whether the call goes
+    /// on and with it which targets it accesses.
+    ConditionalAbortsOnOneArm,
     /// An iteration's body uses `slot` before binding it and also binds or
     /// releases it, so a later iteration reads what an earlier one left there.
     SlotCarriedAcrossIterations { slot: Slot },
@@ -84,6 +88,10 @@ impl fmt::Display for UnknownCause {
             Self::DataSelectedTargets { selector } => write!(
                 formatter,
                 "the read at {selector} selects between paths that reach different targets"
+            ),
+            Self::ConditionalAbortsOnOneArm => formatter.write_str(
+                "a conditional value aborts on one arm only, so its data decides whether the \
+                 call goes on",
             ),
             Self::SlotCarriedAcrossIterations { slot } => write!(
                 formatter,
