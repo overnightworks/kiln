@@ -28,8 +28,9 @@ commit="$(git -C "$repository" rev-parse --verify --quiet "$2^{commit}")" \
 
 work_dir="$(mktemp -d)"
 # Cargo runs in the foreground, in this script's own process group: Bash holds
-# a trapped signal until it returns, so the directory is never removed under
-# a running test, and Ctrl-C or a unit stop reaches cargo directly.
+# a trapped signal until cargo returns, so a TERM to this script alone never
+# removes the directory under a running test. A group-wide stop (Ctrl-C, unit
+# stop) may remove it while a test child is still exiting; nothing reads it then.
 trap 'rm -rf "$work_dir"' EXIT
 trap 'exit 143' INT TERM
 
