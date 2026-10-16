@@ -1,10 +1,10 @@
 # E2 — frozen part B: compactness measurement only
 
-Status: proposed, not yet frozen. It becomes frozen under the freeze
-protocol of `docs/experiments.md` ("Freeze protocol"), and from then on
-nothing below changes after a summary has been measured. Part A is
-`inputs.md` (families, summaries, generator); this file is part B and owns
-one decision: when a family's summary "grows with batch size".
+Status: frozen. Record: written and independently reviewed in #81 on
+2026-10-16 under the freeze protocol of `docs/experiments.md` ("Freeze
+protocol"); nothing below changes after a summary has been measured. Part
+A is `inputs.md` (families, summaries, generator); this file is part B and
+owns one decision: when a family's summary "grows with batch size".
 
 ## 1. Scope and claim
 
