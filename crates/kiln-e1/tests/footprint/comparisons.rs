@@ -224,4 +224,19 @@ mod kiln_e1_29 {
         let body = on_status(by_customer_id(), by_customer_id());
         assert_eq!(category_of(body), STATIC);
     }
+
+    #[test]
+    fn a_comparison_projecting_a_slot_an_ended_iteration_released_ends_the_path_at_the_branch() {
+        let body = branch_on_equality(
+            vec![
+                read_range("orders", param("low"), param("high"), 0),
+                iterate(0, 1, vec![]),
+            ],
+            (column_of(1, "customer_id"), param("customer_id")),
+            by_customer_id(),
+            by_order_id(),
+        );
+        assert_eq!(category_of(body.clone()), STATIC);
+        assert_eq!(evidence_of(body), ["f/body/effects[0]", BRANCH]);
+    }
 }

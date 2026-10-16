@@ -11,7 +11,7 @@ use crate::builders::{
     abort_unless_in_range, argument, branch, field, holds, integer_parameter, minus, number, plus,
     read, returning, sequence, update, Step,
 };
-use crate::rows::{column, key_literal, table};
+use crate::rows::{column, key_column, key_declaration, key_literal, table};
 
 pub fn program() -> Program {
     Program {
@@ -30,13 +30,17 @@ fn schema() -> Schema {
     Schema {
         tables: vec![Table {
             name: table(STOCK_TABLE),
-            columns: vec![Column {
-                name: column(QUANTITY_COLUMN),
-                kind: ColumnType::Integer {
-                    width: IntegerWidth::I16,
-                    domain: None,
+            columns: vec![
+                key_column(),
+                Column {
+                    name: column(QUANTITY_COLUMN),
+                    kind: ColumnType::Integer {
+                        width: IntegerWidth::I16,
+                        domain: None,
+                    },
                 },
-            }],
+            ],
+            key: key_declaration(),
         }],
         check_constraints: vec![
             quantity_bound(Comparison::AtLeast, STOCK_MIN),

@@ -14,8 +14,9 @@ use kiln_ir::{
 };
 use proptest::prelude::*;
 use support::{
-    arbitrary_value, call_under_test, column, columns_of, columns_of_values, committed_response,
-    parameter, run_ok, single_function_program, table, typed_parameter,
+    arbitrary_key, arbitrary_value, call_under_test, column, columns_of, columns_of_values,
+    committed_response, key_expr, literal_key, one_part, parameter, run_ok,
+    single_function_program, table, typed_parameter,
 };
 
 // --- a projection has no single current row to read from when its source read found none; this
@@ -31,7 +32,7 @@ mod kiln_ir_15 {
             vec![],
             vec![Effect::Read {
                 table: table("t"),
-                key: Expr::Literal(Value::Integer(1)),
+                key: literal_key(1),
                 into: Slot(0),
             }],
             Terminal::Return(Expr::Projection {
@@ -53,12 +54,12 @@ mod kiln_ir_15 {
 
     #[test]
     fn projecting_a_column_absent_from_the_bound_row_aborts_with_a_typed_reason() {
-        let store = Store::containing([(table("t"), Value::Integer(1), Row::default())]);
+        let store = Store::containing([(table("t"), one_part(1), Row::default())]);
         let program = single_function_program(
             vec![],
             vec![Effect::Read {
                 table: table("t"),
-                key: Expr::Literal(Value::Integer(1)),
+                key: literal_key(1),
                 into: Slot(0),
             }],
             Terminal::Return(Expr::Projection {
@@ -130,7 +131,7 @@ mod kiln_ir_08 {
     proptest! {
         #[test]
         fn absent_key_is_branchable(
-            key in arbitrary_value(),
+            key in arbitrary_key(),
             row_present in any::<bool>(),
         ) {
             let store = if row_present {
@@ -139,9 +140,8 @@ mod kiln_ir_08 {
                 Store::empty()
             };
 
-            let program = single_function_program(
-                vec![],
-                vec![Effect::Read { table: table("t"), key: Expr::Literal(key), into: Slot(0) }],
+            let program = single_function_program(vec![],
+                vec![Effect::Read { table: table("t"), key: key_expr(&key), into: Slot(0) }],
                 Terminal::Branch {
                     condition: Condition::RowPresent(Slot(0)),
                     when_present: Box::new(kiln_ir::Block {
@@ -177,20 +177,19 @@ mod kiln_ir_17 {
     proptest! {
         #[test]
         fn write_to_absent_row_aborts(
-            key in arbitrary_value(),
+            key in arbitrary_key(),
             kind in prop_oneof![Just(WriteKind::Update), Just(WriteKind::Delete)],
         ) {
             let store = Store::empty();
             let effect = match kind {
                 WriteKind::Update => Effect::Update {
                     table: table("t"),
-                    key: Expr::Literal(key.clone()),
+                    key: key_expr(&key),
                     columns: columns_of([("c", Expr::Literal(Value::Integer(0)))]),
                 },
-                WriteKind::Delete => Effect::Delete { table: table("t"), key: Expr::Literal(key.clone()) },
+                WriteKind::Delete => Effect::Delete { table: table("t"), key: key_expr(&key) },
             };
-            let program = single_function_program(
-                vec![],
+            let program = single_function_program(vec![],
                 vec![effect],
                 Terminal::Return(Expr::Literal(Value::Integer(0))),
             );
@@ -217,7 +216,7 @@ mod kiln_ir_18 {
     proptest! {
         #[test]
         fn inserting_existing_key_aborts(
-            key in arbitrary_value(),
+            key in arbitrary_key(),
             existing_value in arbitrary_value(),
             new_value in arbitrary_value(),
         ) {
@@ -227,11 +226,10 @@ mod kiln_ir_18 {
                 Row { columns: columns_of_values([("c", existing_value)]) },
             )]);
 
-            let program = single_function_program(
-                vec![],
+            let program = single_function_program(vec![],
                 vec![Effect::Insert {
                     table: table("t"),
-                    key: Expr::Literal(key.clone()),
+                    key: key_expr(&key),
                     columns: columns_of([("c", Expr::Literal(new_value))]),
                 }],
                 Terminal::Return(Expr::Literal(Value::Integer(0))),
@@ -259,25 +257,24 @@ mod kiln_ir_07 {
     proptest! {
         #[test]
         fn effects_apply_in_order_and_reads_see_earlier_writes(
-            key in arbitrary_value(),
+            key in arbitrary_key(),
             first_write in any::<i64>(),
         ) {
             let second_write = first_write.wrapping_add(1); // always distinct from first_write
             let store = Store::empty();
 
-            let program = single_function_program(
-                vec![],
+            let program = single_function_program(vec![],
                 vec![
                     Effect::Insert {
                         table: table("t"),
-                        key: Expr::Literal(key.clone()),
+                        key: key_expr(&key),
                         columns: columns_of([("c", Expr::Literal(Value::Integer(first_write)))]),
                     },
                     // A read right after the insert, still inside this same, uncommitted call.
-                    Effect::Read { table: table("t"), key: Expr::Literal(key.clone()), into: Slot(0) },
+                    Effect::Read { table: table("t"), key: key_expr(&key), into: Slot(0) },
                     Effect::Update {
                         table: table("t"),
-                        key: Expr::Literal(key.clone()),
+                        key: key_expr(&key),
                         columns: columns_of([("c", Expr::Literal(Value::Integer(second_write)))]),
                     },
                 ],
@@ -313,16 +310,15 @@ mod kiln_ir_21 {
     proptest! {
         #[test]
         fn abort_discards_all_effects(
-            key in arbitrary_value(),
+            key in arbitrary_key(),
             value in any::<i64>(),
         ) {
             let store = Store::empty();
 
-            let program = single_function_program(
-                vec![],
+            let program = single_function_program(vec![],
                 vec![Effect::Insert {
                     table: table("t"),
-                    key: Expr::Literal(key),
+                    key: key_expr(&key),
                     columns: columns_of([("c", Expr::Literal(Value::Integer(value)))]),
                 }],
                 Terminal::Abort(kiln_ir::AbortName("rejected".to_owned())),
@@ -348,26 +344,25 @@ mod kiln_ir_34 {
     proptest! {
         #[test]
         fn access_log_records_every_attempt_including_the_one_that_aborts(
-            inserted_key in arbitrary_value(),
-            missing_key in arbitrary_value(),
+            inserted_key in arbitrary_key(),
+            missing_key in arbitrary_key(),
             value in any::<i64>(),
         ) {
             prop_assume!(inserted_key != missing_key);
             let store = Store::empty();
 
-            let program = single_function_program(
-                vec![],
+            let program = single_function_program(vec![],
                 vec![
                     Effect::Insert {
                         table: table("t"),
-                        key: Expr::Literal(inserted_key.clone()),
+                        key: key_expr(&inserted_key),
                         columns: columns_of([("c", Expr::Literal(Value::Integer(value)))]),
                     },
                     // This update targets a different, never-inserted key: it aborts the call,
                     // but it must still show up in the access log.
                     Effect::Update {
                         table: table("t"),
-                        key: Expr::Literal(missing_key.clone()),
+                        key: key_expr(&missing_key),
                         columns: columns_of([("c", Expr::Literal(Value::Integer(value)))]),
                     },
                 ],
@@ -418,12 +413,12 @@ mod kiln_ir_35 {
             columns,
             origin: AccessOrigin::TransactionLogic,
         };
-        let point = |key| AccessTarget::Point(Value::Integer(key));
+        let point = |key| AccessTarget::Point(one_part(key));
         let cases = [
             (
                 Effect::Read {
                     table: table("t"),
-                    key: int(1),
+                    key: vec![int(1)],
                     into: Slot(0),
                 },
                 entry(AccessKind::PointRead, point(1), AccessedColumns::EntireRow),
@@ -431,16 +426,16 @@ mod kiln_ir_35 {
             (
                 Effect::ReadRange {
                     table: table("t"),
-                    start: int(0),
-                    end: int(9),
+                    start: vec![int(0)],
+                    end: vec![int(9)],
                     bound: int(9),
                     into: Slot(0),
                 },
                 entry(
                     AccessKind::RangeRead,
                     AccessTarget::Range {
-                        start: Value::Integer(0),
-                        end: Value::Integer(9),
+                        start: one_part(0),
+                        end: one_part(9),
                     },
                     AccessedColumns::EntireRow,
                 ),
@@ -448,7 +443,7 @@ mod kiln_ir_35 {
             (
                 Effect::Insert {
                     table: table("t"),
-                    key: int(2),
+                    key: vec![int(2)],
                     columns: columns_of([("c", int(1))]),
                 },
                 entry(
@@ -460,7 +455,7 @@ mod kiln_ir_35 {
             (
                 Effect::Update {
                     table: table("t"),
-                    key: int(1),
+                    key: vec![int(1)],
                     columns: columns_of([("c", int(1))]),
                 },
                 entry(
@@ -472,7 +467,7 @@ mod kiln_ir_35 {
             (
                 Effect::Delete {
                     table: table("t"),
-                    key: int(1),
+                    key: vec![int(1)],
                 },
                 entry(AccessKind::Delete, point(1), AccessedColumns::EntireRow),
             ),
@@ -480,7 +475,7 @@ mod kiln_ir_35 {
         for (effect, expected) in cases {
             let store = Store::containing([(
                 table("t"),
-                Value::Integer(1),
+                one_part(1),
                 Row {
                     columns: columns_of_values([("c", Value::Integer(0))]),
                 },
@@ -501,7 +496,7 @@ mod kiln_ir_19 {
 
     #[test]
     fn successful_delete_removes_the_row() {
-        let key = Value::Integer(1);
+        let key = one_part(1);
         let store = Store::containing([(
             table("t"),
             key.clone(),
@@ -514,7 +509,7 @@ mod kiln_ir_19 {
             vec![],
             vec![Effect::Delete {
                 table: table("t"),
-                key: Expr::Literal(key.clone()),
+                key: key_expr(&key),
             }],
             Terminal::Return(Expr::Literal(Value::Integer(0))),
         );
@@ -533,7 +528,7 @@ mod kiln_ir_20 {
 
     #[test]
     fn update_preserves_untouched_columns() {
-        let key = Value::Integer(1);
+        let key = one_part(1);
         let store = Store::containing([(
             table("t"),
             key.clone(),
@@ -546,7 +541,7 @@ mod kiln_ir_20 {
             vec![],
             vec![Effect::Update {
                 table: table("t"),
-                key: Expr::Literal(key.clone()),
+                key: key_expr(&key),
                 columns: columns_of([("a", Expr::Literal(Value::Integer(99)))]),
             }],
             Terminal::Return(Expr::Literal(Value::Integer(0))),

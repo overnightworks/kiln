@@ -12,28 +12,32 @@ pub enum Effect {
     /// later [`Condition::RowPresent`] to test.
     Read {
         table: TableName,
-        key: Expr,
+        key: Vec<Expr>,
         into: Slot,
     },
-    /// Insert a new row. Aborts if a row already exists at `key`.
+    /// Insert a new row. Aborts if a row already exists at `key`. `columns`
+    /// holds the row's non-key columns: the key columns come only through
+    /// `key` (D8).
     Insert {
         table: TableName,
-        key: Expr,
+        key: Vec<Expr>,
         columns: BTreeMap<ColumnName, Expr>,
     },
     /// Overwrite the named columns of an existing row, leaving its other
-    /// columns unchanged. Aborts if no row exists at `key`.
+    /// columns unchanged. Aborts if no row exists at `key`. A key column is
+    /// never named: keys do not change (D8).
     Update {
         table: TableName,
-        key: Expr,
+        key: Vec<Expr>,
         columns: BTreeMap<ColumnName, Expr>,
     },
     /// Remove a row. Aborts if no row exists at `key`.
-    Delete { table: TableName, key: Expr },
-    /// Read every row whose key falls in `[start, end]`, in key order,
-    /// binding the matched sequence to `into` — empty if `start` sorts
-    /// after `end` or no row's key falls between them (`docs/concept.md`
-    /// §2.2 D6, "an empty range reads as an empty sequence").
+    Delete { table: TableName, key: Vec<Expr> },
+    /// Read every row whose key falls in `[start, end]`, in key order (keys
+    /// compare component by component), binding the matched sequence to
+    /// `into` — empty if `start` sorts after `end` or no row's key falls
+    /// between them (`docs/concept.md` §2.2 D6, "an empty range reads as an
+    /// empty sequence").
     ///
     /// Always bounded (§2.1, "never an open-ended loop"): if more rows
     /// match than `bound` resolves to, the call aborts with
@@ -41,8 +45,8 @@ pub enum Effect {
     /// instead of binding `into` at all.
     ReadRange {
         table: TableName,
-        start: Expr,
-        end: Expr,
+        start: Vec<Expr>,
+        end: Vec<Expr>,
         bound: Expr,
         into: Slot,
     },
@@ -80,4 +84,25 @@ pub enum Effect {
         row: Slot,
         body: Vec<Effect>,
     },
+}
+
+/// The slots an [`Effect::Iterate`] with row slot `row` and this `body`
+/// releases when its loop ends: the row slot and every slot the body binds,
+/// at any depth, so nothing an iteration read outlives it. After the loop a
+/// projection or branch on them sees an absence, whether the range held rows
+/// or not.
+pub fn slots_released_by_iteration(row: Slot, body: &[Effect]) -> Vec<Slot> {
+    let mut released = vec![row];
+    for effect in body {
+        match effect {
+            Effect::Read { into, .. }
+            | Effect::ReadRange { into, .. }
+            | Effect::ReadIndexRange { into, .. } => released.push(*into),
+            Effect::Iterate { row, body, .. } => {
+                released.extend(slots_released_by_iteration(*row, body));
+            }
+            Effect::Insert { .. } | Effect::Update { .. } | Effect::Delete { .. } => {}
+        }
+    }
+    released
 }

@@ -49,7 +49,7 @@ pub(crate) fn holds(left: Expr, relation: Relation, right: Expr) -> Condition {
 }
 
 /// `read table[key] -> sN`
-pub(crate) fn read(table_name: &str, key: Expr, slot: u32) -> Effect {
+pub(crate) fn read(table_name: &str, key: Vec<Expr>, slot: u32) -> Effect {
     Effect::Read {
         table: table(table_name),
         key,
@@ -58,7 +58,7 @@ pub(crate) fn read(table_name: &str, key: Expr, slot: u32) -> Effect {
 }
 
 /// `update table[key].column = value`
-pub(crate) fn update(table_name: &str, key: Expr, column_name: &str, value: Expr) -> Effect {
+pub(crate) fn update(table_name: &str, key: Vec<Expr>, column_name: &str, value: Expr) -> Effect {
     Effect::Update {
         table: table(table_name),
         key,

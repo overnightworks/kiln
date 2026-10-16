@@ -54,6 +54,93 @@ mod kiln_e1_19 {
     }
 
     #[test]
+    fn a_presence_test_on_a_slot_an_ended_iteration_released_takes_only_the_absent_arm() {
+        for released in [1, 2] {
+            let body = branch_on_presence(
+                vec![
+                    read_range("orders", param("low"), param("high"), 0),
+                    iterate(0, 1, vec![read("orders", key_of(1), 2)]),
+                ],
+                released,
+                writing("a", "x"),
+                writing("b", "y"),
+            );
+            assert_eq!(category_of(body.clone()), STATIC, "{body:?}");
+            assert!(!evidence_of(body)
+                .iter()
+                .any(|node| node.contains("when_present")));
+        }
+    }
+
+    #[test]
+    fn an_arm_that_aborts_on_a_released_slot_keeps_only_the_targets_before_the_abort() {
+        let present = returns(vec![
+            read("a", param("k"), 3),
+            read("b", column_of(1, KEY_COLUMN), 4),
+        ]);
+        let absent = returns(vec![read("b", param("k"), 5)]);
+        let body = branch_on_presence(
+            vec![
+                read_range("ledger", param("low"), param("high"), 0),
+                iterate(0, 1, vec![read("log", param("k"), 1)]),
+                read("accounts", param("s"), 2),
+            ],
+            2,
+            present,
+            absent,
+        );
+        assert_unknown(body, selected_by("f/body/effects[2]"));
+    }
+
+    #[test]
+    fn an_abort_in_an_iteration_body_forks_on_whether_its_range_holds_a_row() {
+        let after_the_loop = |table: &str| {
+            returns(vec![
+                read_range("ledger", param("low"), param("high"), 0),
+                iterate(0, 1, vec![read("log", param("k"), 2)]),
+                read_range("accounts", param("low"), param("high"), 3),
+                iterate(
+                    3,
+                    4,
+                    vec![
+                        update("audit", param("y"), &[]),
+                        read("b", column_of(2, KEY_COLUMN), 5),
+                    ],
+                ),
+                update(table, param("y"), &[]),
+            ])
+        };
+        assert_unknown(after_the_loop("a"), selected_by("f/body/effects[2]"));
+        assert_eq!(category_of(after_the_loop("audit")), STATIC);
+    }
+
+    #[test]
+    fn an_abort_in_an_iteration_body_over_a_range_known_to_hold_a_row_ends_the_path() {
+        let aborting_loop = returns(vec![
+            iterate(
+                3,
+                4,
+                vec![
+                    update("audit", param("y"), &[]),
+                    read("b", column_of(2, KEY_COLUMN), 5),
+                ],
+            ),
+            update("a", param("y"), &[]),
+        ]);
+        let body = branch_on_presence(
+            vec![
+                read_range("ledger", param("low"), param("high"), 0),
+                iterate(0, 1, vec![read("log", param("k"), 2)]),
+                read_range("accounts", param("low"), param("high"), 3),
+            ],
+            3,
+            aborting_loop,
+            returns(vec![update("a", param("y"), &[])]),
+        );
+        assert_unknown(body, selected_by("f/body/effects[2]"));
+    }
+
+    #[test]
     fn arms_ordered_by_inclusion_classify_by_their_most_demanding_path() {
         let both = || {
             returns(vec![
@@ -73,13 +160,22 @@ mod kiln_e1_19 {
         }
     }
 
+    /// Branches on an account read, so an arm that projects the order never
+    /// projects a row the branch found absent.
+    fn on_an_account(present: Block, absent: Block) -> Block {
+        branch_on_presence(
+            vec![read_order(), read_accounts("k", 2)],
+            2,
+            present,
+            absent,
+        )
+    }
+
     #[test]
     fn a_resolving_arm_against_an_empty_arm_is_one_hop() {
         let resolving = || returns(vec![read_customer_of_order(1)]);
-        let present_resolves =
-            branch_on_presence(vec![read_order()], 0, resolving(), returns(vec![]));
-        let absent_resolves =
-            branch_on_presence(vec![read_order()], 0, returns(vec![]), resolving());
+        let present_resolves = on_an_account(resolving(), returns(vec![]));
+        let absent_resolves = on_an_account(returns(vec![]), resolving());
         assert_eq!(category_of(present_resolves), ONE_HOP);
         assert_eq!(category_of(absent_resolves), ONE_HOP);
     }
@@ -126,8 +222,10 @@ mod kiln_e1_19 {
     #[test]
     fn arms_that_resolve_the_same_read_the_same_way_are_one_hop() {
         let resolving = || returns(vec![read_customer_of_order(1)]);
-        let body = branch_on_presence(vec![read_order()], 0, resolving(), resolving());
-        assert_eq!(category_of(body), ONE_HOP);
+        assert_eq!(
+            category_of(on_an_account(resolving(), resolving())),
+            ONE_HOP
+        );
     }
 
     #[test]
@@ -191,8 +289,10 @@ mod kiln_e1_19 {
 
     #[test]
     fn an_unknown_arm_makes_the_function_unknown() {
-        let body = branch_on_presence(vec![read_order()], 0, static_arm(), unknown_arm());
-        assert_eq!(category_of(body), None);
+        assert_eq!(
+            category_of(on_an_account(static_arm(), unknown_arm())),
+            None
+        );
     }
 
     #[test]

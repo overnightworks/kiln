@@ -16,9 +16,21 @@
 //! others stay fixed. Argument-selected branches are not selectors, but the
 //! paths must agree on them too: paths taking different argument arms are
 //! different cases and are not compared.
+//!
+//! Two targets of two paths are the same when they agree up to one consistent
+//! renaming of row occurrences across the whole of both paths: each path's
+//! occurrences are numbered in the order they first appear in its targets, and
+//! an occurrence of one path stands for the occurrence of the other with the
+//! same number. Which occurrence feeds which component of which target is kept,
+//! so two arms that each access every row of a range by its full key reach the
+//! same targets, while arms that pair the components of two rows differently
+//! do not. Paths whose occurrences first appear in a different order count as
+//! reaching different targets, even when the sets agree: the comparison errs
+//! towards unknown.
 
 use super::evidence::distinct;
 use super::node_path::NodePath;
+use super::operand::{Operand, RowOrigin};
 use super::walk::FeasiblePath;
 
 /// A selector whose outcome changes the accessed targets, and the nodes that
@@ -82,11 +94,33 @@ fn reach_incomparable_targets(first: &FeasiblePath, second: &FeasiblePath) -> bo
 }
 
 fn reaches_target_missing_from(path: &FeasiblePath, other: &FeasiblePath) -> bool {
+    let numbered = occurrences_in_order(path);
+    let others = occurrences_in_order(other);
+    let as_in_other = |origin: &RowOrigin| {
+        let number = numbered.iter().position(|own| *own == origin)?;
+        others.get(number).map(|&counterpart| counterpart.clone())
+    };
     path.facts.accesses.iter().any(|access| {
-        other
-            .facts
-            .accesses
-            .iter()
-            .all(|own| own.target != access.target)
+        access
+            .target
+            .renamed(&as_in_other)
+            .is_none_or(|renamed| other.facts.accesses.iter().all(|own| own.target != renamed))
     })
+}
+
+/// The path's row occurrences, each once, in the order its targets name them.
+fn occurrences_in_order(path: &FeasiblePath) -> Vec<&RowOrigin> {
+    let mut occurrences: Vec<&RowOrigin> = Vec::new();
+    let named = path
+        .facts
+        .accesses
+        .iter()
+        .flat_map(|access| access.target.operands())
+        .flat_map(Operand::origins);
+    for origin in named {
+        if !occurrences.contains(&origin) {
+            occurrences.push(origin);
+        }
+    }
+    occurrences
 }

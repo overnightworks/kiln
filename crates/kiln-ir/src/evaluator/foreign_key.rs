@@ -1,12 +1,12 @@
 //! The foreign-key check (D1, D2, D5): written child rows must name a
 //! present parent, and a deleted parent must have no remaining children.
 
-use crate::ir::{ForeignKey, Schema};
+use crate::ir::{ForeignKey, Key, Schema};
 use crate::store::Store;
 
-use super::constraints::log_lookup;
+use super::constraints::{constrained_table, log_constraint_lookup, log_point_read};
 use super::written::{keys_deleted_from, keys_written_on};
-use super::{AbortReason, AccessLogEntry, AccessedColumns};
+use super::{AbortReason, AccessLogEntry, AccessedColumns, ConstraintRef};
 
 /// Checks every foreign key against `final_store`, returning the first
 /// violation: for each key, the child rows first, then the deleted parents.
@@ -16,8 +16,8 @@ pub(super) fn first_violation(
     access_log: &mut Vec<AccessLogEntry>,
 ) -> Option<AbortReason> {
     schema.foreign_keys.iter().find_map(|foreign_key| {
-        dangling_reference(foreign_key, final_store, access_log)
-            .or_else(|| referenced_parent_deleted(foreign_key, final_store, access_log))
+        dangling_reference(schema, foreign_key, final_store, access_log)
+            .or_else(|| referenced_parent_deleted(schema, foreign_key, final_store, access_log))
     })
 }
 
@@ -25,26 +25,29 @@ pub(super) fn first_violation(
 /// referenced key, touching no column; a row deleted by the end, or lacking
 /// the column, names nothing.
 fn dangling_reference(
+    schema: &Schema,
     foreign_key: &ForeignKey,
     final_store: &Store,
     access_log: &mut Vec<AccessLogEntry>,
 ) -> Option<AbortReason> {
-    let written_keys = keys_written_on(access_log, &foreign_key.table, &foreign_key.column);
+    let child = constrained_table(schema, &foreign_key.table);
+    let written_keys = keys_written_on(access_log, child, &foreign_key.column);
     for key in written_keys {
         let Some(referenced) = final_store
-            .row(&foreign_key.table, &key)
-            .and_then(|row| row.columns.get(&foreign_key.column))
+            .row(&child.name, &key)
+            .and_then(|row| child.column_value(&key, row, &foreign_key.column))
         else {
             continue;
         };
-        log_lookup(
+        let referenced_key = Key(vec![referenced.clone()]);
+        log_point_read(
             access_log,
             &foreign_key.references,
-            referenced,
+            referenced_key.clone(),
             AccessedColumns::Named(vec![]),
         );
         if final_store
-            .row(&foreign_key.references, referenced)
+            .row(&foreign_key.references, &referenced_key)
             .is_none()
         {
             return Some(AbortReason::DanglingReference {
@@ -59,22 +62,28 @@ fn dangling_reference(
 /// Each parent key deleted and absent at the end logs one lookup of the
 /// children naming it, by the same representation the unique check uses.
 fn referenced_parent_deleted(
+    schema: &Schema,
     foreign_key: &ForeignKey,
     final_store: &Store,
     access_log: &mut Vec<AccessLogEntry>,
 ) -> Option<AbortReason> {
+    let child = constrained_table(schema, &foreign_key.table);
     let deleted_keys = keys_deleted_from(access_log, &foreign_key.references);
     for key in deleted_keys {
         if final_store.row(&foreign_key.references, &key).is_some() {
             continue;
         }
-        log_lookup(
+        log_constraint_lookup(
             access_log,
-            &foreign_key.table,
-            &key,
+            &child.name,
+            ConstraintRef::ForeignKey(foreign_key.clone()),
+            key.0.clone(),
             AccessedColumns::Named(vec![foreign_key.column.clone()]),
         );
-        if final_store.any_row_holds(&foreign_key.table, &foreign_key.column, &key) {
+        let [referenced] = key.0.as_slice() else {
+            panic!("a validated foreign key references a one-column key");
+        };
+        if final_store.any_row_holds(child, &foreign_key.column, referenced) {
             return Some(AbortReason::ReferencedParentDeleted {
                 foreign_key: foreign_key.clone(),
                 key,

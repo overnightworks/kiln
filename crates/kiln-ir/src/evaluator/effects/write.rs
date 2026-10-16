@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::identifiers::{ColumnName, TableName};
-use crate::ir::{Expr, Row, Slot, Value};
+use crate::ir::{Expr, Key, Row, Slot, Value};
 use crate::store::Store;
 
 use super::super::resolve::{resolve_for_write, WriteOverflow};
@@ -9,20 +9,20 @@ use super::super::{
     AbortReason, AccessKind, AccessLogEntry, AccessOrigin, AccessTarget, AccessedColumns, Binding,
     CallContext, Outcome,
 };
-use super::resolve_or_abort;
+use super::key::resolve_key;
 
 /// Inserts a new row, aborting with `DuplicateKey` if one already exists at
 /// `key` (`Effect::Insert`).
 pub(super) fn apply_insert(
     table: &TableName,
-    key: &Expr,
+    key: &[Expr],
     columns: &BTreeMap<ColumnName, Expr>,
     ctx: &CallContext,
     store: &mut Store,
     bindings: &HashMap<Slot, Binding>,
     access_log: &mut Vec<AccessLogEntry>,
 ) -> Option<Outcome> {
-    let key = match resolve_or_abort(key, ctx, bindings) {
+    let key = match resolve_key(table, key, ctx, bindings) {
         Ok(key) => key,
         Err(outcome) => return Some(outcome),
     };
@@ -59,14 +59,14 @@ pub(super) fn apply_insert(
 /// `MissingRow` if none exists at `key` (`Effect::Update`).
 pub(super) fn apply_update(
     table: &TableName,
-    key: &Expr,
+    key: &[Expr],
     columns: &BTreeMap<ColumnName, Expr>,
     ctx: &CallContext,
     store: &mut Store,
     bindings: &HashMap<Slot, Binding>,
     access_log: &mut Vec<AccessLogEntry>,
 ) -> Option<Outcome> {
-    let key = match resolve_or_abort(key, ctx, bindings) {
+    let key = match resolve_key(table, key, ctx, bindings) {
         Ok(key) => key,
         Err(outcome) => return Some(outcome),
     };
@@ -98,13 +98,13 @@ pub(super) fn apply_update(
 /// (`Effect::Delete`).
 pub(super) fn apply_delete(
     table: &TableName,
-    key: &Expr,
+    key: &[Expr],
     ctx: &CallContext,
     store: &mut Store,
     bindings: &HashMap<Slot, Binding>,
     access_log: &mut Vec<AccessLogEntry>,
 ) -> Option<Outcome> {
-    let key = match resolve_or_abort(key, ctx, bindings) {
+    let key = match resolve_key(table, key, ctx, bindings) {
         Ok(key) => key,
         Err(outcome) => return Some(outcome),
     };
@@ -137,7 +137,7 @@ pub(super) fn apply_delete(
 /// overflowed.
 pub(super) fn resolve_write_columns(
     table: &TableName,
-    key: &Value,
+    key: &Key,
     columns: &BTreeMap<ColumnName, Expr>,
     ctx: &CallContext,
     bindings: &HashMap<Slot, Binding>,

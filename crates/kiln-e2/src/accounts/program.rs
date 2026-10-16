@@ -8,7 +8,7 @@ use crate::builders::{
     abort_if, abort_if_absent, abort_unless_in_range, argument, field, integer_parameter, minus,
     number, plus, read, returning, sequence, update, Step,
 };
-use crate::rows::{column, table};
+use crate::rows::{column, key_column, key_declaration, table};
 
 pub fn program() -> Program {
     Program {
@@ -35,9 +35,11 @@ fn schema() -> Schema {
         tables: vec![Table {
             name: table(ACCOUNTS_TABLE),
             columns: vec![
+                key_column(),
                 integer_column(BALANCE_COLUMN, IntegerWidth::I64),
                 integer_column(STATUS_COLUMN, IntegerWidth::I8),
             ],
+            key: key_declaration(),
         }],
         check_constraints: vec![
             bound(BALANCE_COLUMN, Comparison::AtLeast, 0),
@@ -65,11 +67,11 @@ fn function(
 }
 
 fn read_account(account: &str, slot: u32) -> kiln_ir::Effect {
-    read(ACCOUNTS_TABLE, argument(account), slot)
+    read(ACCOUNTS_TABLE, vec![argument(account)], slot)
 }
 
 fn set(account: &str, column_name: &str, value: Expr) -> kiln_ir::Effect {
-    update(ACCOUNTS_TABLE, argument(account), column_name, value)
+    update(ACCOUNTS_TABLE, vec![argument(account)], column_name, value)
 }
 
 fn balance(slot: u32) -> Expr {

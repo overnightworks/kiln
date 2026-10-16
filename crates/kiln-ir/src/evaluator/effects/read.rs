@@ -6,28 +6,32 @@ use crate::store::{KeyedRow, Store};
 
 use super::super::{
     AbortReason, AccessKind, AccessLogEntry, AccessOrigin, AccessTarget, AccessedColumns, Binding,
-    CallContext, Outcome,
+    BoundRow, CallContext, Outcome,
 };
+use super::key::resolve_key;
 use super::resolve_or_abort;
 
 /// Reads one row by key, binding its presence or absence to `into`
 /// (`Effect::Read`).
 pub(super) fn apply_read(
     table: &TableName,
-    key: &Expr,
+    key: &[Expr],
     into: Slot,
     ctx: &CallContext,
     store: &Store,
     bindings: &mut HashMap<Slot, Binding>,
     access_log: &mut Vec<AccessLogEntry>,
 ) -> Option<Outcome> {
-    let key = match resolve_or_abort(key, ctx, bindings) {
+    let key = match resolve_key(table, key, ctx, bindings) {
         Ok(key) => key,
         Err(outcome) => return Some(outcome),
     };
-    let row = store.row(table, &key).map(|row| KeyedRow {
-        key: key.clone(),
-        row: row.clone(),
+    let row = store.row(table, &key).map(|row| BoundRow {
+        table: table.clone(),
+        keyed: KeyedRow {
+            key: key.clone(),
+            row: row.clone(),
+        },
     });
     access_log.push(AccessLogEntry {
         table: table.clone(),
@@ -46,8 +50,8 @@ pub(super) fn apply_read(
 /// instead.
 pub(super) struct RangeRead<'a> {
     pub(super) table: &'a TableName,
-    pub(super) start: &'a Expr,
-    pub(super) end: &'a Expr,
+    pub(super) start: &'a [Expr],
+    pub(super) end: &'a [Expr],
     pub(super) bound: &'a Expr,
     pub(super) into: Slot,
 }
@@ -67,11 +71,11 @@ pub(super) fn apply_read_range(
     bindings: &mut HashMap<Slot, Binding>,
     access_log: &mut Vec<AccessLogEntry>,
 ) -> Option<Outcome> {
-    let start = match resolve_or_abort(range.start, ctx, bindings) {
+    let start = match resolve_key(range.table, range.start, ctx, bindings) {
         Ok(start) => start,
         Err(outcome) => return Some(outcome),
     };
-    let end = match resolve_or_abort(range.end, ctx, bindings) {
+    let end = match resolve_key(range.table, range.end, ctx, bindings) {
         Ok(end) => end,
         Err(outcome) => return Some(outcome),
     };
@@ -129,7 +133,13 @@ pub(super) fn bind_within_bound(
             },
         });
     }
-    bindings.insert(into, Binding::Range(rows));
+    bindings.insert(
+        into,
+        Binding::Range {
+            table: table.clone(),
+            rows,
+        },
+    );
     None
 }
 
@@ -191,7 +201,11 @@ pub(super) fn apply_read_index_range(
         columns: AccessedColumns::Named(index.columns.clone()),
         origin: AccessOrigin::TransactionLogic,
     });
-    let rows = store.rows_in_index_range(&index.table, &index.columns, &start, &end);
+    let table = ctx
+        .schema
+        .table(&index.table)
+        .unwrap_or_else(|| panic!("validated index names undeclared table {:?}", index.table));
+    let rows = store.rows_in_index_range(table, &index.columns, &start, &end);
     bind_within_bound(&index.table, bound, rows, read.into, bindings)
 }
 

@@ -9,9 +9,15 @@ pub enum Value {
     Text(String),
 }
 
-/// A row's columns, keyed by name. The row's primary key is not one of its
-/// columns: it is the key a [`Store`](crate::store::Store) looks the row up
-/// by.
+/// A table's primary key: one value per key column, in the order the table
+/// declares them (D8). Keys are equal when every component is and order
+/// lexicographically, component by component.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Key(pub Vec<Value>);
+
+/// A row's columns, keyed by name. The row's key columns are not among them:
+/// they live only in the [`Key`] a [`Store`](crate::store::Store) looks the row
+/// up by (D8).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Row {
     pub columns: BTreeMap<ColumnName, Value>,

@@ -12,12 +12,14 @@
 //! disabled per unused helper.
 #![allow(dead_code)]
 
-use std::collections::BTreeMap;
+pub mod world;
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use kiln_ir::{
-    replay, run, Call, Column, ColumnName, Effect, Execution, Expr, Function, FunctionName,
-    IntegerWidth, Parameter, ParameterName, ParameterType, Program, Row, Schema, Store, Table,
-    TableName, Terminal, Value,
+    replay, run, Call, Column, ColumnName, ColumnType, Effect, Execution, Expr, Function,
+    FunctionName, IntegerWidth, Key, KeyDeclaration, Parameter, ParameterName, ParameterType,
+    Program, Row, Schema, Store, Table, TableName, Terminal, Value,
 };
 use proptest::prelude::*;
 
@@ -27,6 +29,45 @@ pub fn table(name: &str) -> TableName {
 
 pub fn column(name: &str) -> ColumnName {
     ColumnName(name.to_owned())
+}
+
+/// The key column `id` that [`keyed_by_id`] gives every table.
+pub fn id_column() -> Column {
+    Column {
+        name: column("id"),
+        kind: ColumnType::Integer {
+            width: IntegerWidth::I64,
+            domain: None,
+        },
+    }
+}
+
+/// A table keyed by an integer column `id` alongside `columns`.
+pub fn keyed_by_id(name: &str, columns: Vec<Column>) -> Table {
+    Table {
+        name: table(name),
+        columns: std::iter::once(id_column()).chain(columns).collect(),
+        key: KeyDeclaration::Columns(vec![column("id")]),
+    }
+}
+
+/// The one-part key holding `component`.
+pub fn one_part(component: i64) -> Key {
+    Key(vec![Value::Integer(component)])
+}
+
+/// A key expression of one literal component.
+pub fn literal_key(component: i64) -> Vec<Expr> {
+    vec![Expr::Literal(integer(component))]
+}
+
+/// A key expression whose components are the literals of `key`.
+pub fn key_expr(key: &Key) -> Vec<Expr> {
+    key.0.iter().cloned().map(Expr::Literal).collect()
+}
+
+pub fn arbitrary_key() -> impl Strategy<Value = Key> {
+    any::<i64>().prop_map(one_part)
 }
 
 pub fn parameter(name: &str) -> ParameterName {
@@ -69,18 +110,52 @@ pub fn columns_of_values(
         .collect()
 }
 
+/// A program with one function, `under_test`, over a schema declaring every
+/// table its body names as keyed by an integer `id` and nothing else: the
+/// columns a test writes stay undeclared.
 pub fn single_function_program(
     parameters: Vec<Parameter>,
     effects: Vec<Effect>,
     terminal: Terminal,
 ) -> Program {
+    let mut names = BTreeSet::new();
+    collect_table_names(&effects, &terminal, &mut names);
     Program {
-        schema: Default::default(),
+        schema: Schema {
+            tables: names.iter().map(|name| keyed_by_id(name, vec![])).collect(),
+            ..Default::default()
+        },
         functions: vec![Function {
             name: FunctionName("under_test".to_owned()),
             parameters,
             body: kiln_ir::Block { effects, terminal },
         }],
+    }
+}
+
+fn collect_table_names(effects: &[Effect], terminal: &Terminal, names: &mut BTreeSet<String>) {
+    for effect in effects {
+        match effect {
+            Effect::Read { table, .. }
+            | Effect::Insert { table, .. }
+            | Effect::Update { table, .. }
+            | Effect::Delete { table, .. }
+            | Effect::ReadRange { table, .. } => {
+                names.insert(table.0.clone());
+            }
+            Effect::Iterate { body, .. } => collect_table_names(body, terminal, names),
+            Effect::ReadIndexRange { .. } => {}
+        }
+    }
+    if let Terminal::Branch {
+        when_present,
+        when_absent,
+        ..
+    } = terminal
+    {
+        for arm in [when_present, when_absent] {
+            collect_table_names(&arm.effects, &arm.terminal, names);
+        }
     }
 }
 
@@ -108,9 +183,9 @@ pub fn program_with_schema(
     }
 }
 
-/// A program whose schema declares table "t" with exactly one column,
-/// `declared_column`, plus the given function body — the shape every D3
-/// test writes into.
+/// A program whose schema declares table "t" keyed by `id` with exactly one
+/// other column, `declared_column`, plus the given function body — the shape
+/// every D3 test writes into.
 pub fn program_with_column(
     declared_column: Column,
     parameters: Vec<Parameter>,
@@ -118,10 +193,7 @@ pub fn program_with_column(
     terminal: Terminal,
 ) -> Program {
     let schema = Schema {
-        tables: vec![Table {
-            name: table("t"),
-            columns: vec![declared_column],
-        }],
+        tables: vec![keyed_by_id("t", vec![declared_column])],
         ..Default::default()
     };
     program_with_schema(schema, parameters, effects, terminal)
@@ -170,12 +242,11 @@ pub fn run_write(declared_column: Column, write_expr: Expr, via: WriteVia) -> Ex
         column("c"),
         "run_write always writes into the column named \"c\""
     );
-    let key = Value::Integer(1);
     let store = match via {
         WriteVia::Insert => Store::empty(),
         WriteVia::Update => Store::containing([(
             table("t"),
-            key.clone(),
+            one_part(1),
             Row {
                 columns: columns_of_values([("c", Value::Integer(0))]),
             },
@@ -184,12 +255,12 @@ pub fn run_write(declared_column: Column, write_expr: Expr, via: WriteVia) -> Ex
     let effect = match via {
         WriteVia::Insert => Effect::Insert {
             table: table("t"),
-            key: Expr::Literal(key),
+            key: literal_key(1),
             columns: columns_of([("c", write_expr)]),
         },
         WriteVia::Update => Effect::Update {
             table: table("t"),
-            key: Expr::Literal(key),
+            key: literal_key(1),
             columns: columns_of([("c", write_expr)]),
         },
     };
@@ -218,7 +289,7 @@ pub fn insert_row(
 ) -> Effect {
     Effect::Insert {
         table: table(table_name),
-        key: Expr::Literal(integer(key)),
+        key: literal_key(key),
         columns: literal_columns(values),
     }
 }
@@ -230,7 +301,7 @@ pub fn update_row(
 ) -> Effect {
     Effect::Update {
         table: table(table_name),
-        key: Expr::Literal(integer(key)),
+        key: literal_key(key),
         columns: literal_columns(values),
     }
 }
@@ -238,7 +309,7 @@ pub fn update_row(
 pub fn delete_row(table_name: &str, key: i64) -> Effect {
     Effect::Delete {
         table: table(table_name),
-        key: Expr::Literal(integer(key)),
+        key: literal_key(key),
     }
 }
 
@@ -258,7 +329,7 @@ pub fn store_of_rows(rows: &[RowSpec]) -> Store {
     Store::containing(rows.iter().map(|(table_name, key, values)| {
         (
             table(table_name),
-            integer(*key),
+            one_part(*key),
             Row {
                 columns: columns_of_values(values.clone()),
             },

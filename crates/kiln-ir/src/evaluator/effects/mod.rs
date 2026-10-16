@@ -3,6 +3,7 @@
 //! the branch/return/abort decision a block ends on.
 
 mod iterate;
+mod key;
 mod read;
 mod terminal;
 mod write;

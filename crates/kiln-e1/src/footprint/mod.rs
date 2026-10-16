@@ -3,6 +3,7 @@
 //! IR node paths as evidence, applying `inputs.md` §5 (Q1-Q4). The observable
 //! behaviour is owned by `specs/kiln-e1.spec.md` (`KILN-E1-18` to `KILN-E1-29`).
 
+mod carried;
 mod cause;
 mod dependency;
 mod evidence;
@@ -15,7 +16,7 @@ mod walk;
 
 use std::fmt;
 
-use kiln_ir::{FunctionName, Program, Slot};
+use kiln_ir::{FunctionName, Program, ProgramError, Slot};
 
 pub use cause::UnknownCause;
 pub use evidence::{IndexRead, IndexReadKind};
@@ -35,8 +36,12 @@ pub struct FootprintClassification {
 /// Why a function could not be classified at all.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClassifyError {
+    /// The program is one `kiln-ir` rejects before any call (D8, D9), so its
+    /// keys cannot be read component by component.
+    InvalidProgram(ProgramError),
     UnknownFunction(FunctionName),
-    /// A key or bound refers to a slot no earlier read bound.
+    /// A place that reads a slot names one no earlier read bound, or an
+    /// iteration ranges over one that an ended iteration released.
     UnboundSlot {
         slot: Slot,
         at: String,
@@ -47,13 +52,14 @@ pub enum ClassifyError {
 impl fmt::Display for ClassifyError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidProgram(error) => write!(formatter, "the program is invalid: {error:?}"),
             Self::UnknownFunction(name) => {
                 write!(formatter, "the program declares no function {}", name.0)
             }
             Self::UnboundSlot { slot, at } => {
                 write!(
                     formatter,
-                    "slot {} is read at {at} before any read binds it",
+                    "slot {} is read at {at} where no read binds it",
                     slot.0
                 )
             }
@@ -63,6 +69,12 @@ impl fmt::Display for ClassifyError {
 }
 
 impl std::error::Error for ClassifyError {}
+
+impl From<ProgramError> for ClassifyError {
+    fn from(error: ProgramError) -> Self {
+        Self::InvalidProgram(error)
+    }
+}
 
 impl From<ContractViolation> for ClassifyError {
     fn from(violation: ContractViolation) -> Self {
@@ -74,6 +86,7 @@ pub fn classify_function(
     program: &Program,
     name: &FunctionName,
 ) -> Result<FootprintClassification, ClassifyError> {
+    program.validate()?;
     let function = program
         .functions
         .iter()
