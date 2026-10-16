@@ -7,16 +7,13 @@ use kiln_e2::accounts::{
     Status::{Frozen, Open},
 };
 use kiln_e2::comparison::{compare, CallDifference, Divergence};
+use kiln_e2::corpus::{prefix_corpus, PrefixCase, Truncate, PROTOCOL_SEEDS, PROTOCOL_SIZES};
 use kiln_e2::inventory::{self, InventoryAbort, InventoryCall, StockState};
 use kiln_e2::oracle::{oracle_run, FamilyBatch};
 use kiln_e2::quota::{self, QuotaAbort, QuotaCall, QuotaState};
 use kiln_e2::run::{Abort, CallOutcome, Run};
 use kiln_e2::BatchSize;
 use kiln_ir::{AbortName, AbortReason, Call, Key, Outcome, TableName, Value};
-
-/// The protocol's batch sizes and seeds (protocol.md section 2).
-const SIZES: [u32; 9] = [1, 2, 4, 8, 16, 32, 64, 128, 256];
-const SEEDS: u32 = 100;
 
 type Fold<B> = fn(&B) -> Run<<B as FamilyBatch>::Abort, <B as FamilyBatch>::State>;
 type RowOf<A> = fn(&Call, &CallOutcome<A>) -> String;
@@ -52,31 +49,11 @@ struct Sweep {
     rows_seen: BTreeMap<String, usize>,
 }
 
-/// How a family's batch is cut to its first calls, keeping its initial state.
-type Truncate<B> = fn(&mut B, usize);
-
-/// The protocol's paired corpus: for each seed, the prefixes of
-/// `generate(256, seed)` at every protocol size (protocol.md section 2).
-fn prefix_corpus<B: Clone>(
-    generate: fn(BatchSize, u32) -> B,
-    truncate: Truncate<B>,
-) -> impl Iterator<Item = (String, B)> {
-    let largest = BatchSize::new(*SIZES.last().expect("sizes")).expect("a protocol size");
-    (0..SEEDS).flat_map(move |seed| {
-        let full = generate(largest, seed);
-        SIZES.into_iter().map(move |size| {
-            let mut prefix = full.clone();
-            truncate(&mut prefix, size as usize);
-            (format!("prefix {size} of seed {seed}"), prefix)
-        })
-    })
-}
-
 /// Batches generated independently at each size, as additional evidence.
 fn independent_corpus<B>(generate: fn(BatchSize, u32) -> B) -> impl Iterator<Item = (String, B)> {
-    SIZES.into_iter().flat_map(move |size| {
+    PROTOCOL_SIZES.into_iter().flat_map(move |size| {
         let batch_size = BatchSize::new(size).expect("a protocol size");
-        (0..SEEDS).map(move |seed| {
+        (0..PROTOCOL_SEEDS).map(move |seed| {
             (
                 format!("independent size {size} seed {seed}"),
                 generate(batch_size, seed),
@@ -104,7 +81,8 @@ where
         divergences: Vec::new(),
         rows_seen: BTreeMap::new(),
     };
-    for (label, batch) in prefix_corpus(generate, truncate) {
+    for PrefixCase { size, seed, batch } in prefix_corpus(generate, truncate) {
+        let label = format!("prefix {size} of seed {seed}");
         let oracle = oracle_run(&batch).expect("the oracle's schema is valid");
         for (call, outcome) in batch.calls().iter().zip(&oracle.outcomes) {
             *sweep.rows_seen.entry(row_of(call, outcome)).or_default() += 1;

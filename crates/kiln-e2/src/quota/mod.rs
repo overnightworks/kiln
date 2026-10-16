@@ -4,6 +4,7 @@
 mod fold;
 mod generator;
 mod program;
+mod summary;
 
 use kiln_ir::{Call, Program, Store};
 
@@ -14,6 +15,7 @@ use crate::run::declared_aborts;
 pub use fold::serial_fold;
 pub use generator::generate;
 pub use program::program;
+pub use summary::{cost_report, QuotaSummary, SizeReport};
 
 declared_aborts! {
     QuotaAbort {

@@ -8,8 +8,8 @@ cites the freeze rather than restating it:
 `experiments/e2-parallel-ordered-transactions/inputs.md` (sections 1 to 5). A
 test claims a criterion by living in the module named for it: `mod kiln_e2_03
 { #[test] fn ... }` claims `KILN-E2-03`. One criterion per module; several
-tests may share it. The crate times nothing, runs nothing in parallel and
-builds no summaries.
+tests may share it. The crate times nothing and runs nothing in parallel; the only summary algebra
+it builds is quota's.
 
 ## Quota allocation
 
@@ -58,3 +58,10 @@ builds no summaries.
 - [KILN-E2-28] Those prefix batches exercise every row of each family's frozen outcome table at least once (`same_account` and an absent account in a money operation excluded, as the generators never produce them): full and partial quota grants and refills, in-place and restocking order lines, both stock-check answers, and every abort.
 - [KILN-E2-29] The comparator reports the first diverging call's index with the expected and the actual outcome and what differs (outcome kind, response, abort reason or abort payload); equal calls with unequal call counts report the counts, and equal calls with unequal final states report both states. An oracle abort the family does not declare, or a declared name it does not know, converts to a structural abort and so diverges from any fold.
 - [KILN-E2-30] A fold that raises the quota ceiling by one is reported at the first refill that reaches the ceiling, with the oracle's and the fold's response.
+
+## Quota summary, scan and counter
+
+- [KILN-E2-31] Quota's `combine` is associative on values (not merely through `apply`): over atomic summaries of consecutive generated calls and over composite summaries of consecutive segments of `generate(256, seed)` for seeds 0 to 99.
+- [KILN-E2-32] `epsilon` (an `invalid_quantity` call, whichever kind) is an identity of `combine` on either side through `apply` on every state in `[0, 1000]`; the laws are checked semantically, never by comparing values.
+- [KILN-E2-33] The sequential scan derives each call's pre-state as `apply(P_{i-1}, x0)` from the prefix summaries and yields the serial fold's response for every call (full and partial grants and refills, both declared aborts) and its final state, on every prefix of the protocol's corpus.
+- [KILN-E2-34] On the protocol's prefix corpus the batch summary is 24 bytes, the largest combine of the balanced pairwise fold executes 5 counted operations (3 additions, 2 clamps; none for a single call) and applying the batch summary executes 2 (1 addition, 1 clamp), counted where they execute; `cost_report` gives these per protocol batch size.
