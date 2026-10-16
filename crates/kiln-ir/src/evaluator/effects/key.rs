@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::identifiers::TableName;
-use crate::ir::{Expr, Key, Slot};
+use crate::ir::{Expr, Key, Slot, Value};
 
 use super::super::{AbortReason, Binding, CallContext, Outcome};
 use super::resolve_or_abort;
@@ -19,12 +19,25 @@ pub(super) fn resolve_key(
     ctx: &CallContext,
     bindings: &HashMap<Slot, Binding>,
 ) -> Result<Key, Outcome> {
+    resolve_components(table, 0, exprs, ctx, bindings).map(Key)
+}
+
+/// Resolves `exprs` as the components of `table`'s key from `first_position`
+/// on, checking each like [`resolve_key`]: a range prefix starts at 0, its
+/// interval at the position after the prefix.
+pub(super) fn resolve_components(
+    table: &TableName,
+    first_position: usize,
+    exprs: &[Expr],
+    ctx: &CallContext,
+    bindings: &HashMap<Slot, Binding>,
+) -> Result<Vec<Value>, Outcome> {
     let declared = ctx
         .schema
         .table(table)
         .unwrap_or_else(|| panic!("validated program names undeclared table {table:?}"));
     let mut components = Vec::with_capacity(exprs.len());
-    for (name, expr) in declared.key_columns().iter().zip(exprs) {
+    for (name, expr) in declared.key_columns()[first_position..].iter().zip(exprs) {
         let value = resolve_or_abort(expr, ctx, bindings)?;
         let column = declared
             .column(name)
@@ -40,5 +53,5 @@ pub(super) fn resolve_key(
         }
         components.push(value);
     }
-    Ok(Key(components))
+    Ok(components)
 }
