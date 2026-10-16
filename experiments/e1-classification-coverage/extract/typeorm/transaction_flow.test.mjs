@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import ts from "typescript";
 
-import { MAX_PATHS_PER_FUNCTION, PATH_CAP_EXCEEDED, closingsOfStartedTransactions } from "./transaction_flow.mjs";
+import { MAX_PATHS_PER_FUNCTION, PATH_CAP_EXCEEDED, UNSUPPORTED_CONTROL_FLOW, closingsOfStartedTransactions } from "./transaction_flow.mjs";
 import { enumerationOf, marker, shape, site } from "./unit_fixtures.mjs";
 
 const START = "qr.startTransaction()";
@@ -250,48 +250,6 @@ async function rethrow(first, second, flag) {
     [],
   ],
   [
-    "a start in a loop whose commit lies after the loop is unmatched",
-    `\
-async function loopStart(first, second, flag) {
-  for (const item of [first]) {
-    await qr.startTransaction();
-    await qr.manager.save(item);
-  }
-  await qr.commitTransaction();
-}
-`,
-    [["S3", 4, ["item"], [4]]],
-    [3],
-  ],
-  [
-    "a start before a loop whose commit lies in the loop is unmatched",
-    `\
-async function loopCommit(first, second, flag) {
-  await qr.startTransaction();
-  await qr.manager.save(first);
-  while (flag) {
-    await qr.commitTransaction();
-  }
-}
-`,
-    [["S3", 3, ["first"], [3]]],
-    [2],
-  ],
-  [
-    "a start and its commit inside one loop body are a transaction",
-    `\
-async function loopBoth(first, second, flag) {
-  for (const item of [first]) {
-    await qr.startTransaction();
-    await qr.manager.save(item);
-    await qr.commitTransaction();
-  }
-}
-`,
-    [["S2", 3, PARAMETERS, [4]]],
-    [],
-  ],
-  [
     "a discarded inner opening does not let a later commit close the outer transaction: the outer start is unmatched and the inner one, popped on every path, owns what follows it",
     `\
 async function innerGuarded(first, second, flag) {
@@ -366,8 +324,62 @@ async function finallyCommits(first, second, flag) {
     [["S2", 2, PARAMETERS, [4]]],
     [],
   ],
+];
+
+for (const [name, source, units, unmatchedLines] of FLOWS) {
+  test(`KILN-E1TO-10 ${name}`, () => {
+    const enumeration = enumerationOfFlow(source);
+    assert.deepEqual(enumeration.units.map(shape), units);
+    assert.deepEqual(enumeration.unmatchedMarkers.map(({ line }) => line), unmatchedLines);
+  });
+}
+
+/** Functions whose control flow the path definition does not cover: every start in them is unmatched with that reason. */
+const UNSUPPORTED = [
   [
-    "a break out of a loop body before the commit leaves the start made in the body unmatched",
+    "a start in a loop whose commit lies after the loop",
+    `\
+async function loopStart(first, second, flag) {
+  for (const item of [first]) {
+    await qr.startTransaction();
+    await qr.manager.save(item);
+  }
+  await qr.commitTransaction();
+}
+`,
+    [["S3", 4, ["item"], [4]]],
+    [3],
+  ],
+  [
+    "a start before a loop whose commit lies in the loop",
+    `\
+async function loopCommit(first, second, flag) {
+  await qr.startTransaction();
+  await qr.manager.save(first);
+  while (flag) {
+    await qr.commitTransaction();
+  }
+}
+`,
+    [["S3", 3, ["first"], [3]]],
+    [2],
+  ],
+  [
+    "a start and its commit inside one loop body",
+    `\
+async function loopBoth(first, second, flag) {
+  for (const item of [first]) {
+    await qr.startTransaction();
+    await qr.manager.save(item);
+    await qr.commitTransaction();
+  }
+}
+`,
+    [["S3", 4, ["item"], [4]]],
+    [3],
+  ],
+  [
+    "a break out of a loop body before the commit",
     `\
 async function loopBreak(first, second, flag) {
   for (const item of [first]) {
@@ -382,7 +394,7 @@ async function loopBreak(first, second, flag) {
     [3],
   ],
   [
-    "a continue in a switch clause leaves the loop iteration, so the start before it is unmatched",
+    "a continue in a switch clause inside a loop with a start",
     `\
 async function switchContinue(first, second, flag) {
   for (const item of [first]) {
@@ -400,10 +412,193 @@ async function switchContinue(first, second, flag) {
     [["S3", 8, ["item"], [8]]],
     [3],
   ],
+  [
+    "a return in a loop inside a try whose finally commits, with the start in the loop",
+    `\
+async function loopReturnFinally(first, second, flag) {
+  try {
+    while (flag) {
+      await qr.startTransaction();
+      return;
+    }
+  } finally {
+    await qr.commitTransaction();
+  }
+}
+`,
+    [],
+    [4],
+  ],
+  [
+    "a return in a loop inside a try whose finally commits, with the start before the try",
+    `\
+async function returnFinally(first, second, flag) {
+  await qr.startTransaction();
+  await qr.manager.save(first);
+  try {
+    while (flag) {
+      return;
+    }
+  } finally {
+    await qr.commitTransaction();
+  }
+}
+`,
+    [["S3", 3, ["first"], [3]]],
+    [2],
+  ],
+  [
+    "a loop that opens a second transaction while an outer one is open, so the final commit is not the outer one's",
+    `\
+async function outerThenLoop(first, second, flag) {
+  await qr.startTransaction();
+  await qr.manager.save(first);
+  while (flag) {
+    await qr.startTransaction();
+  }
+  await qr.commitTransaction();
+}
+`,
+    [["S3", 3, ["first"], [3]]],
+    [2, 5],
+  ],
+  [
+    "a do-while whose condition commits after a continue",
+    `\
+async function doWhileCommit(first, second, flag) {
+  await qr.manager.save(first);
+  do {
+    await qr.startTransaction();
+    continue;
+  } while (await qr.commitTransaction());
+}
+`,
+    [["S3", 2, ["first"], [2]]],
+    [4],
+  ],
+  [
+    "a labelled break past a start and its commit",
+    `\
+async function labelled(first, second, flag) {
+  await qr.startTransaction();
+  await qr.manager.save(first);
+  done: {
+    break done;
+  }
+  await qr.commitTransaction();
+}
+`,
+    [["S3", 3, ["first"], [3]]],
+    [2],
+  ],
+  [
+    "a labelled continue in a function with a start",
+    `\
+async function labelledContinue(first, second, flag) {
+  await qr.startTransaction();
+  outer: for (const item of [first]) {
+    for (const other of [second]) {
+      if (flag) continue outer;
+    }
+  }
+  await qr.manager.save(second);
+  await qr.commitTransaction();
+}
+`,
+    [["S3", 8, ["second"], [8]]],
+    [2],
+  ],
+  [
+    "a loop in the file body beside a start",
+    `\
+await qr.startTransaction();
+for (const item of [first]) {
+  await qr.manager.save(item);
+  await qr.commitTransaction();
+}
+`,
+    [["S3", 3, [], [3]]],
+    [1],
+  ],
 ];
 
-for (const [name, source, units, unmatchedLines] of FLOWS) {
-  test(`KILN-E1TO-10 ${name}`, () => {
+for (const [name, source, units, unmatchedLines] of UNSUPPORTED) {
+  test(`KILN-E1TO-10 unsupported control flow: ${name} leaves every start in the function unmatched`, () => {
+    const enumeration = enumerationOfFlow(source);
+    assert.deepEqual(enumeration.units.map(shape), units);
+    assert.deepEqual(enumeration.unmatchedMarkers.map(({ line }) => line), unmatchedLines);
+    assert.deepEqual([...new Set(enumeration.unmatchedMarkers.map(({ reason }) => reason))], [UNSUPPORTED_CONTROL_FLOW]);
+  });
+}
+
+/** Loops and labels that cannot touch a transaction, or whose jump stays inside the supported constructs, are still enumerated. */
+const SUPPORTED_NEAR_MISSES = [
+  [
+    "a loop and a break in it that hold no transaction call",
+    `\
+async function loopWithoutTransactionCalls(first, second, flag) {
+  await qr.startTransaction();
+  for (const item of [first]) {
+    await qr.manager.save(item);
+    if (flag) break;
+  }
+  await qr.commitTransaction();
+}
+`,
+    [["S2", 2, PARAMETERS, [4]]],
+    [],
+  ],
+  [
+    "a return in a loop inside a try whose finally has no terminator",
+    `\
+async function finallyWithoutTerminator(first, second, flag) {
+  await qr.startTransaction();
+  await qr.manager.save(first);
+  await qr.commitTransaction();
+  try {
+    while (flag) {
+      return;
+    }
+  } finally {
+    audit.log(first);
+  }
+}
+`,
+    [["S2", 2, PARAMETERS, [3]]],
+    [],
+  ],
+  [
+    "a function nested in a loop keeps its own control flow",
+    `\
+async function outerLoop(first, second, flag) {
+  for (const item of [first]) {
+    run(async () => {
+      await qr.startTransaction();
+      await qr.manager.save(item);
+      await qr.commitTransaction();
+    });
+  }
+}
+`,
+    [["S2", 4, [], [5]]],
+    [],
+  ],
+  [
+    "a label that no jump names",
+    `\
+async function unusedLabel(first, second, flag) {
+  await qr.startTransaction();
+  here: await qr.manager.save(first);
+  await qr.commitTransaction();
+}
+`,
+    [["S2", 2, PARAMETERS, [3]]],
+    [],
+  ],
+];
+
+for (const [name, source, units, unmatchedLines] of SUPPORTED_NEAR_MISSES) {
+  test(`KILN-E1TO-10 ${name} is still matched by the path definition`, () => {
     const enumeration = enumerationOfFlow(source);
     assert.deepEqual(enumeration.units.map(shape), units);
     assert.deepEqual(enumeration.unmatchedMarkers.map(({ line }) => line), unmatchedLines);

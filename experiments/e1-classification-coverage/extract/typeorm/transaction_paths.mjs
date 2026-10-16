@@ -1,19 +1,20 @@
 // S2 control flow as explicit path enumeration: every path through one function (or the file
 // body), statements in order, branches taken one way at a time. A path that ends in `throw` is
 // dropped (a stated limitation). Paths that did the same to every transaction are one path, and a
-// function with more distinct paths than the cap is not enumerated at all.
+// function with more distinct paths than the cap is not enumerated at all. Loops and labelled
+// jumps are not modelled: a function whose transactions they could touch is rejected beforehand
+// (unsupported_control_flow.mjs), so a loop here holds no transaction call and leaves the state as it was.
 
 import ts from "typescript";
 
 import { isFunctionLike } from "./function_scopes.mjs";
 import { calledMethodName } from "./source_text.mjs";
-import { START_OF_PATH, enteredLoop, keyOf, leftLoop, started, terminated } from "./transaction_path_state.mjs";
+import { START_OF_PATH, keyOf, started, terminated } from "./transaction_path_state.mjs";
 
 export const START_TRANSACTION = "startTransaction";
-const TERMINATORS = new Set(["commitTransaction", "rollbackTransaction"]);
-const LEAVES_THE_CLAUSE = [ts.isBreakStatement, ts.isContinueStatement, ts.isReturnStatement, ts.isThrowStatement];
+export const TERMINATORS = new Set(["commitTransaction", "rollbackTransaction"]);
 
-/** How a path ends: it runs on, or leaves its function (`return`, a labelled jump) or its innermost loop or `switch`. */
+/** How a path ends: it runs on, or leaves its function (`return`) or its innermost loop or `switch`. */
 const Exit = Object.freeze({ NORMAL: "normal", RETURN: "return", BREAK: "break", CONTINUE: "continue" });
 
 /** @typedef {{ exit: string, state: import("./transaction_path_state.mjs").PathState }} Path */
@@ -72,7 +73,7 @@ class PathWalk {
     if (ts.isCallExpression(node)) return this.#then(this.children(node, state), (next) => [onward(this.#effectOf(node, next))]);
     if (ts.isReturnStatement(node)) return this.#then(this.children(node, state), (next) => [leaving(Exit.RETURN, next)]);
     if (ts.isThrowStatement(node)) return [];
-    if (ts.isBreakStatement(node) || ts.isContinueStatement(node)) return [leaving(jumpOf(node), state)];
+    if (ts.isBreakStatement(node) || ts.isContinueStatement(node)) return [leaving(ts.isBreakStatement(node) ? Exit.BREAK : Exit.CONTINUE, state)];
     if (ts.isIfStatement(node)) return this.#conditional(node.expression, [node.thenStatement, node.elseStatement], state);
     if (ts.isConditionalExpression(node)) return this.#conditional(node.condition, [node.whenTrue, node.whenFalse], state);
     if (ts.isSwitchStatement(node)) return this.#switch(node, state);
@@ -88,24 +89,25 @@ class PathWalk {
     );
   }
 
-  /** Clauses that fall through run in sequence as one arm; without `default` the switch can also be skipped. */
+  /** Control enters at any clause and runs on into the following ones; without `default` the switch can also be skipped. */
   #switch(node, state) {
     const { clauses } = node.caseBlock;
     return this.#then(this.#node(node.expression, state), (entered) => {
-      const arms = fallThroughGroups(clauses).flatMap((group) => this.#clauseGroup(group, entered));
+      const arms = clauses.flatMap((_, entry) => this.#clausesFrom(clauses.slice(entry), entered));
       return this.#bounded(clauses.some(ts.isDefaultClause) ? arms : [...arms, onward(entered)]);
     });
   }
 
-  #clauseGroup(group, state) {
-    const statements = group.flatMap((clause) => [...clause.statements]);
+  /** The statements of the clauses in sequence, until a path leaves the switch (`break`) or the function or loop. */
+  #clausesFrom(clauses, state) {
+    const statements = clauses.flatMap((clause) => [...clause.statements]);
     const paths = statements.reduce((current, statement) => this.#then(current, (next) => this.#node(statement, next)), [onward(state)]);
     return paths.map((path) => (path.exit === Exit.BREAK ? onward(path.state) : path));
   }
 
-  /** The body is walked once, in a deeper loop level; the loop may also run zero times (not so a `do`). */
+  /** The loop holds no transaction call, so running it leaves the state as it was; it may run zero times (not so a `do`). */
   #loop(node, state) {
-    const afterBody = this.children(node, enteredLoop(state)).map((path) => (path.exit === Exit.RETURN ? path : onward(leftLoop(path.state))));
+    const afterBody = this.children(node, state).map((path) => (path.exit === Exit.RETURN ? path : onward(path.state)));
     return this.#bounded([...(ts.isDoStatement(node) ? [] : [onward(state)]), ...afterBody]);
   }
 
@@ -142,29 +144,7 @@ class PathWalk {
   }
 }
 
-const isTransactionCall = (node) => ts.isCallExpression(node) && (calledMethodName(node) === START_TRANSACTION || TERMINATORS.has(calledMethodName(node)));
-
-/** A jump to a label may leave several levels, which this walk does not follow: it ends the path like a `return`. */
-function jumpOf(statement) {
-  if (statement.label) return Exit.RETURN;
-  return ts.isBreakStatement(statement) ? Exit.BREAK : Exit.CONTINUE;
-}
-
-/** Runs of clauses where each but the last can fall through into the next. */
-function fallThroughGroups(clauses) {
-  const groups = [[]];
-  for (const clause of clauses) {
-    groups.at(-1).push(clause);
-    if (leavesTheClause(clause)) groups.push([]);
-  }
-  return groups.filter((group) => group.length > 0);
-}
-
-function leavesTheClause(clause) {
-  let last = clause.statements.at(-1);
-  while (last !== undefined && ts.isBlock(last)) last = last.statements.at(-1);
-  return last !== undefined && LEAVES_THE_CLAUSE.some((is) => is(last));
-}
+export const isTransactionCall = (node) => ts.isCallExpression(node) && (calledMethodName(node) === START_TRANSACTION || TERMINATORS.has(calledMethodName(node)));
 
 /** Calls of `startTransaction` written in the root itself, not in a function nested in it. */
 export function ownStarts(root) {

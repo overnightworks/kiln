@@ -1,12 +1,14 @@
 // S2 control flow: which started transactions every path closes. Each function (and the file
-// body) is walked on its own as an enumeration of its paths (transaction_paths.mjs); a start is
-// matched when no path leaves it open and some path closes it.
+// body) is walked on its own as an enumeration of its paths (transaction_paths.mjs), unless it has
+// control flow the definition does not cover (unsupported_control_flow.mjs); a start is matched
+// when no path leaves it open and some path closes it.
 
 import ts from "typescript";
 
 import { isFunctionLike } from "./function_scopes.mjs";
 import { enumeratePaths, ownStarts } from "./transaction_paths.mjs";
-import { spoiledAtEnd } from "./transaction_path_state.mjs";
+import { openAtEnd } from "./transaction_path_state.mjs";
+import { hasUnsupportedControlFlow } from "./unsupported_control_flow.mjs";
 
 export { START_TRANSACTION } from "./transaction_paths.mjs";
 
@@ -15,6 +17,7 @@ export const MAX_PATHS_PER_FUNCTION = 4096;
 
 export const NOT_CLOSED_ON_EVERY_PATH = "not closed on every path";
 export const PATH_CAP_EXCEEDED = "path cap exceeded";
+export const UNSUPPORTED_CONTROL_FLOW = "unsupported control flow";
 
 /**
  * @typedef {{ end: number } | { unmatched: string }} Closing
@@ -24,7 +27,8 @@ export const PATH_CAP_EXCEEDED = "path cap exceeded";
 /**
  * A start is matched when no path from it to the end of its function leaves it open and a commit
  * or rollback closes it on some path; its transaction ends at the last terminator that closes it
- * on any path.
+ * on any path. A start that no path reaches is unmatched, as is every start of a function with
+ * unsupported control flow or more paths than the cap.
  * @param {ts.SourceFile} sourceFile
  * @returns {Map<ts.CallExpression, Closing>} per start call
  */
@@ -46,12 +50,13 @@ function functionsOf(sourceFile) {
 function closingsIn(sourceFile, root, maxPaths) {
   const starts = ownStarts(root);
   if (starts.length === 0) return [];
+  if (hasUnsupportedControlFlow(root)) return starts.map((start) => [start, { unmatched: UNSUPPORTED_CONTROL_FLOW }]);
   const paths = enumeratePaths(sourceFile, root, maxPaths);
   if (paths === undefined) return starts.map((start) => [start, { unmatched: PATH_CAP_EXCEEDED }]);
-  const spoiled = new Set(paths.flatMap(({ state }) => spoiledAtEnd(state)));
+  const left = new Set(paths.flatMap(({ state }) => openAtEnd(state)));
   const ends = new Map();
   for (const { state } of paths) {
     for (const [start, end] of state.pops) ends.set(start, Math.max(ends.get(start) ?? end, end));
   }
-  return starts.map((start) => [start, spoiled.has(start) || !ends.has(start) ? { unmatched: NOT_CLOSED_ON_EVERY_PATH } : { end: ends.get(start) }]);
+  return starts.map((start) => [start, left.has(start) || !ends.has(start) ? { unmatched: NOT_CLOSED_ON_EVERY_PATH } : { end: ends.get(start) }]);
 }

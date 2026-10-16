@@ -668,12 +668,13 @@ it is applied to TypeScript.
   innermost open start (one with nothing open is stray and changes nothing),
   and a `return`, or the end of the function, ends the path. A start is
   matched when every path that reaches it pops it, and its transaction ends
-  at the last terminator that pops it on any path. A start that some path
-  leaves open, or that no path pops, is unmatched and opens no unit. The arms
-  of an `if` (an absent `else` is the arm that skips it), of a ternary and of
-  a `switch` (the skipping arm too when it has no `default`) are separate
-  paths; `switch` clauses are separate arms only when they end in `break`,
-  `continue`, `return` or `throw`, clauses that fall through run in sequence.
+  at the last terminator that pops it on any path; a start that no path
+  reaches is unmatched, and so is one that some path leaves open. An
+  unmatched start opens no unit. The arms
+  of an `if` (an absent `else` is the arm that skips it) and of a ternary are
+  separate paths; a `switch` is entered at any of its clauses, which run on
+  into the following ones until a `break`, `return` or `throw`, and it can
+  also be skipped when it has no `default`.
   `try`, `catch` and `finally` run in sequence: after a body that completes,
   the code goes on either without the catch or through it, and `finally`
   runs after every path that did not throw. A path that ends in `throw` is
@@ -682,14 +683,17 @@ it is applied to TypeScript.
   not carry. A start made while another is open on the same path nests in it
   and the outermost owns the nested one's sites; starts in mutually exclusive
   arms are on different paths and so are one alternative opening, not a
-  nesting. A loop body is walked once, as a path that may also skip the loop:
-  a commit or rollback in it pops only a start made in that loop, and a start
-  whose commit or rollback lies across the loop boundary, in either
-  direction, is unmatched; a jump to a label ends its path like a `return`.
-  The paths are enumerated explicitly; paths that did the same to every
-  transaction count once, and a function with more than 4096 distinct paths
-  is not enumerated: every start in it is an unmatched marker with the reason
-  "path cap exceeded", recorded in the side output.
+  nesting. The definition covers exactly these constructs. A function has
+  unsupported control flow, and every start in it is an unmatched marker with
+  the reason "unsupported control flow", when it has a start, a commit or a
+  rollback inside a loop (body, condition, initializer, update, or the
+  iterated expression), a `break` or `continue` that names a label, or a
+  `return` inside a loop that an enclosing `finally` holding a commit or
+  rollback follows; a loop with none of these is walked as a path that may
+  skip it. Paths that did the same to every transaction count once, and a
+  function with more than 4096 distinct paths is not enumerated: every start
+  in it is an unmatched marker with the reason "path cap exceeded". Both
+  reasons are recorded in the side output.
   `X.transaction(...)` opens a unit when `X` is, or ends in a property named,
   `dataSource`, `manager` or `connection`, and its body is the last function
   or arrow function argument. A method decorated `@Transaction` or
