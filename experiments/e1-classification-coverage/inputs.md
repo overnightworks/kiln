@@ -1169,10 +1169,12 @@ category. The fidelity expectations for TPC-C are owned by
    read-derived or computed component makes it Unknown, since a unique
    constraint is no index (Q2.1) and One-hop admits only an index or a
    foreign key.
-   (c) A parent-deletion lookup takes the deleted key's provenance: a static
-   or range-contained key (rule 4) leaves it static; any other read-derived
-   or computed component is Unknown, the reverse navigation rule 4 leaves
-   undecided.
+   (c) A parent-deletion lookup is static only when the deleted key is
+   static (every component from arguments or literals). Any read-derived or
+   computed component makes it Unknown, even when the delete itself is
+   covered by a same-table range: the lookup reaches the referencing table,
+   which that range does not cover (rule 4), so it is the reverse
+   navigation rule 4 leaves undecided.
 6. *Appends.* An append is static: its one access is a fresh row of its
    table, which no key of any function can name (D9), so the logged append
    (table, no identity) lies inside the inferred footprint "a fresh row of
@@ -1240,7 +1242,9 @@ navigation Unknown lowers coverage. 5 lowers it in every part: (a) adds
 accesses the landed classifier leaves out, so a function writing a foreign
 key from a read, or partially, is at least One-hop, admitted only through
 the declared foreign key the frozen text names; (b) and (c) keep
-unique-tuple and reverse lookups Unknown. 6 raises it, bounded by the
+unique-tuple and reverse lookups Unknown, (c) also when the delete is
+range-contained (downward; no TPC-C impact, since no table references
+NEW-ORDER). 6 raises it, bounded by the
 containment audit of the logged append. 7: (a), (b) and (d) only carry
 rules 2 and 4 through computation; scans and (c) lower it. 8 and 9 lower it
 (a lowering that cannot meet them refuses; host work hides no resolution).
