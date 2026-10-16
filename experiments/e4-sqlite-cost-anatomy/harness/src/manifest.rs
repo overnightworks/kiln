@@ -68,8 +68,8 @@ impl fmt::Display for BuildMismatch {
                 measured,
             } => write!(
                 f,
-                "the {} binary (sha256 {measured}) is not the build preflight recorded \
-                 in the manifest (sha256 {manifest})",
+                "the {} binary (sha256 {measured}) is not the build recorded \
+                 in the manifest or build record (sha256 {manifest})",
                 build.label()
             ),
             BuildMismatch::Features {
