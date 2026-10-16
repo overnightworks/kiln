@@ -1,0 +1,10 @@
+[package]
+name = "kiln-e3"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "E3's instrument: the candidate term, the family context and the checker-form validation (experiments/e3-summary-synthesis/grammar.md, protocol.md)."
+
+[dependencies]
+kiln-ir = { path = "../kiln-ir" }
+kiln-e2 = { path = "../kiln-e2" }

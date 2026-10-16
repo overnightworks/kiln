@@ -180,6 +180,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kiln-e3"
+version = "0.1.0"
+dependencies = [
+ "kiln-e2",
+ "kiln-ir",
+]
+
+[[package]]
 name = "kiln-ir"
 version = "0.1.0"
 dependencies = [
