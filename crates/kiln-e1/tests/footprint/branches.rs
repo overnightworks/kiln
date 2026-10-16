@@ -32,19 +32,73 @@ mod kiln_e1_19 {
     }
 
     #[test]
-    fn a_branch_whose_arms_reach_different_targets_is_unknown_and_names_its_selector() {
+    fn a_branch_whose_arms_reach_incomparable_targets_is_unknown_and_names_its_selector() {
         let resolving_arm = returns(vec![read_customer_of_order(1)]);
+        let sharing_one_target = |other: &str| {
+            returns(vec![
+                update("shared", param("x"), &[]),
+                update(other, param("y"), &[]),
+            ])
+        };
         let cases = [
             (writing("a", "x"), writing("b", "y")),
             (writing("audit", "x"), writing("audit", "y")),
-            (static_arm(), returns(vec![])),
             (resolving_arm, static_arm()),
+            (sharing_one_target("a"), sharing_one_target("b")),
         ];
         for (present, absent) in cases {
             let body = branch_on_presence(vec![read_order()], 0, present, absent);
             assert_unknown(body.clone(), selected_by(FIRST_READ));
             assert!(evidence_of(body).contains(&FIRST_READ.to_owned()));
         }
+    }
+
+    #[test]
+    fn arms_ordered_by_inclusion_classify_by_their_most_demanding_path() {
+        let both = || {
+            returns(vec![
+                update("audit", param("id"), &[]),
+                update("ledger", param("id"), &[]),
+            ])
+        };
+        let cases = [
+            (static_arm(), returns(vec![])),
+            (returns(vec![]), static_arm()),
+            (both(), static_arm()),
+            (static_arm(), both()),
+        ];
+        for (present, absent) in cases {
+            let body = branch_on_presence(vec![read_order()], 0, present, absent);
+            assert_eq!(category_of(body), STATIC);
+        }
+    }
+
+    #[test]
+    fn a_resolving_arm_against_an_empty_arm_is_one_hop() {
+        let resolving = || returns(vec![read_customer_of_order(1)]);
+        let present_resolves =
+            branch_on_presence(vec![read_order()], 0, resolving(), returns(vec![]));
+        let absent_resolves =
+            branch_on_presence(vec![read_order()], 0, returns(vec![]), resolving());
+        assert_eq!(category_of(present_resolves), ONE_HOP);
+        assert_eq!(category_of(absent_resolves), ONE_HOP);
+    }
+
+    #[test]
+    fn a_resolution_only_on_the_smaller_path_still_counts() {
+        let rows_of_range = |effects| returns(vec![iterate(0, 1, effects)]);
+        let smaller = || rows_of_range(vec![insert("orders", key_of(1))]);
+        let larger = || {
+            rows_of_range(vec![
+                update("orders", key_of(1), &[]),
+                update("audit", param("id"), &[]),
+            ])
+        };
+        let range = || vec![read_range("orders", param("from"), param("to"), 0)];
+        let smaller_first = branch_on_presence(range(), 0, smaller(), larger());
+        let smaller_last = branch_on_presence(range(), 0, larger(), smaller());
+        assert_eq!(category_of(smaller_first), ONE_HOP);
+        assert_eq!(category_of(smaller_last), ONE_HOP);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use kiln_e1::UnknownCause;
-use kiln_ir::Block;
+use kiln_ir::{AbortName, Block, Terminal};
 
 use super::programs::*;
 
@@ -10,7 +10,7 @@ fn by_customer_id() -> Block {
 }
 
 fn by_order_id() -> Block {
-    returns(vec![read("orders", param("order_id"), 1)])
+    returns(vec![read("orders", param("other_order_id"), 1)])
 }
 
 fn by_argument(present: Block, absent: Block) -> Block {
@@ -145,6 +145,49 @@ mod kiln_e1_29 {
             on_status(by_customer_id(), by_order_id()),
             selected_by_branch(),
         );
+    }
+
+    #[test]
+    fn arms_ordered_by_inclusion_classify_by_their_most_demanding_path() {
+        let both = returns(vec![
+            read("customers", param("customer_id"), 1),
+            read("orders", param("order_id"), 2),
+        ]);
+        let cases = [
+            (by_customer_id(), returns(vec![])),
+            (returns(vec![]), by_customer_id()),
+            (both.clone(), by_customer_id()),
+            (by_customer_id(), both),
+        ];
+        for (present, absent) in cases {
+            assert_eq!(category_of(on_status(present, absent)), STATIC);
+        }
+    }
+
+    #[test]
+    fn an_optional_insert_after_a_balance_test_stays_static() {
+        let overdrawn = Block {
+            effects: vec![],
+            terminal: Terminal::Abort(AbortName("overdrawn".to_owned())),
+        };
+        let withdrawn = returns(vec![
+            update("accounts", param("account_id"), &[]),
+            insert("ledger", param("entry_id")),
+        ]);
+        let accounts = vec![read("accounts", param("account_id"), 0)];
+        let balance_is_short = |present, absent| {
+            branch_on_equality(
+                accounts.clone(),
+                (column_of(0, "balance"), param("amount")),
+                present,
+                absent,
+            )
+        };
+        assert_eq!(
+            category_of(balance_is_short(overdrawn.clone(), withdrawn.clone())),
+            STATIC
+        );
+        assert_eq!(category_of(balance_is_short(withdrawn, overdrawn)), STATIC);
     }
 
     #[test]
