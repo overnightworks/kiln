@@ -6,6 +6,7 @@ use kiln_ir::{
     TableName, Terminal,
 };
 
+use super::carried::first_carried_slot;
 use super::cause::UnknownCause;
 use super::dependency::{track_access, AccessRole};
 use super::facts::{Binding, BindingKind, PathFacts, RangeBounds, Target};
@@ -272,8 +273,10 @@ impl Walker<'_> {
         }
     }
 
-    /// Walks the body once for the rows `source` bound. A body that would
-    /// abort never runs over a range the path knows holds no row.
+    /// Walks the body once for the rows `source` bound, as their first
+    /// iteration, so a body that carries a slot from one iteration to the next
+    /// is refused at that slot's use. A body that would abort never runs over
+    /// a range the path knows holds no row.
     fn iterate(
         &self,
         source: Slot,
@@ -283,6 +286,10 @@ impl Walker<'_> {
         facts: &mut PathFacts,
     ) -> Result<(), Halt> {
         let rows = facts.read_of(source, &node)?;
+        if let Some(carried) = first_carried_slot(row, body, &node.iteration_body()) {
+            let cause = UnknownCause::SlotCarriedAcrossIterations { slot: carried.slot };
+            facts.block(&carried.used_at, cause);
+        }
         let mut inside = facts.clone();
         inside.enter_iteration(row, rows.clone(), &node);
         match self.effects(body, &node.iteration_body(), &mut inside) {

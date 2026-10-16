@@ -1,6 +1,6 @@
 use std::fmt;
 
-use kiln_ir::{ColumnName, IndexName, TableName};
+use kiln_ir::{ColumnName, IndexName, Slot, TableName};
 
 /// Why a function's footprint is none of static, one-hop or domain-bounded.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,6 +32,9 @@ pub enum UnknownCause {
     /// The outcome of the read at `selector` changes which targets the
     /// function accesses, which no index or foreign key identifies (Q3).
     DataSelectedTargets { selector: String },
+    /// An iteration's body uses `slot` before binding it and also binds or
+    /// releases it, so a later iteration reads what an earlier one left there.
+    SlotCarriedAcrossIterations { slot: Slot },
 }
 
 impl fmt::Display for UnknownCause {
@@ -81,6 +84,12 @@ impl fmt::Display for UnknownCause {
             Self::DataSelectedTargets { selector } => write!(
                 formatter,
                 "the read at {selector} selects between paths that reach different targets"
+            ),
+            Self::SlotCarriedAcrossIterations { slot } => write!(
+                formatter,
+                "an iteration's body uses slot {} before binding it and binds or releases it \
+                 too, so a later iteration reads what an earlier one left there",
+                slot.0
             ),
         }
     }

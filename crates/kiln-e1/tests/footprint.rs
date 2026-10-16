@@ -14,6 +14,9 @@ mod branches;
 #[path = "footprint/comparisons.rs"]
 mod comparisons;
 
+#[path = "footprint/iterations.rs"]
+mod iterations;
+
 #[path = "footprint/keys.rs"]
 mod keys;
 
