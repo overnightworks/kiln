@@ -1,7 +1,0 @@
-claim_id = "d3670e47b236446dad9aa831f448939d"
-agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
-role = "builder"
-base = "ae749a99a5deb1ee2507cf04c8ffa9e3dbad5a43"
-branch = "claude/issue-81-e2-growth-rule"
-scope = ["experiments/e2-parallel-ordered-transactions/protocol.md"]
-opened_commit = "a834e7e9c1b1e945145a464e434e7f5396edca36"
