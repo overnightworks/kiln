@@ -134,7 +134,9 @@ pub struct Obstacle {
     pub cause: UnknownCause,
 }
 
-/// What a slot last held at a point of the path, as the evaluator binds it.
+/// What a bound slot holds at a point of the path, as the evaluator binds it.
+/// A slot holds nothing before a read binds it and after the iteration that
+/// bound it ends.
 #[derive(Clone, Debug)]
 enum SlotContent {
     /// The row or rows `read` bound.
@@ -172,32 +174,28 @@ impl PathFacts {
         self.bindings.push(binding);
     }
 
-    /// Binds `row` to the current row of the rows `source` holds, as the
+    /// Binds `row` to the current row of the rows `source` bound, as the
     /// iteration at `iteration` yields it.
-    pub fn enter_iteration(
-        &mut self,
-        row: Slot,
-        source: Slot,
-        iteration: &NodePath,
-    ) -> Result<(), ClassifyError> {
-        let source = self.read_of(source, iteration)?;
+    pub fn enter_iteration(&mut self, row: Slot, source: ReadRef, iteration: &NodePath) {
         let content = SlotContent::IterationRow {
             source,
             iteration: iteration.clone(),
         };
         self.slots.insert(row, content);
         self.released.remove(&row);
-        Ok(())
     }
 
-    /// Marks the slots the evaluator releases when an iteration ends: they
+    /// Empties the slots the evaluator releases when an iteration ends: they
     /// hold an absent row until a read binds them again.
     pub fn end_iteration(&mut self, released: impl IntoIterator<Item = Slot>) {
-        self.released.extend(released);
+        for slot in released {
+            self.slots.remove(&slot);
+            self.released.insert(slot);
+        }
     }
 
     /// Whether an ended iteration released `slot`, so a presence test on it
-    /// finds no row. A projection of it still resolves to what it last held.
+    /// finds no row and a projection of it aborts.
     pub fn is_released(&self, slot: Slot) -> bool {
         self.released.contains(&slot)
     }

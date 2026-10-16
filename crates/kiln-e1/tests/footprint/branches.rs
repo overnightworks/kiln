@@ -73,6 +73,74 @@ mod kiln_e1_19 {
     }
 
     #[test]
+    fn an_arm_that_aborts_on_a_released_slot_keeps_only_the_targets_before_the_abort() {
+        let present = returns(vec![
+            read("a", param("k"), 3),
+            read("b", column_of(1, KEY_COLUMN), 4),
+        ]);
+        let absent = returns(vec![read("b", param("k"), 5)]);
+        let body = branch_on_presence(
+            vec![
+                read_range("ledger", param("low"), param("high"), 0),
+                iterate(0, 1, vec![read("log", param("k"), 1)]),
+                read("accounts", param("s"), 2),
+            ],
+            2,
+            present,
+            absent,
+        );
+        assert_unknown(body, selected_by("f/body/effects[2]"));
+    }
+
+    #[test]
+    fn an_abort_in_an_iteration_body_forks_on_whether_its_range_holds_a_row() {
+        let after_the_loop = |table: &str| {
+            returns(vec![
+                read_range("ledger", param("low"), param("high"), 0),
+                iterate(0, 1, vec![read("log", param("k"), 2)]),
+                read_range("accounts", param("low"), param("high"), 3),
+                iterate(
+                    3,
+                    4,
+                    vec![
+                        update("audit", param("y"), &[]),
+                        read("b", column_of(2, KEY_COLUMN), 5),
+                    ],
+                ),
+                update(table, param("y"), &[]),
+            ])
+        };
+        assert_unknown(after_the_loop("a"), selected_by("f/body/effects[2]"));
+        assert_eq!(category_of(after_the_loop("audit")), STATIC);
+    }
+
+    #[test]
+    fn an_abort_in_an_iteration_body_over_a_range_known_to_hold_a_row_ends_the_path() {
+        let aborting_loop = returns(vec![
+            iterate(
+                3,
+                4,
+                vec![
+                    update("audit", param("y"), &[]),
+                    read("b", column_of(2, KEY_COLUMN), 5),
+                ],
+            ),
+            update("a", param("y"), &[]),
+        ]);
+        let body = branch_on_presence(
+            vec![
+                read_range("ledger", param("low"), param("high"), 0),
+                iterate(0, 1, vec![read("log", param("k"), 2)]),
+                read_range("accounts", param("low"), param("high"), 3),
+            ],
+            3,
+            aborting_loop,
+            returns(vec![update("a", param("y"), &[])]),
+        );
+        assert_unknown(body, selected_by("f/body/effects[2]"));
+    }
+
+    #[test]
     fn arms_ordered_by_inclusion_classify_by_their_most_demanding_path() {
         let both = || {
             returns(vec![

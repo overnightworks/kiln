@@ -96,6 +96,21 @@ impl Operand {
     }
 }
 
+/// Why an expression has no operand where the path reaches it.
+#[derive(Debug)]
+pub enum Unresolvable {
+    /// It projects a slot an ended iteration released: the evaluator aborts
+    /// there with `ProjectionSourceAbsent` (`KILN-IR-15`).
+    ReleasedSource,
+    Fault(ClassifyError),
+}
+
+impl From<ClassifyError> for Unresolvable {
+    fn from(error: ClassifyError) -> Self {
+        Self::Fault(error)
+    }
+}
+
 /// `expression` with its slots resolved against what the path has read so far.
 /// A key column of a point-read row is the operand the read used for it
 /// (`inputs.md` §5, Clarification rule 1).
@@ -104,10 +119,13 @@ pub fn operand_of(
     facts: &PathFacts,
     expression: &Expr,
     at: &NodePath,
-) -> Result<Operand, ClassifyError> {
+) -> Result<Operand, Unresolvable> {
     Ok(match expression {
         Expr::Literal(value) => Operand::Literal(value.clone()),
         Expr::Parameter(parameter) => Operand::Parameter(parameter.clone()),
+        Expr::Projection { slot, .. } if facts.is_released(*slot) => {
+            return Err(Unresolvable::ReleasedSource)
+        }
         Expr::Projection { slot, column } => {
             let read = facts.read_of(*slot, at)?;
             match point_read_key_operand(schema, facts, &read, column) {

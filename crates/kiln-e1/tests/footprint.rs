@@ -642,13 +642,42 @@ mod kiln_e1_27 {
     }
 
     #[test]
-    fn a_projection_of_a_slot_an_ended_iteration_released_classifies_through_its_last_read() {
+    fn a_key_projecting_a_slot_an_ended_iteration_released_ends_the_path_before_its_access() {
         let body = returns(vec![
             read_range("orders", param("low"), param("high"), 0),
             iterate(0, 1, vec![read("orders", key_of(1), 2)]),
             read("customers", column_of(2, "customer_id"), 3),
+            update("audit", param("id"), &[]),
         ]);
-        assert_eq!(category_of(body), ONE_HOP);
+        assert_eq!(category_of(body.clone()), STATIC);
+        assert_eq!(
+            evidence_of(body),
+            [
+                "f/body/effects[0]",
+                "f/body/effects[1]/body/effects[0]",
+                "f/body/effects[2]"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_iteration_over_a_slot_an_ended_iteration_released_is_reported() {
+        let body = returns(vec![
+            read_range("orders", param("low"), param("high"), 0),
+            iterate(
+                0,
+                1,
+                vec![read_range("accounts", param("low"), param("high"), 2)],
+            ),
+            iterate(2, 3, vec![]),
+        ]);
+        assert_eq!(
+            classify_function(&program(body), &FunctionName(FUNCTION.to_owned())),
+            Err(ClassifyError::UnboundSlot {
+                slot: Slot(2),
+                at: "f/body/effects[2]".to_owned()
+            })
+        );
     }
 
     #[test]

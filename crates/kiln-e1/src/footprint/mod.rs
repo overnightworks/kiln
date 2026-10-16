@@ -39,7 +39,8 @@ pub enum ClassifyError {
     /// keys cannot be read component by component.
     InvalidProgram(ProgramError),
     UnknownFunction(FunctionName),
-    /// A key or bound refers to a slot no earlier read bound.
+    /// A key or bound refers to a slot no earlier read bound, or an iteration
+    /// ranges over one that an ended iteration released.
     UnboundSlot {
         slot: Slot,
         at: String,
@@ -57,7 +58,7 @@ impl fmt::Display for ClassifyError {
             Self::UnboundSlot { slot, at } => {
                 write!(
                     formatter,
-                    "slot {} is read at {at} before any read binds it",
+                    "slot {} is read at {at} where no read binds it",
                     slot.0
                 )
             }

@@ -10,7 +10,7 @@ use super::cause::UnknownCause;
 use super::dependency::{track_access, AccessRole};
 use super::facts::{Binding, BindingKind, PathFacts, RangeBounds, Target};
 use super::node_path::NodePath;
-use super::operand::{operand_of, Operand, ReadRef};
+use super::operand::{operand_of, Operand, ReadRef, Unresolvable};
 use super::ClassifyError;
 
 pub struct FeasiblePath {
@@ -38,18 +38,98 @@ struct RangeRead<'e> {
     bound: &'e Expr,
 }
 
+/// Why walking a block's effects stopped short of its terminal.
+enum Halt {
+    /// The evaluator aborts at `at` with `ProjectionSourceAbsent`. Inside the
+    /// body of an iteration whose range may hold no row, it aborts only when
+    /// that range holds one: `unless_empty` is the read that bound the range.
+    Aborts {
+        at: NodePath,
+        unless_empty: Option<ReadRef>,
+    },
+    Fault(ClassifyError),
+}
+
+impl Halt {
+    fn at(node: &NodePath) -> impl Fn(Unresolvable) -> Self + '_ {
+        move |unresolvable| match unresolvable {
+            Unresolvable::ReleasedSource => Self::Aborts {
+                at: node.clone(),
+                unless_empty: None,
+            },
+            Unresolvable::Fault(error) => Self::Fault(error),
+        }
+    }
+
+    /// The halt as the iteration over `rows` passes it on: an abort in its
+    /// body happens only when `rows` holds a row, unless the path already
+    /// knows it does or a nearer iteration's range already decides it.
+    fn beyond_iteration_over(self, rows: &ReadRef, facts: &PathFacts) -> Self {
+        match self {
+            Self::Aborts {
+                at,
+                unless_empty: None,
+            } if facts.presence_of(rows) != Some(true) => Self::Aborts {
+                at,
+                unless_empty: Some(rows.clone()),
+            },
+            halt => halt,
+        }
+    }
+}
+
+impl From<ClassifyError> for Halt {
+    fn from(error: ClassifyError) -> Self {
+        Self::Fault(error)
+    }
+}
+
 struct Walker<'a> {
     schema: &'a Schema,
 }
 
 impl Walker<'_> {
+    /// The paths through `block`. One that reaches an abort ends there, with
+    /// the accesses before it (`KILN-IR-15`); an abort an iteration's body
+    /// reaches forks on whether that range holds a row, and the path where it
+    /// holds none skips the body.
     fn block(
         &self,
         block: &Block,
         at: &NodePath,
-        mut facts: PathFacts,
+        facts: PathFacts,
     ) -> Result<Vec<FeasiblePath>, ClassifyError> {
-        self.effects(&block.effects, at, &mut facts)?;
+        let mut walked = facts.clone();
+        match self.effects(&block.effects, at, &mut walked) {
+            Ok(()) => self.terminal(block, at, walked),
+            Err(Halt::Fault(error)) => Err(error),
+            Err(Halt::Aborts {
+                at: abort,
+                unless_empty: None,
+            }) => Ok(vec![FeasiblePath {
+                facts: walked,
+                terminal: abort,
+            }]),
+            Err(Halt::Aborts {
+                at: abort,
+                unless_empty: Some(rows),
+            }) => {
+                let mut paths = vec![FeasiblePath {
+                    facts: walked.assuming(&rows, true),
+                    terminal: abort,
+                }];
+                paths.extend(self.block(block, at, facts.assuming(&rows, false))?);
+                Ok(paths)
+            }
+        }
+    }
+
+    fn terminal(
+        &self,
+        block: &Block,
+        at: &NodePath,
+        facts: PathFacts,
+    ) -> Result<Vec<FeasiblePath>, ClassifyError> {
         let terminal = at.terminal();
         match &block.terminal {
             Terminal::Return(_) | Terminal::Abort(_) => Ok(vec![FeasiblePath { facts, terminal }]),
@@ -114,8 +194,13 @@ impl Walker<'_> {
     ) -> Result<Vec<FeasiblePath>, ClassifyError> {
         let mut data_selected = false;
         for operand in operands {
-            let operand = operand_of(self.schema, &facts, operand, &terminal)?;
-            data_selected |= !operand.uses().is_empty();
+            match operand_of(self.schema, &facts, operand, &terminal) {
+                Ok(operand) => data_selected |= !operand.uses().is_empty(),
+                Err(Unresolvable::ReleasedSource) => {
+                    return Ok(vec![FeasiblePath { facts, terminal }])
+                }
+                Err(Unresolvable::Fault(error)) => return Err(error),
+            }
         }
         let arm = |holds: bool| {
             if data_selected {
@@ -134,19 +219,14 @@ impl Walker<'_> {
         effects: &[Effect],
         at: &NodePath,
         facts: &mut PathFacts,
-    ) -> Result<(), ClassifyError> {
+    ) -> Result<(), Halt> {
         for (index, effect) in effects.iter().enumerate() {
             self.effect(effect, at.effect(index), facts)?;
         }
         Ok(())
     }
 
-    fn effect(
-        &self,
-        effect: &Effect,
-        node: NodePath,
-        facts: &mut PathFacts,
-    ) -> Result<(), ClassifyError> {
+    fn effect(&self, effect: &Effect, node: NodePath, facts: &mut PathFacts) -> Result<(), Halt> {
         match effect {
             Effect::Read { table, key, into } => self.read(table, key, *into, node, facts),
             Effect::Insert { table, key, .. } => {
@@ -188,13 +268,33 @@ impl Walker<'_> {
                 };
                 self.read_range(range, *into, node, facts)
             }
-            Effect::Iterate { source, row, body } => {
-                facts.enter_iteration(*row, *source, &node)?;
-                self.effects(body, &node.iteration_body(), facts)?;
-                facts.end_iteration(slots_released_by_iteration(*row, body));
-                Ok(())
+            Effect::Iterate { source, row, body } => self.iterate(*source, *row, body, node, facts),
+        }
+    }
+
+    /// Walks the body once for the rows `source` bound. A body that would
+    /// abort never runs over a range the path knows holds no row.
+    fn iterate(
+        &self,
+        source: Slot,
+        row: Slot,
+        body: &[Effect],
+        node: NodePath,
+        facts: &mut PathFacts,
+    ) -> Result<(), Halt> {
+        let rows = facts.read_of(source, &node)?;
+        let mut inside = facts.clone();
+        inside.enter_iteration(row, rows.clone(), &node);
+        match self.effects(body, &node.iteration_body(), &mut inside) {
+            Ok(()) => *facts = inside,
+            Err(Halt::Aborts { .. }) if facts.presence_of(&rows) == Some(false) => {}
+            Err(halt) => {
+                *facts = inside;
+                return Err(halt.beyond_iteration_over(&rows, facts));
             }
         }
+        facts.end_iteration(slots_released_by_iteration(row, body));
+        Ok(())
     }
 
     fn read(
@@ -204,7 +304,7 @@ impl Walker<'_> {
         into: Slot,
         node: NodePath,
         facts: &mut PathFacts,
-    ) -> Result<(), ClassifyError> {
+    ) -> Result<(), Halt> {
         let role = AccessRole::Lookup(table.clone());
         let key = self.keyed_access(facts, role, table, key, &node)?;
         let kind = BindingKind::PointRead {
@@ -221,11 +321,11 @@ impl Walker<'_> {
         into: Slot,
         node: NodePath,
         facts: &mut PathFacts,
-    ) -> Result<(), ClassifyError> {
+    ) -> Result<(), Halt> {
         let bounds = RangeBounds {
             start: self.operands_of(facts, range.start, &node)?,
             end: self.operands_of(facts, range.end, &node)?,
-            bound: operand_of(self.schema, facts, range.bound, &node)?,
+            bound: operand_of(self.schema, facts, range.bound, &node).map_err(Halt::at(&node))?,
         };
         let (role, kind, target) = match range.over {
             RangeOver::PrimaryKeys(table) => (
@@ -272,7 +372,7 @@ impl Walker<'_> {
         table: &TableName,
         key: &[Expr],
         node: &NodePath,
-    ) -> Result<KeyedAccess, ClassifyError> {
+    ) -> Result<KeyedAccess, Halt> {
         let operands = self.operands_of(facts, key, node)?;
         let depends_on = track_access(facts, self.schema, &role, &operands, node);
         let target = Target::Row {
@@ -291,11 +391,12 @@ impl Walker<'_> {
         facts: &PathFacts,
         expressions: &[Expr],
         at: &NodePath,
-    ) -> Result<Vec<Operand>, ClassifyError> {
+    ) -> Result<Vec<Operand>, Halt> {
         expressions
             .iter()
             .map(|expression| operand_of(self.schema, facts, expression, at))
-            .collect()
+            .collect::<Result<_, _>>()
+            .map_err(Halt::at(at))
     }
 }
 
