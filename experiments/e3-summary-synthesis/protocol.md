@@ -1,4 +1,4 @@
-# E3 — frozen part B: candidate language, grammar, checker and manifest
+# E3 — frozen part B: candidate language, component library, checker and manifest
 
 Status: proposed, not yet frozen. Record: drafted in #83 by an author other
 than the one who froze the families, as `docs/experiments.md` ("Freeze order
@@ -8,444 +8,427 @@ their checking domains, the 52 mutants); this file is part B. Nothing below
 changes after a synthesis attempt has run; a change re-freezes this part and
 voids every result measured under the earlier one.
 
-## 0. Scope and what this part does not do
+## 0. Scope
 
-It freezes five things in the order of #83: the candidate language (§1), the
-grammar and rule library (§2), the checker's soundness contract (§3), the
-bound-class measurement (§4) and the manifest (§5). It writes no code and
-measures nothing. It states no summary for any family and no verdict.
+It freezes, in the order of #83: the candidate language (§1), the component
+library and the search (§2), the checker's soundness contract (§3), the
+bound-class measurement (§4) and the manifest (§5). §6 records the head's
+rulings of 16.10.2026 as decisions with their reasons. It writes no code,
+measures nothing, and states no summary for any family and no verdict.
 
-Every frozen value carries a one-clause reason. A value marked **Decision**
-is a choice this draft makes where the owner documents are silent; the
-reviewer may overturn it, and §6 lists the ones I am least sure of.
-
-Owner documents used, by section: `docs/experiments.md` ("E3", "Admissible
-bound class"), `docs/concept.md` §6 and §9.4, `inputs.md` §1 and §10, and
-E2's `protocol.md` §2-§6 (the growth rule, reused unchanged). The reference
-meaning is `crates/kiln-ir`: `replay(&Program, &[Call], &Store) ->
-Result<Vec<Execution>, SchemaError>`, with `Execution { store, outcome,
-access_log }` and `Outcome::{Committed { response }, Aborted { reason }}`.
+Every frozen value carries a one-clause reason. Owners: `docs/experiments.md`
+(E3), `docs/concept.md` §6 and §9.4, `inputs.md` §1 and §10, and E2's
+`protocol.md` (the growth rule). The reference meaning is `crates/kiln-ir`:
+`replay(&Program, &[Call], &Store) -> Result<Vec<Execution>, SchemaError>`,
+with `Execution { store, outcome, access_log }` and
+`Outcome::{Committed { response }, Aborted { reason }}`.
 
 ## 1. The candidate language
 
-### 1.1 What a candidate is
+### 1.1 State signature, frozen by name
 
-A **candidate** is a typed description of one family's summary algebra, not
-an IR function. For a family `Program` it supplies:
+A family's state is read through its **signature**: a fixed list of named
+state components, each with a kind. The classification is frozen here by
+name, from `inputs.md` §1's named examples and each family's semantics; no
+cardinality rule derives it (decision D2, §6).
 
-| Part | Meaning | Type |
-|---|---|---|
-| `shape` | the summary's field layout and its `apply` form, taken from the library of §2 | `Shape` |
-| `valid[f]` | for each function `f`, an argument-only test; when false the call's summary is `ε` | `Bool` term over `f`'s parameters |
-| `atom[f]` | for each function `f`, the summary of one valid call, one term per field | field-typed terms over `f`'s parameters |
-| `combine` | `S ⊕ T`, one term per field | field-typed terms over the fields of `S` and `T` |
-| `respond[f]` | the outcome of a call as a function of the state just before it | `Outcome` term over the state components and `f`'s parameters |
+| Family | Component | Kind | Class (`inputs.md` §1) |
+|---|---|---|---|
+| Quota (§3) | `remaining`, `quota[0]` | `Int` | quantity |
+| Sequence (§4) | `last_value`, `sequence[0]` | `Int` | quantity |
+| Dispatcher (§5) | `cursor`, `dispatcher[0]` | `Cat(cursor)`, values `0 … 4` | control |
+| Order (§6) | `status`, `orders[0]` | `Cat(status)`, values `0 … 3` | categorical |
+| Wallet (§7) | `balance`, `wallet[0]` | `Int` | quantity |
+| Lease (§8) | `lease`, keyed by `resource` | `Keyed(Cat(resource) → Opt(Int))`, keys `0, 1` | key and row presence: categorical/control; `owner`: identifier |
 
-`ε` is the shape's fixed identity value. The state seen by `apply` and
-`respond` is the family's **state signature** (§1.2). The checker forms the
-summary of a batch by folding `atom` with `combine`, applies it to the
-initial state, and reads each call's outcome from `respond` on the state
-before that call. This is exactly the decomposition E2 uses for its hand
-summaries (E2 `inputs.md` §1, "State, transformer, response"), so a
-candidate is comparable with them.
+Every function parameter is an `Int`: parameters are arguments, not state
+components, and `inputs.md` §1 classifies state. A `Cat(c)` value is written
+`v0 … v(k-1)` in ascending order of its integer code. `Opt(Int)` is a row
+that is absent or present with an `owner`; reading a store through the
+signature maps an absent `lease` row to `none`. **Reason:** the head ruling
+lists exactly these components and classes; naming them leaves nothing to
+infer from a value range.
 
-### 1.2 State signature (derived, never written per family)
+### 1.2 Types
 
-The signature is computed mechanically from the family's `Program`
-(its `Schema` and function bodies) by one rule, applied identically to all
-six:
+| Type | Values |
+|---|---|
+| `Int` | checked `i64` |
+| `Bool` | true, false |
+| `Cat(c)` | the `k ≤ 16` named values of component `c` |
+| `Opt(Int)` | `none`, or `some(n)` with `n` an `Int` |
+| `Map(c)` | a total table `Cat(c) → Cat(c)` with `k` entries |
+| `Name` | an abort reason the `Program` can produce |
+| `Outcome` | `commit(Int)` or `abort(Name)` |
 
-- A **state component** is one integer column of one row, or, for a table
-  whose rows are addressed by a parameter, one such column per key together
-  with a presence flag per key.
-- A component, or a row key, is **categorical** if the schema's check
-  constraints (for a column) or the function bodies' argument guards (for a
-  key parameter) confine it to at most 16 integers. Each such value gets a
-  name `v0 … v(k-1)` in ascending order of its integer value, and a type
-  `Cat(c)` of `k` values. **Reason:** this is `inputs.md` §1's rule
-  ("categorical or control, at most 16 named values") made mechanical, so no
-  one decides per family after seeing it.
-- Every other component is a **quantity** (`Int`, checked `i64`). A stored
-  integer that is not confined to 16 values by the schema or guards is a
-  quantity even if it names someone, so owners are `Int` and the rule needs
-  no word "identifier".
-
-Applied to the six families this gives, as a check on the rule and not as an
-input to it: quota `remaining` (check constraint 0-1000: 1001 values) is a
-quantity; sequence `last_value` (at least 0 only) is a quantity; dispatcher
-`cursor` (0-4) is `Cat(5)`; order `status` (0-3) is `Cat(4)`; wallet
-`balance` (at least 0 only) is a quantity; lease: key `resource` (guards
-confine it to 0-1) is `Cat(2)`, presence is `Bool`, and `owner` (1-1 000 000)
-is a quantity. This matches `inputs.md` §1's classification exactly.
-
-### 1.3 Types
-
-| Type | Values | Use |
-|---|---|---|
-| `Int` | checked `i64` | quantities, shifts, bounds, responses |
-| `Bool` | true, false | guards, presence |
-| `Cat(c)` | the `k ≤ 16` names of component `c` | categorical components |
-| `Name` | a declared abort, structural abort or none | outcomes |
-| `Outcome` | `commit(Int)` or `abort(Name)` | `respond` |
-| `Map(Cat(c) → τ)` | a total table with `k` entries, `τ ∈ {Int, Bool, Cat(c')}` | per-category structure |
-
-`Name` ranges over the abort reasons the `Program` itself can produce, read
-from it: every `AbortReason::Declared(name)` its bodies abort with, every
-`AbortReason::Overflow(Width { .. })` for an integer column without a
-clamping domain, `Overflow(Arithmetic)`, and every `CheckViolation` for a
-declared check constraint. The checker compares full `AbortReason` values
+`Name` ranges over the reasons read from the `Program`: every
+`AbortReason::Declared(name)` its bodies abort with;
+`Overflow(Width { table, column, key })` for every integer column without a
+clamping domain and every key the family's store can hold;
+`Overflow(Arithmetic)`; and `CheckViolation` for every declared check
+constraint and key. The checker compares full `AbortReason` values
 (`inputs.md` §1, "What equivalence means").
 
-### 1.4 Grammar
+### 1.3 Grammar
 
-Terms are typed; a term of the wrong type is a malformed candidate (§3.1).
+Terms are typed; a term of the wrong type is malformed (§3.1). One grammar
+serves two uses. **Hole terms** are what the enumerator writes (§2.4).
+**Checker form** is what the checker evaluates: hole terms together with
+the component definitions of §2.1, written in the same grammar, and the
+mutants S4 writes (§3.8). Productions marked † occur only in checker form,
+never in a hole.
 
 ```
-Int   ::= lit(k)            k in the constant pool P(f), §1.5
-        | param(p)          an Int parameter of the function being described
-        | field(i)          an Int field of a summary operand, or of the state
-        | code(Cat)         the integer value of a categorical component
-        | Int + Int | Int - Int
-        | min(Int,Int) | max(Int,Int) | clamp(Int, Int, Int)
-        | ite(Bool, Int, Int)
-        | lookup(Map(Cat→Int), Cat)
-Bool  ::= true | false | field(i) | not Bool | Bool and Bool | Bool or Bool
-        | Int rel Int       rel in {<, <=, >, >=}       (order comparison)
-        | Int ne Int        both sides non-constant     (see §1.6, rule E)
-        | Cat eq Cat
-        | ite(Bool, Bool, Bool) | lookup(Map(Cat→Bool), Cat)
-Cat   ::= name(v)           a named value of the component's own category
-        | field(i) | ite(Bool, Cat, Cat) | lookup(Map(Cat→Cat), Cat)
-Map   ::= table(τ, e_0 … e_{k-1})   one term per category value, k ≤ 16
+Int     ::= lit(n)                 n in the constant pool P, §1.5
+          | param(p)               an Int parameter of the function
+          | key                    the code of the key an entry is for
+          | state(c)               the value of an Int state component
+          | code(Cat)              the integer code of a category value
+          | get(Opt, Int)          the owner if present, else the default
+          | Int + Int | Int - Int
+          | min(Int, Int) | max(Int, Int) | clamp(Int, Int, Int)
+          | ite(Bool, Int, Int)
+          | O.f                    † an Int field of operand O ∈ {S, T, s}
+          | Int mod n              † Euclidean remainder, n a positive literal
+Bool    ::= true | false | not Bool | Bool and Bool | Bool or Bool
+          | Int rel Int            rel in {<, <=, =, !=, >=, >}
+          | Cat = Cat | present(Opt)
+          | O.f                    † a Bool field of an operand
+Cat     ::= name(v) | state(c) | ite(Bool, Cat, Cat)
+          | lookup(Map, Cat)       † the entry of a table
+          | of(c, Int)             † the value of c whose code is the Int
+Opt     ::= none | some(Int) | state(c, v)
+          | ite(Bool, Opt, Opt)
+Map     ::= table(Cat_0, …, Cat_{k-1})
+          | O.f                    † a Map field of an operand
+Entry   ::= when(Bool, t_1, …, t_m)   a per-key atom entry, §2.1
+Carrier ::= (t_1, …, t_m) | S | T | ite(Bool, Carrier, Carrier)   †
 Outcome ::= commit(Int) | abort(Name) | ite(Bool, Outcome, Outcome)
-          | case(Cat, Outcome^k)    one arm per category value
+          | case(Cat, Outcome_0, …, Outcome_{k-1})
 ```
 
-`Int + Int` and `-` use checked `i64` arithmetic like the IR
-(`ArithmeticOp::{Add, Subtract}`); `min`, `max` and `clamp` are total on
-`Int`. There is no multiplication, division, remainder, loop, recursion,
-fold, quantifier, `Int`-indexed table or `Int`-to-`Cat` conversion. A
-dispatcher-style wrap is therefore `ite(x >= 5, x - 5, x)`, as in `inputs.md`
-§5.1. **Reason:** every construct is either an IR operation or a total
-numeric primitive that the evaluator of §3 can define in a line; anything
-more is a new boundary this experiment has no need to open.
+`state(c)` reads a scalar state component and `state(c, v)` the row of a
+keyed component at key `v`. In checker form, `S` and `T` are the left and
+right operands of a combine and `s` the summary being applied; `x` is the
+state component (or, under `per-key`, the key's row) being applied to; a
+`Carrier` term is a combine's result. Where each production may occur:
+
+| Hole | May reference |
+|---|---|
+| `valid[f]` | `lit`, `param`, connectives, comparisons |
+| `atom[f]`, a field | `lit`, `param`, `key` (inside an `Entry` only), `none`, `some`, `table`, `name`, `ite`, arithmetic, comparisons |
+| `respond[f]` | everything of `atom[f]` except `key`, `table` and `Entry`, plus `state`, `code`, `get`, `present`, `case` |
+
+**Map-valued operands.** A `Map` is written as a literal `table` in an atom
+or read as an operand field `S.m`, `T.m`, `s.m` in checker form; no hole
+contains a map-valued reference. **Reason:** the holes need tables only as
+atoms of `transform` (§2.1), and the operand productions exist so the
+component definitions and S4's mutants are terms of one evaluator.
+
+### 1.4 Primitive semantics
+
+- `+` and `-` are checked `i64`, as the IR's `ArithmeticOp::{Add,
+  Subtract}`; `min` and `max` are total.
+- `clamp(z, l, u) = min(max(z, l), u)`, also for `l > u`, where it yields
+  `u`. **Reason:** this is E2 `inputs.md` §2.4's definition verbatim, it is
+  total, and a candidate with reversed bounds is then simply wrong and
+  rejected by comparison, not undefined.
+- `Int mod n` is the Euclidean remainder in `[0, n)`. `of(c, i)` with `i`
+  not a code of `c` rejects the candidate as an overflow does; `rotate`
+  passes a remainder, so there it is always defined.
+- `ite` and `case` evaluate the condition or scrutinee and the chosen arm
+  only. `get(o, d)` is the owner of `o` if present, else `d`.
+- **Overflow.** If any evaluation of a candidate — an atom, a combine, an
+  apply or a respond — overflows checked `i64` on any input the checker
+  evaluates (§3.2-§3.4), the candidate is rejected with the typed result
+  `Rejected(Overflow(witness))`. It is never mapped to a call's abort. A
+  call's abort is reproduced only when `respond[f]` evaluates to
+  `abort(name)`, and the checker compares that per call with `replay`
+  (decision D4). **Reason:** a summary's own arithmetic is not the
+  program's; mapping one to the other would let a candidate fail into a
+  right answer.
 
 ### 1.5 Constants
 
-An `Int` literal must be in the **constant pool** `P(f)` of the family: the
-integer literals that occur in the family's `Program` (function bodies, check
-constraints, declared widths, domain bounds), together with `0` and `1`.
-Nothing else enters. In particular the checking domain (`X`, `A`, `L`, the
-witnesses of the mutants) is not an input of the language or of the
-enumerator; the enumerator is given the `Program` only (§2.1). A value that
-occurs in the checking domain but in no program literal, such as wallet
-balance `32 666` or lease owner `3`, cannot be written. **Reason:**
-`inputs.md` §1 allows "semantic constants" in arithmetic and guards (5,
-32 767, 1000, 1 000 000) and forbids the rest.
+An `Int` literal must be in the family's **constant pool** `P`: the integer
+literals of its `Program` (function bodies, check constraints), the bounds
+of every declared column and parameter width, and `0` and `1`. A key code
+enters only through `key`. The checking domain's values are never literals:
+wallet balance `32 666` or lease owner `3` cannot be written. **Reason:**
+`inputs.md` §1 allows semantic constants in arithmetic and guards (5,
+32 767, 1000, 1 000 000) and nothing else.
 
-### 1.6 Why the language cannot tabulate a quantity
+### 1.6 What the grammar does not enforce
 
-Four rules, each checked by validation (§3.1), together with the absence of
-the constructs listed above. "Quantity-dependent" means a term whose value
-depends on an `Int` field, an `Int` parameter or `code(…)`.
+Over a finite checking domain, any language with addition and comparison
+can encode an indicator: `clamp(x, 0, 1) - clamp(x - 1, 0, 1)` is `1` at
+`x = 1` and `0` at every other integer, and `1 + 1 + 1` builds the
+unavailable literal `3`. No construct-level rule therefore makes a quantity
+table unrepresentable, and this part does not claim one. The tabulation ban
+of `inputs.md` §1 is enforced **semantically** by the checker contract: an
+admitted candidate must also agree with `kiln_ir::replay` on batches drawn
+from the family's full domain (§3.4), where a table of the small checking
+domain is wrong (decision D1).
 
-- **Rule L (literals).** Only pool constants are literals (§1.5). A table
-  indexed by quantity values would need their literals; the checking
-  domain's are unavailable, and the pool is the program's own handful.
-- **Rule M (tables).** `Map` is indexed by `Cat(c)` only. There is no
-  construct whose index type is `Int`, and no `Int`-to-`Cat` conversion, so
-  a table cannot be addressed by a quantity or an identifier. A `Map`
-  therefore has at most 16 entries by type, and its entries are counted in
-  the candidate's size (§1.7).
-- **Rule E (equality).** An `Int` term may not be tested for equality with a
-  constant. `Int ne Int` is allowed only when neither side is a constant
-  (for example a stored owner against an argument). Order comparisons
-  against constants are allowed: they are thresholds, which `inputs.md` §1
-  allows ("using a threshold is not enumerating the values below it").
-  **Reason:** an `x = c` chain is the literal-and-branch encoding of a
-  lookup that §1 names; thresholds and variable-against-variable tests are
-  what the families' guards are made of (`s0.remaining >= quantity`,
-  `s0.owner = owner`). Both `eq` and `ne` between variables are expressed
-  with `ne` and `not`.
-- **Rule B (branch budget).** A candidate contains at most 6 quantity-
-  dependent `ite` or order-comparison nodes in all, and no two nested deeper
-  than 3. **Decision, reason:** a staircase of thresholds is the one
-  remaining way to approximate a table with pool constants; with the pool
-  at most about a dozen values and the budget fixed, the staircase's
-  resolution cannot grow with the number of values of the component. Six
-  covers a clamp with both bounds on two components and a few guards; the
-  value is not tuned against a family.
+Two rules stay, as **search-space hygiene only**; they shrink the space and
+enforce nothing:
 
-What remains enumerable is what `inputs.md` §1 allows: `Map` and `case`
-over `Cat(c)` for the order status (4), dispatcher cursor (5) and lease
-resource (2). The language offers no construct that reads the schema's
-value range, so there is no "schema-derived domain" to iterate: the only
-places a range appears are the pool constants, which are single numbers.
+- **Rule L.** Literals come from the pool (§1.5).
+- **Rule M.** A table is indexed by a `Cat` only, and no hole converts an
+  `Int` to a `Cat` (`of` is checker-form only).
 
-**Construct by construct** (the demand of #83):
+How this relates to `inputs.md`: §1 says S2's grammar enforces the ban and
+§10 item 1 that "S2 owns its enforcement in the grammar". S2 enforces it
+through the checker contract instead, because the grammar cannot. §10 item
+1's three recommendations hold: no hole takes a checking-domain value as a
+literal, size is measured on the representation (§1.7), and the measurement
+batches come from the family domain (§4.2). §10 item 2 asks that a
+candidate valid over the checking domain but growing on family-domain
+batches count as a miss; in this language no representation can grow
+(§4.4), so such a candidate is caught by family-domain disagreement
+instead. `inputs.md` is not edited.
 
-| Construct | Can it encode a lookup over quantities or identifiers? |
+### 1.7 Size and bytes
+
+The **size** of a term is its node count: each constructor application,
+literal and reference counts 1; a `table`, `case` or `Entry` counts 1 plus
+its parts. It orders the search (§2.5). The **bytes** `B` of a summary are
+its serialised length at fixed width: a tag byte, then every carrier field
+(`Int` 8 bytes little-endian, `Bool` and `Cat` 1, `Opt(Int)` 9, `Map` `k`),
+with the identity serialised as tag `0` and zeroed fields. **Reason:** the
+frozen-representation rule of E2 `protocol.md` §3, "Size, B"; fixed width
+makes `B` a property of the chosen components, not of the data.
+
+### 1.8 What a candidate is
+
+A **candidate** for a family's `Program` is:
+
+| Part | Meaning |
 |---|---|
-| `lit` | only pool constants (rule L); no domain value |
-| `param`, `field`, `code` | read one value; no table |
-| `+`, `-`, `min`, `max`, `clamp` | arithmetic, no branching on a value |
-| `ite`, order comparison with a constant | threshold; at most 6 and depth 3 (rule B) |
-| `ne` between non-constants | compares two variables; cannot name a value (rule E) |
-| `eq`, `lookup`, `table`, `case` over `Cat` | enumerates a categorical component of at most 16 values; allowed by `inputs.md` §1 |
-| `Map` | index type `Cat` only (rule M) |
+| layout | one library component (§2.1) per signature component, in signature order |
+| `valid[f]` | per function `f`, a `Bool` hole term; when false the call's summary is `ε` |
+| `atom[f]` | per function `f`, one hole term per carrier field of the layout (an `Entry` per key for `per-key`) |
+| `respond[f]` | per function `f`, an `Outcome` hole term: the call's outcome from the state just before it |
 
-### 1.7 Size
+Combine and apply are not holes: they are the components' definitions. The
+summary of a call is `atom[f]` if `valid[f]` holds, else `ε`; its outcome is
+always `respond[f]`. This is the decomposition E2 uses for its hand
+summaries (E2 `inputs.md` §1, "State, transformer, response"). Per
+`inputs.md` §1 the access log is not compared, and the language has no
+construct for it.
 
-The **size** of a candidate is the number of nodes in all its terms, counted
-on its representation: each constructor application, literal and field
-reference counts 1, and a `table` or `case` counts 1 plus the size of each
-of its `k` entries. Size is a property of the candidate, not of any
-evaluation. A table over `k` categories therefore costs at least `k + 1`,
-which is what makes enumeration visible in the number the search orders by
-(§2.4). The **bytes** of a summary value (§4) are measured on the
-serialised value: `Int` 8 bytes little-endian, `Bool` and `Cat` 1 byte, a
-`Map` the sum of its entries. **Reason:** the same frozen-representation
-rule as E2 `protocol.md` §3, "Size, B".
+## 2. Component library and search
 
-### 1.8 What the language cannot express
+### 2.1 Components
 
-Per `inputs.md` §1, a mutant the language cannot express is recorded by S4
-as "not expressible" with its reason, never dropped. The language has no
-construct for accessing the access log, so equivalence ignores it as
-`inputs.md` §1 says.
+The library is a fixed set of generic algebraic components. Each is a
+semigroup on its carrier with an **adjoined identity** `ε`: `ε ⊕ T = T`,
+`S ⊕ ε = S`, `apply(ε, x) = x`, and the body below runs only when both
+operands are values. **Reason:** an adjoined identity is exact byte for
+byte and needs no sentinel such as `i64::MIN`, whose arithmetic would
+overflow. No component names a family, a field or a function; each one's
+generality is argued by its source, a use outside these six families
+(decision D3).
 
-## 2. Grammar and rule library
+| Component | Kind it acts on | Carrier | Combine body `S ⊕ T` | Apply body `apply(s, x)` | Source |
+|---|---|---|---|---|---|
+| `shift` | `Int` | `a: Int` | `(S.a + T.a)` | `x + s.a` | the additive group; prefix sums (Blelloch, "Prefix sums and their applications", 1990) |
+| `clamp-shift` | `Int` | `a, l, u: Int` | `(S.a + T.a, clamp(S.l + T.a, T.l, T.u), clamp(S.u + T.a, T.l, T.u))` | `clamp(x + s.a, s.l, s.u)` | the composition closure of saturating additions, as in bounded counters and token buckets |
+| `reset-shift` | `Int` | `r: Bool, v: Int, a: Int` | `ite(T.r, T, (S.r, S.v, S.a + T.a))` | `ite(s.r, s.v, x) + s.a` | the segmented-scan operator (Blelloch 1990): a sum restarted at a flag |
+| `raise` | `Int` | `m: Int` | `(max(S.m, T.m))` | `max(x, s.m)` | the max semilattice (a max-register) |
+| `lower` | `Int` | `m: Int` | `(min(S.m, T.m))` | `min(x, s.m)` | the min semilattice |
+| `assign` | `Int`, `Cat(c)`, `Opt(Int)` | `v` of the kind | `T` | `s.v` | the last-writer-wins register (Shapiro et al., CRDTs, 2011) |
+| `fill` | `Opt(Int)` | `v: Int` | `S` | `ite(present(x), x, some(s.v))` | insert-if-absent: the first writer wins (SQL `ON CONFLICT DO NOTHING`) |
+| `rotate` | `Cat(c)`, `k` values | `a: Int` | `((S.a + T.a) mod k)` | `of(c, (code(x) + s.a) mod k)` | the cyclic group `Z_k` acting on a `k`-cycle; E2's inventory is a translation mod 91 |
+| `transform` | `Cat(c)`, `k` values | `m: Map(c)` | `(table(lookup(T.m, lookup(S.m, v0)), …, lookup(T.m, lookup(S.m, v(k-1)))))` | `lookup(s.m, x)` | the full transformation monoid; composing finite-state transition tables (Hillis and Steele, "Data parallel algorithms", 1986) |
+| `per-key(σ)` | `Keyed(Cat(c) → Opt(Int))`, `k` keys | one value of `σ` or `ε` per key | per key, `σ`'s combine | per key, `σ`'s apply to that key's row | the product of `k` copies of a monoid, indexed by a finite set |
 
-### 2.1 What the enumerator is given
+`σ` ranges over the components acting on `Opt(Int)` (`assign`, `fill`). A
+`per-key` atom is one `Entry` per key: `when(b, t_1 … t_m)` is `σ`'s value
+`(t_1 … t_m)` at that key if `b` holds, else `ε` there. The summary of a
+whole state is the product of one component value per signature component,
+combined and applied component by component; every family here has one
+signature component, so its product has one factor.
 
-The enumerator receives the family's `Program` and nothing else: no checking
-domain, no mutant, no summary, no family name or number. From the `Program`
-it derives the state signature (§1.2), the constant pool (§1.5) and the
-`Name` set (§1.3). It may call `kiln_ir::replay` on **search samples**, which
-are batches from the §4 generators with batch index `j = 20 000 + i`,
-`i = 0 … 63`, size 4 (disjoint from the measurement indices of §4.2 and from
-the checking domain). **Reason:** a cheap reject filter needs examples, and
-drawing them from the family domain keeps checking-domain values out of the
-search. A candidate that fits the samples and not the checking domain is
-rejected by the checker (§3).
+### 2.2 Applicability
 
-### 2.2 Shape library
+| Kind | Components tried, in this order |
+|---|---|
+| `Int` | `assign`, `shift`, `raise`, `lower`, `reset-shift`, `clamp-shift` |
+| `Cat(c)` | `assign`, `transform`, `rotate` |
+| `Keyed(Cat(c) → Opt(Int))` | `per-key(assign)`, `per-key(fill)` |
 
-A shape fixes a summary's fields and its `apply` form for one state
-component; the candidate's `shape` is a choice of one shape per component, in
-component order. The library is stated over **component kinds**, not families.
+**Reason:** a deterministic order fixed before the run, narrow carriers
+first for the six signatures; it decides nothing else.
 
-| Shape | Component kind | Fields | `apply` form | Fields' size |
-|---|---|---|---|---|
-| `shift` | `Int` | `a: Int` | `x + a` | 8 B |
-| `clip` | `Int` | `a, l, u: Int` | `clamp(x + a, l, u)` | 24 B |
-| `overwrite` | `Int` | `has: Bool, v, a: Int` | `ite(has, v, x) + a` | 17 B |
-| `piecewise(m)`, `m` = 1, 2, 3 | `Int` | `t_1 … t_m, d_0 … d_m: Int` | `x + d_i`, `i` = number of thresholds `t_j` with `x >= t_j`, thresholds ascending | `16 m + 8` B |
-| `table` | `Cat(c)` | `Map(Cat(c) → Cat(c))` | `lookup(map, x)` | `k` B |
-| `percat(σ)` | `Map(Cat(c) → τ)` state | one `σ` per category, `σ` any shape above applied to `τ` | per category | `k` times `σ` |
-| `exceptions(e)`, `e` = 1, 2 | `Bool`-presence plus `Int` identifier per category | per category: `set: Bool`, `val: Int`, `forget_1 … forget_e: Int` | the value `val` if `set`, else the current value, unless it equals one of `forget_j` (then absent) | `k (9 + 8 e)` B |
+### 2.3 What the enumerator receives
 
-Reasons, shape by shape. `shift`, `clip` and `overwrite` are the
-translation-like shapes of the standard repertoire: an offset, a saturating
-offset, an offset after optionally overwriting. `table` is the
-transformation-monoid element for a control component. `piecewise(m)` is the
-smallest generalisation of `clip` whose breakpoints are data; `m ≤ 3` keeps it
-a fixed-size shape (a shape whose `m` grew with the batch would be the
-unbounded representation that the bound class rejects). `exceptions(e)` is
-the smallest shape that pins released identifiers; `e ≤ 2` likewise. No
-shape has a field count that depends on a batch.
+The enumerator receives the family's `Program` and the family's
+**observation environments**, and nothing else: no mutant, no summary, no
+family name or number. From the `Program` it reads the signature of §1.1,
+the pool and the `Name` set. The observation environments are frozen:
 
-No shape is named for a family or mentions one. Which shape suits which
-family is not stated here; the search tries them all (§2.4). I note a
-consequence honestly: `clip` is E2's quota summary shape, and the library
-contains it because it is the standard saturating translation. A quota
-admission thus shows the search finds a fill inside a known template, not
-that it discovered saturation; the comparison of §5.6 reports it. The
-alternative, a library without `clip`, would make a quota miss a statement
-about the library's poverty (§6, question 2).
+- for `valid[f]` and `atom[f]`: the arguments of every call of `f` in the
+  checking domain's alphabet `A`, malformed ones included;
+- for `respond[f]` and the stage filters: every store of `X` with those
+  arguments.
 
-### 2.3 Template limits
+They are deterministic, typed by each program's declared parameter types
+and drawn from the checking domain. They serve pruning (§2.5) and the stage
+filters (§2.6) only, never as literals (rule L); this is what "the
+enumerator receives only the `Program` and these observation environments"
+means (decision D8). **Reason:** pruning needs fixed inputs to compare terms
+on, and the checker evaluates this set anyway.
 
-Every hole is a term of the §1.4 grammar of the stated type, with these
-limits (size in nodes as §1.7, depth in levels). **Decision** for all values;
-reason: each leaves about four times the nodes of the smallest known fill
-(e.g. a clipped-translation combine field is 6 nodes) and keeps the
-enumeration finite.
+### 2.4 Holes and search limits
 
-| Hole | Max size | Max depth |
+Every hole is a hole term of §1.3 of its type. The limits are **search
+limits**: they bound the enumeration and decide nothing about correctness or
+the bound class.
+
+| Limit | Value | Reason |
 |---|---|---|
-| `valid[f]` | 7 | 3 |
-| `atom[f]`, per field | 9 | 4 |
-| `combine`, per field | 13 | 5 |
-| `respond[f]` | 17 | 5 |
+| size of any hole of function `f` | the node count of `f`'s body in `kiln_ir` (every `Effect`, `Terminal`, `Condition` and `Expr` node), computed from the `Program` at run start and logged | a term describing part of `f` needs no more nodes than `f` itself; the number comes from the `Program`, not from a known fill |
+| survivors per hole group (§2.6) | 64, in enumeration order | bounds the product of per-function survivors; later members are not tried |
 
-A candidate's total size is at most 256, its quantity-dependent branches at
-most 6 (rule B), and it has at most 6 components' shapes. The shape's
-`apply` form is part of the shape and is not a hole. **Reason for fixing
-`apply` by shape:** it gives each field its meaning, so `atom` and `combine`
-are checked against a known denotation instead of an open one; it is the one
-place the library guides the search, and §2.2 says so.
+There is no depth limit and no branch budget: depth is bounded by size, and
+a branch budget enforced nothing (§1.6).
 
-### 2.4 Rules that propose a candidate
-
-Four rules, each generic in the state signature and the `Program`. None
-mentions a family.
-
-- **R1, shape rule.** For each component, propose each shape of its kind in
-  the order of §2.2's rows; the candidate's shape is the product over
-  components in component order, enumerated with the last component varying
-  fastest.
-- **R2, argument-guard rule.** For each function `f`, enumerate `valid[f]`
-  terms over `f`'s parameters, pool constants and `lit`/`ite`/order
-  comparison/boolean connectives, ascending in size. The first fill equal to
-  the `Program`'s argument-only abort conditions on the search samples
-  (calls whose body aborts before its first `read`) is kept; up to 2 ties.
-  **Reason:** argument guards read no state, so the samples decide them.
-- **R3, atom and combine rule.** For each function `f` and field, enumerate
-  `atom[f]` terms; then, per surviving atom set, enumerate `combine`
-  terms field by field in declaration order. A combine field may mention
-  only fields of its two operands (`S.i`, `T.j`) and pool constants.
-- **R4, response rule.** For each function `f`, enumerate `respond[f]` over
-  the state components and `f`'s parameters, after `shape`, `valid`, `atom`
-  and `combine` are fixed.
-
-The rules run in a fixed order per shape: R2, then `atom` and `apply`
-against one-call samples (state after one call equals `replay`'s), then
-`combine` against two- to four-call samples, then R4 against every call of
-the samples. At each stage at most **64** survivors, in enumeration order,
-proceed. **Decision, reason:** the stage filters are cheap and sound only as
-rejections, and a cap keeps the product of holes from being enumerated; the
-checker is the only acceptance.
-
-### 2.5 Enumeration order and ties
+### 2.5 Enumeration order and pruning
 
 The order is total and deterministic:
 
-1. shape tuple, by R1's order;
-2. within a shape, the stage order of §2.4;
-3. within a hole, ascending **size**, then ascending **depth**, then the
-   pre-order sequence of constructor ranks, then payloads. Constructor rank
-   is the order of §1.4's alternatives within their nonterminal, `Int`
-   before `Bool` before `Cat` before `Map` before `Outcome`; payload order is
-   ascending numeric value for literals, parameter and field index order for
-   references, category order for names.
+1. the layout, by §2.2's order, the last signature component varying
+   fastest;
+2. within a layout, the functions in the `Program`'s declaration order, and
+   per function the hole group `(valid[f], atom[f])`, then `respond[f]`;
+3. within a hole, ascending size, then the pre-order sequence of
+   constructor ranks (the order of §1.3's alternatives), then payloads
+   (literals ascending, parameters and fields in declaration order,
+   categories in code order);
+4. a candidate is a choice of one survivor per hole group; candidates are
+   enumerated lexicographically by survivor index, the first function's
+   groups varying slowest.
 
-Two terms with identical behaviour on the search samples are one class; the
-first in this order represents it and the others are not enumerated
-(**observational-equivalence pruning**). The behaviour vector is computed on
-the 64 search samples and is part of the log. **Reason:** without it the
-number of syntactically distinct terms hides the smaller number of
-distinguishable ones; with a fixed sample set the pruning is reproducible.
+This order is **not globally smallest-first**: a larger hole term in an
+earlier layout precedes a smaller one in a later layout. The admitted
+candidate is the first admissible one in this order, not necessarily the
+smallest (decision D9).
 
-### 2.6 Candidate count
+**Observational-equivalence pruning.** Two terms of one hole with equal
+values on every observation environment of that hole (§2.3) form one class;
+only the first in the order is kept, and the others are never revisited.
+This is **incomplete**: two terms equal on the checking domain may differ on
+the family domain, and the discarded one may be the only one that agrees
+there. There is no backtracking into pruned classes. Every miss is
+therefore scoped to this incomplete search: it is not a proof that no
+summary exists in the language (decision D8). **Reason:** without pruning,
+the number of syntactically distinct terms hides the far smaller number of
+distinguishable ones; with frozen environments the pruning is reproducible.
 
-The enumerator logs, per family, deterministically and in this order:
-the size of the enumeration space (counted without evaluation, by shape and
-hole, before the run); the **index** of every candidate at which a stage
-rejected, accepted or admitted it; per stage the number of candidates tried,
-pruned by equivalence, and passed on; and the index of the admitted
-candidate or of the last candidate tried. At the wall-clock deadline (§5.3)
-the last index reached is not a deterministic number and is logged as such;
-every other logged count is a function of the `Program` and the frozen
-parameters alone, so a rerun with a longer budget reproduces the same indices
-up to the deadline's. The run's result is the pair (index of admission or
-"none", space size). **Reason:** ten minutes depends on the machine; an index
-does not.
+### 2.6 Stage filters
 
-### 2.7 Nothing in the library is per family
+Before a candidate reaches the checker, its hole groups pass two filters,
+each a subset of the checker's own one-call checks (§3.2):
 
-The shape library keys on component kinds (`Int`, `Cat(c)`, per-category
-`Map`), the rules on the state signature, and the limits are uniform. There
-is no family name, family number, function name, abort name, constant or
-template that appears in only one family; the pool and the `Name` set are
-read from the `Program`. The shapes that fit no family are tried
-all the same and cost enumeration time, which is the point of the gate. A
-review checks this by grepping the library for the six families' function
-and abort names: no hit.
+- `(valid[f], atom[f])`: for every store `x` of `X` and every call of `f`
+  in `A`, applying the call's summary to `x` gives `replay`'s store after
+  that single call, read through the signature;
+- `respond[f]`: for every such pair, the outcome equals `replay`'s.
+
+Each filter depends on one function's holes only, so functions are filtered
+independently and only survivors are combined. A filter rejects only what
+the checker would reject, so it never discards an admissible candidate.
+
+### 2.7 Candidate count
+
+The enumerator logs per family: the size of the enumeration space per
+layout and hole, counted without evaluation before the run; for every
+candidate that reaches a check, its index in the order of §2.5 and the
+stage that rejected or admitted it; per hole the terms tried, pruned and
+surviving; and the index of the admission or of the last candidate tried.
+**Determinism** means the enumeration order is a function of the `Program`,
+the observation environments and this part alone, so every index is
+reproducible. How far the search gets within ten minutes depends on the
+machine; the count reached at the deadline is recorded, not promised.
 
 ## 3. Checker soundness contract
 
 The checker is a separate, small component (`docs/concept.md` §9.4). It
-takes a candidate, a family `Program` and that family's checking domain
-`(X, A, L = 4)` from `inputs.md`, and returns one of three results. The
-checker, not the enumerator, is the only acceptance.
+takes a candidate in checker form (§1.3), a family `Program`, that family's
+checking domain `(X, A, L = 4)` from `inputs.md` and its family-domain
+batches (§4.2), and returns one result. The checker, not the enumerator, is
+the only acceptance.
 
 | Result | Meaning |
 |---|---|
 | `Rejected(Malformed(reason))` | validation failed; no evaluation ran |
-| `Rejected(Divergent(witness))` | evaluation ran and differs from `replay` or breaks associativity; the witness is a store and batch (or a triple) |
-| `Valid` | all checks below held |
+| `Rejected(Overflow(witness))` | the candidate's own evaluation overflowed checked `i64` (§1.4) |
+| `Rejected(Divergent(witness))` | a comparison with `replay` or an associativity check failed; the witness is a store and batch, or a triple |
+| `Rejected(FamilyDomain(witness))` | valid over the checking domain, but disagrees with `replay` on a family-domain batch (§3.4) |
+| `Valid` | every check below held |
 
 ### 3.1 Validation precedes evaluation
 
-Validation is a pure function of the candidate text and the `Program`. It
-runs the checks below in this order and stops at the first failure; the
-reason is a typed value, so a malformed candidate is told apart from a
-candidate that evaluates and aborts.
+Validation is a pure function of the candidate and the `Program`, run in
+this order, stopping at the first failure with a typed reason:
 
-1. **Well-formed:** every hole is filled, names are declared, the shape is
-   in the library.
-2. **Well-typed:** every term has the type §1.4 gives it, including the
-   category of every `Cat` operand.
-3. **Literals** are in the pool `P(f)` (rule L).
-4. **Maps and equality:** no `Map` is indexed by anything but a `Cat`; no
-   `Int` equality with a constant (rules M, E).
-5. **Budgets:** hole sizes and depths (§2.3), total size at most 256, at most
-   6 quantity-dependent branches at depth at most 3 (rule B).
+1. **Well-formed:** every hole filled, every name declared, every component
+   in the library and of the right kind for its signature component.
+2. **Well-typed:** every term has its §1.3 type, including the category of
+   every `Cat`, and uses only productions its hole allows.
+3. **Literals** are in the pool (rule L); tables are `Cat`-indexed (rule M).
+4. **Search limits** of §2.4 hold.
 
-An **abort** is something else: while evaluating a well-formed candidate,
-checked `i64` arithmetic can overflow. That is `Aborted(Overflow(Arithmetic))`
-of the evaluation, never a malformed result; if `replay` does not abort at
-the same point the candidate is `Divergent`. **Reason:** `docs/experiments.md`
-asks for "typed rejection, distinct from an abort", and a candidate that is
-merely wrong must not be recorded as ill-formed, or the mutant count of
-`Malformed` would hide soundness evidence.
+A malformed candidate is thereby told apart from one that evaluates and is
+wrong, as `docs/experiments.md` asks ("typed rejection, distinct from an
+abort"). Mutants in checker form (§3.8) skip check 4, which bounds the
+search, not the checker.
 
-### 3.2 Equivalence to `replay`
+### 3.2 Equivalence to `replay` over the checking domain
 
 For every initial store `x` in `X` and every batch `c_1 … c_n`, `1 ≤ n ≤ 4`,
 over `A` (malformed calls included), `P` pairs in all (`inputs.md` §9):
 
 1. `replay(program, calls, x)` gives `n` executions; take each `outcome` and
    the last `store`.
-2. The candidate gives, from the state signature of `x`, the batch summary
-   twice: by the left fold of `atom` under `combine`, and by the balanced
-   pairwise fold (E2 `protocol.md` §3). The state before call `i` is `apply`
-   of the left-fold summary of the first `i - 1` calls; `respond[f]` on it
-   gives call `i`'s outcome. The final state is `apply` of each full fold.
-3. **Valid on this pair** iff every outcome equals `replay`'s (the full
-   `Outcome`, so a wrong `AbortReason` is a divergence, `inputs.md` §1), the
-   final state equals `replay`'s final store read through the signature, and
-   both folds give the same final state.
+2. The candidate's batch summary is formed twice: the left fold of the call
+   summaries under combine, and the balanced pairwise fold (E2 `protocol.md`
+   §3). The state before call `i` is `apply` of the left fold of the first
+   `i - 1` calls to `x`; `respond[f_i]` on it is call `i`'s outcome.
+3. The pair holds iff every outcome equals `replay`'s (the full `Outcome`, so
+   a wrong `AbortReason` diverges), the final state of each fold equals
+   `replay`'s final store read through the signature, and the two folds give
+   the same final state.
 
 States reached during a batch may lie outside `X`; the candidate must be
-total there, and `replay` judges them exactly. The access log is not
-compared (`inputs.md` §1). The checker enumerates all `P` pairs, not a
-sample. **Reason:** `inputs.md` §9 sizes every domain (at most 1 118 464
-pairs) for exhaustion, and a mutant witness is one specific pair.
+total there, and `replay` judges them exactly. All `P` pairs are checked,
+not a sample. **Reason:** `inputs.md` §9 sizes every domain (at most
+1 118 464 pairs) for exhaustion, and a mutant's witness is one specific
+pair.
 
 ### 3.3 Associativity on representations
 
 For every triple of nonempty batches `(b_1, b_2, b_3)` over `A` with
-`|b_1| + |b_2| + |b_3| ≤ 4`, let `S_i` be the left-fold summary of `b_i`.
-The checker requires `(S_1 ⊕ S_2) ⊕ S_3 = S_1 ⊕ (S_2 ⊕ S_3)` as **values**
-(field by field), not as functions, and requires `apply(ε ⊕ S, x) =
-apply(S ⊕ ε, x) = apply(S, x)` for every `x` in `X`. **Reason:** E2 and the
-property test compare values (E2 `inputs.md` §1, "Combine is associative on
-representations"); a `N` mutant (`inputs.md` §1) is exact on every left fold
-and shows only under another bracketing, and the triple
-`(c_1, c_2, (c_3, c_4))` is its witness. The triples number at most about
-200 000 for the largest alphabet (16 calls). The identity law is semantic
-because E2 says so for quota (the representation is not canonical).
+`|b_1| + |b_2| + |b_3| ≤ 4`, with `S_i` the left-fold summary of `b_i`, the
+checker requires `(S_1 ⊕ S_2) ⊕ S_3 = S_1 ⊕ (S_2 ⊕ S_3)` as values, field by
+field. **Reason:** E2 compares values (E2 `inputs.md` §1, "Combine is
+associative on representations"); an `N` mutant is exact on every left fold
+and shows only under another bracketing, as in its witness
+`((c_1, c_2), (c_3, c_4))`. With adjoined identities, `ε ⊕ S = S ⊕ ε = S`
+holds by definition and is not checked separately.
 
-### 3.4 Bound-class measurement
+### 3.4 Agreement on the family domain
 
-The bound class (summary size, combine cost, apply cost) is measured by the
-procedure of §4 on the candidate, with its operation counts from a counting
-evaluator that follows §4.3. The checker returns the three maxima and the
-growth finding to the run's record. It does not change the result of
-`Valid`, which concerns correctness; the run (§5) admits a family only when
-both `Valid` and §4's verdict hold.
+For every seed `i` and every size `n` of §4.2, the candidate is compared
+with `replay` on the batch's first `n` calls from its initial store, as in
+§3.2 step 3: every outcome, the final state of the left fold and of the
+balanced fold. A disagreement is `Rejected(FamilyDomain(seed, n, call))`.
+**Reason:** a candidate valid only over the finite checking domain may be a
+table, not a summary (§1.6), and a table of the checking domain is wrong on
+the family domain (decision D1). This check is **sampled**: 100 batches of
+at most 256 calls, a fixed set and not every input. It strengthens the
+evidence; it is not a proof and does not widen the certificate.
 
 ### 3.5 The certificate
 
@@ -454,316 +437,359 @@ A `Valid` result is written exactly as:
 > **valid over the declared domains** — the checking domain `(X, A, L = 4)`
 > of family `f` in `inputs.md`, version `<commit>`, and no other.
 
-It is bounded, not a proof (`docs/concept.md` §9.4). It says nothing about
+It is bounded, not a proof (`docs/concept.md` §9.4): it says nothing about
 batches longer than 4, stores outside `X` that the batches do not reach,
-arguments outside `A`, or any other family version. The wording appears in
-the run's record next to the bound-class verdict, which has its own scope
-(§4.5).
+arguments outside `A`, or another family version. The record states beside
+it that the candidate also agreed with `replay` on the 100 family-domain
+batches of §4.2, a sampled check, and gives the bound-class verdict with its
+own scope (§4.5).
 
 ### 3.6 What the checker may not assume
 
-- That the candidate's own claims (its size, its types, a comment) hold; it
-  recomputes them.
-- That arithmetic cannot overflow, that `combine` commutes, that `ε` is
-  neutral byte for byte, or that the representation is canonical.
-- That the states a batch reaches lie in `X`.
-- That a batch's summary depends on a grouping: both folds are run.
-- Anything from the mutant list, the search samples, the hidden quota summary
-  of E2 `inputs.md` §2.4, or a previous candidate. The checker has no cache
-  across candidates.
-- That `kiln_ir::replay` is wrong. It is the oracle (`docs/experiments.md`,
-  "Shared dependency"); a suspected oracle defect stops the run and is
-  reported, never worked around.
+It may not assume that the candidate's claims hold (it recomputes size,
+types and layout); that arithmetic cannot overflow, combine commutes or a
+representation is canonical; that reached states lie in `X` or a summary is
+independent of grouping; or anything from the mutant list, the observation
+environments, E2's hidden quota summary or an earlier candidate (it keeps no
+cache). It may not assume `kiln_ir::replay` is wrong: it is the oracle
+(`docs/experiments.md`, "Shared dependency"), and a suspected oracle defect
+stops the run and is reported, never worked around.
 
 ### 3.7 Solver
 
-**No solver is used.** The enumeration (§2) and the checker (§3.2-§3.3) are
-exhaustive in-process searches over finite domains. This implements #5's
-ruling that no SyGuS and no cvc5 are used. If a later freeze adds a solver
-to the checker, it stays confined to the checker, never enters the
-enumerator, and is first tested against the interpreter on every
-preregistered mutant and on randomised pairs before it may return `Valid`.
-Adding one re-freezes this part.
+**No solver is used** (#5's ruling: no SyGuS, no cvc5); every check is an
+in-process evaluation over a finite set. A later freeze that adds a solver
+confines it to the checker, tests it first against the interpreter on every
+mutant and on randomised pairs, and re-freezes this part.
 
 ### 3.8 Rejection of the 52 mutants
 
-S4 runs each preregistered mutant (`inputs.md` §9) as a candidate against the
-checker; a `Valid` result for a mutant is a false acceptance and fails E3
-(`docs/experiments.md`, "Conjunctive success condition"). A mutant the
-language cannot express is recorded as "not expressible" (§1.8).
+S4 writes each preregistered mutant (`inputs.md` §9) in checker form: a
+carrier and `valid`, `atom`, combine, apply and `respond` terms of §1.3,
+which may use the † productions, so a mutant's deviating combine (an `N`,
+`O` or `T` mutant) is written directly and is not limited to the library.
+Each is run through §3.1 (checks 1-3), §3.2 and §3.3; a `Valid` result is a
+false acceptance and fails E3 (`docs/experiments.md`, "Conjunctive success
+condition"). A mutant that checker form cannot express is recorded as "not
+expressible" with its reason (`inputs.md` §1), never dropped. Mutants are
+not measured for the bound class. **Reason:** the checker's soundness does
+not depend on what the library can produce, so the checker is tested on
+the widest form it accepts.
 
 ## 4. Bound-class measurement
 
 ### 4.1 Rule reused unchanged
 
-E2 `protocol.md` §4-§5 is applied unchanged to the three quantities `B`
-(summary bytes), `C` (largest combine cost in the balanced pairwise fold) and
-`A` (apply cost to the initial state): the same paired design on prefixes
-(§2 there), the window 64-256, `τ = 6/5` on integers, rise and fall per seed,
-and a quantity **grows** iff rising seeds minus falling seeds is at least 20
-over 100 seeds. E2 `protocol.md` §6 allows the pairing where the generator's
-calls are independent of position and of `n`; §4.2 below gives such
-generators, so no separate error criterion is needed.
+E2 `protocol.md` §4-§5 is applied unchanged to `B` (summary bytes), `C`
+(largest combine cost in the balanced pairwise fold) and `A` (apply cost to
+the initial state): the paired design on prefixes (§2 there), the window
+64-256, `τ = 6/5` on integers, rise and fall per seed, and a quantity
+**grows** iff rising seeds minus falling seeds is at least 20 over 100
+seeds. E2 `protocol.md` §6 allows the pairing where the generator's calls
+are independent of position and of `n`; §4.2's generators have that
+property, so no separate error criterion is needed.
 
 ### 4.2 Batches
 
 | Setting | Value | Reason |
 |---|---|---|
 | Sizes `n` | 1, 2, 4, 8, 16, 32, 64, 128, 256 | E2 `protocol.md` §2 |
-| Seeds | batch index `j = 10 000 + i`, `i = 0 … 99` | **Decision.** 100 seeds as E2; the offset keeps every E3 batch distinct from E2's (`j = 0 … 99`), as E2 `protocol.md` §6 requires |
-| Batch of seed `i` | `generate(256, j)` for the family, seeded `(f << 48) \| (256 << 32) \| j`; the size-`n` batch is its first `n` calls | E2 `inputs.md` §5; prefixes are batches under the paired design |
-| Family numbers `f` | quota 1 (E2's number); sequence 4, dispatcher 5, order 6, wallet 7, lease 8 | `inputs.md` §10 item 4: 4 to 8 in the order of §4-§8; numbers 2 and 3 are E2's inventory and accounts |
+| Seeds | batch index `j = 10 000 + i`, `i = 0 … 99` | **Decision.** 100 seeds as E2; the offset keeps every E3 batch distinct from E2's `j = 0 … 99`, as E2 `protocol.md` §6 requires |
+| Batch of seed `i` | the 256 calls drawn from state `(f << 48) \| (256 << 32) \| j`; the size-`n` batch is its first `n` calls | E2 `inputs.md` §5; prefixes are batches under the paired design |
+| Family numbers `f` | quota 1 (E2's number); sequence 4, dispatcher 5, order 6, wallet 7, lease 8 | `inputs.md` §10 item 4; 2 and 3 are E2's inventory and accounts |
 
-The SplitMix64 generator, `uniform(lo, hi)` and the seed derivation are E2's
-(`inputs.md` §5, `kiln_e2::SplitMix64`), unchanged. Quota uses E2's frozen
-generator (`kiln_e2::quota::generate`) with `j` as above. The five new
-generators follow E2's structure: the initial state is drawn first, then
-every call draws the same number of values in the same order whatever it
-draws, so a call depends only on the stream position (the property E2 §2
-needs). They draw from the **full family domain** (`inputs.md` §1), never
-from the checking domain. **Decision** for all draws; the reason is in each
-row's last clause.
+SplitMix64, `uniform(lo, hi)` and the seed derivation are E2's (`inputs.md`
+§5), unchanged: `kiln_e2::SplitMix64::from_state` with the state above,
+since `kiln_e2::Family` numbers only E2's three families. Quota uses E2's
+frozen generator (`kiln_e2::quota::generate`) with `j` as above. The five
+new generators follow E2's structure: the initial state is drawn first,
+then every call draws the same number of values in the same order whatever
+it draws, so a call depends only on its stream position (E2 §2's property).
+They draw from the **full family domain** (`inputs.md` §1), never from the
+checking domain. **Decision** for every draw; each row's last clause gives
+its reason.
 
 | Family | Initial state | Per call, in draw order | Malformed (1% each) |
 |---|---|---|---|
 | Sequence, `f = 4` | `last_value = uniform(0, 1 000 000)` | `k = uniform(0, 99)`, `< 80` is `next_value`, else `restart`; `w = uniform(1, 1 000 000)` (drawn for every call); `m = uniform(0, 99)` | `m = 0` and `restart`: `w = 0` if the drawn `w ≤ 500 000`, else `1 000 001`. Restarts are a fifth of the mix so a batch holds both operations |
 | Dispatcher, `f = 5` | `cursor = uniform(0, 4)` | `k = uniform(0, 99)`, `< 50` is `assign`, else `skip`; `c = uniform(1, 4)`; `m` | `m = 0` and `skip`: `c = 0` if the drawn `c ≤ 2`, else `5`. Even mix so wraps occur at every size |
 | Order, `f = 6` | `status = uniform(0, 3)` | `k = uniform(0, 3)`: `pay`, `ship`, `cancel`, `reopen` | none: no function has an argument. Uniform so every transition recurs |
-| Wallet, `f = 7` | `balance = uniform(0, 32 767)` | `k = uniform(0, 99)`, `< 50` is `debit`, else `credit`; `a = uniform(1, 100)`; `m` | `m = 0`: `a = 0` if the drawn `a ≤ 50`, else `101`. Mixed amounts, as `inputs.md` §7.5 requires for a piece count to show |
-| Lease, `f = 8` | for `r = 0, 1`: `z = uniform(0, 1)`; `o = uniform(1, 1 000 000)`; held by `o` iff `z = 1` | `k = uniform(0, 99)`: `< 40` is `acquire`, `< 75` is `release`, else `inspect`; `r = uniform(0, 1)`; `o = uniform(1, 1 000 000)` (drawn for every call); `m` | `m = 0`: `r = 2` if the drawn `o ≤ 500 000`, else `o = 0`; `inspect` takes `r = 2`. Owners are drawn from the whole range so released owners are almost always distinct, which is what `inputs.md` §8.5's argument needs |
+| Wallet, `f = 7` | `balance = uniform(0, 32 767)` | `k = uniform(0, 99)`, `< 50` is `debit`, else `credit`; `a = uniform(1, 100)`; `m` | `m = 0`: `a = 0` if the drawn `a ≤ 50`, else `101`. Mixed amounts, as `inputs.md` §7.5 requires |
+| Lease, `f = 8` | for `r = 0, 1`: `z = uniform(0, 1)`; `o = uniform(1, 1 000 000)`; held by `o` iff `z = 1` | `k = uniform(0, 99)`: `< 40` is `acquire`, `< 75` is `release`, else `inspect`; `r = uniform(0, 1)`; `o = uniform(1, 1 000 000)` (drawn for every call); `m` | `m = 0`: `r = 2` if the drawn `o ≤ 500 000`, else `o = 0`; `inspect` takes `r = 2`. Owners from the whole range, as `inputs.md` §8.5's argument needs |
 
-For the lease, drawing from `[1, 1 000 000]` means two different releases
-nearly never name the same owner and nearly never match the initial holder
-(a chance of about one in a million per release). The measurement judges the
-summary's *size*, which must carry each distinct released owner; it is not an
-estimate of how often a release commits. The correctness check against
-`replay` on these batches (§4.6) is the separate guard against a candidate
-that is small only because it is wrong.
+The same batches serve the bound class and the family-domain agreement of
+§3.4, where a table of the checking domain's values is wrong.
 
-### 4.3 Counting boundaries for this language
+### 4.3 Counting boundaries for the components
 
-E2 `protocol.md` §3 counts executed work and fixes the boundaries before any
-implementation. Restated for §1's operations; a cost is the number of work
-units **executed** by instrumenting the evaluator, never computed from sizes.
-The counter increases by 1 for each of:
+E2 `protocol.md` §3 counts executed work at fixed boundaries; restated for
+§2.1. A cost is the number of work units **executed**, measured by
+instrumenting the evaluator, never computed from sizes. The counter
+increases by 1 for each:
 
-- a term node evaluated (a constructor, a literal, a field reference), once
-  per evaluation; for `ite` and `case` only the evaluated arm and the
-  condition or scrutinee count, so branches that do not fire cost nothing;
-- a `lookup`, once, plus 1 per entry of the `Map` it reads (a table copied
-  or read whole costs its length);
-- a checked `i64` operation (`+`, `-`, `min`, `max`, `clamp`), once each, in
-  addition to its node, whether or not it saturates;
-- a value copied into a new summary, per field, hence per entry of a `Map`.
+- checked `i64` operation executed (`+`, `-`, `min`, `max`, `clamp`,
+  `mod`), as E2 counts every addition, subtraction and clamp;
+- test executed: an identity-tag test, an `ite` condition, a `present`
+  test; an arm that does not run costs nothing;
+- `Map` entry read or written.
 
-**Boundaries.** A combine starts when `combine` is entered with two summaries
-and ends when it returns the result; an apply starts when `apply` is entered
-with the summary and the state and ends when it returns. `B` is the
-serialised byte length of §1.7. The evaluator keeps no memo, no hash-consing
-and no cache; if an implementation adds one it starts empty at the entry of
-each combine and each apply and is counted there, as E2 `protocol.md` §3
-requires, so no work moves into a warm cache. Outside the boundaries only
-building one call's atomic summary, serialising for `B` and generation may
-run.
+Copying a field and converting between a category and its code cost
+nothing: they change no value. **Boundaries:** a combine starts when it is
+entered with two summaries and ends when it returns; an apply starts when
+it is entered with a summary and a state and ends when it returns. The
+evaluator keeps no memo or cache; one added later starts empty at each
+entry and is counted there, as E2 `protocol.md` §3 requires. Outside the
+boundaries only building a call's atomic summary (its `valid` and `atom`
+terms), `respond`, serialising for `B` and generation run.
 
-### 4.4 Stated bounds, one per family
+### 4.4 Stated bounds, derived from the library
 
-The bound class of `docs/experiments.md` needs "a fixed, stated bound". Each
-family below has one, frozen now. A candidate is **within the bound class**
-iff (i) for each of `B`, `C`, `A`, the maximum over all 100 seeds and all
-nine sizes is at most the family's bound, and (ii) no quantity grows (§4.1).
-(`C` is undefined for `n = 1`.) **Decision** for every number. The bytes and
-nodes are those of a candidate of the shape that the family's semantics
-suggests, with room for one spare field; the bound does not name a summary,
-and the hidden quota summary (E2 `inputs.md` §2.4) is not consulted beyond
-the byte count its section 6 already prints.
+Hole terms run outside the boundaries (§4.3), so `B`, `C` and `A` depend
+only on the layout. Per component, from §1.7 and §4.3, with both operands
+values (two tag tests per combine, one per apply):
 
-| Family | `B` bytes | `C` nodes | `A` nodes | Reason, from the frozen semantics |
+| Component | `B` | `C` at most | `A` at most |
+|---|---|---|---|
+| `assign` | 9 (`Int`), 2 (`Cat`), 10 (`Opt(Int)`) | 2 | 1 |
+| `shift`, `raise`, `lower` | 9 | 3 | 2 |
+| `reset-shift` | 18 | 4: tag tests, `T.r`, one addition | 3 |
+| `clamp-shift` | 25 | 7: tag tests, 3 additions, 2 clamps | 3 |
+| `fill` | 9 | 2 | 2 |
+| `rotate` | 9 | 4 | 3 |
+| `transform`, `k` values | `1 + k` | `2 + 3k` | 2 |
+| `per-key(σ)`, `k` keys | `1 + k · B(σ)` | `2 + k · C(σ)` | `1 + k · A(σ)` |
+
+A family's **stated bound** is, for each quantity, the maximum over the
+components its signature admits (§2.2):
+
+| Family | `B` bytes | `C` units | `A` units | Derivation |
 |---|---|---|---|---|
-| Quota (§3) | 32 | 64 | 32 | one quantity with two-sided saturation: an offset and two bounds fit in 24 bytes (`inputs.md` §2.4 of E2); one spare word. Combine adds 5 terms of about 6 nodes, apply 7 |
-| Sequence (§4) | 32 | 64 | 32 | translate-or-overwrite on one quantity: a flag, a value and a shift are 17 bytes; one spare word |
-| Dispatcher (§5) | 16 | 96 | 32 | a map of the 5-valued cursor to itself is 5 bytes, or one `Int` rotation; room for one more word. Combine reads 5 entries, so more nodes |
-| Order (§6) | 16 | 96 | 32 | a map of a 4-valued status to itself is 4 bytes; combine reads 4 entries and nests lookups |
-| Wallet (§7) | 64 | 128 | 64 | expected to miss: `piecewise(3)` is 56 bytes. The bound is generous so a miss comes from growth, not from a tight constant |
-| Lease (§8) | 64 | 128 | 64 | expected to miss: `percat(exceptions(2))` over 2 resources is 50 bytes. Same reason |
+| Quota, sequence, wallet | 25 | 7 | 3 | `Int`: `clamp-shift` is widest and costliest; `reset-shift` also applies in 3 |
+| Dispatcher | 9 | 17 | 3 | `Cat`, `k = 5`: `rotate` 9 bytes; `transform` `2 + 15` |
+| Order | 9 | 14 | 3 | `Cat`, `k = 4`: `rotate` 9 bytes; `transform` `2 + 12` |
+| Lease | 21 | 6 | 5 | `per-key`, `k = 2`: `1 + 2 · 10`, `2 + 2 · 2`, `1 + 2 · 2` |
 
-**Why a miss is still possible where `inputs.md` expects one.** For wallet
-and lease the bound is stated and a candidate within it can exist in the
-library. The expected miss is for another reason: the exact summary needs
-size growing with batch length (`inputs.md` §7.5, §8.5). A candidate that
-fits the fixed bound is then inexact, so `Divergent` at the checker or at
-the family-domain agreement check (§4.6), or it is exact on short batches
-and its measured quantity grows. Either is recorded; the bound does not make
-the expectation true, and an admission would be a result (`inputs.md` §7.5,
-§8.5).
+A candidate is **within the bound class** iff (i) for each of `B`, `C`, `A`
+the maximum over all 100 seeds and nine sizes is at most its family's bound
+(`C` is undefined at `n = 1`), and (ii) no quantity grows (§4.1). **Reason:**
+the numbers follow from the library's carriers and definitions alone, so
+anyone can recompute them, and no expected fill entered them.
+
+**Bounded by construction.** In this language every candidate's
+representation has the fixed width of its layout, so measured growth of
+`B` cannot occur, and a measured value above the bound means the
+implementation does not realise §2.1: the document or the implementation
+is defective and is re-frozen, voiding prior results, as E2 `protocol.md`
+§5 rules for quota. E2's growth rule can act only on the cost counts, where
+data varies them between bounded values (an identity operand skips a body;
+`reset-shift` runs one arm); a finding there counts like any other.
 
 ### 4.5 What a pass does and does not show
 
-It is scoped as E2 `protocol.md` §5: "no growth detected over the window
-64-256 under this protocol", within the bound. It does not show a bound for
-batches longer than 256, growth below `τ`, or any property outside the
-frozen generators. It is not a proof.
-
-### 4.6 Agreement with `replay` on the measurement batches
-
-For every seed and every size the candidate's outcomes and final state on the
-batch are compared with `replay` (as §3.2, from the batch's initial store).
-A disagreement on any batch makes the family a miss, recorded as "diverges on
-the family domain". **Decision, reason:** the certificate is only "valid
-over the declared domains"; a small summary that is wrong off the checking
-domain is not a summary of the family, and `inputs.md` §10 item 2 requires
-that such a candidate count as a miss. I flag it for the reviewer as a
-possible addition to the gate (§6, question 3).
-
-### 4.7 Mutated candidates are not measured
-
-Preregistered mutants (`inputs.md` §9) are checked by §3 only. A mutant that
-passes the checker is a false acceptance and fails E3 whatever its size.
+As E2 `protocol.md` §5: "no growth detected over the window 64-256 under
+this protocol", within the stated bound. It shows nothing about batches
+longer than 256 or inputs outside the frozen generators, and it is not a
+proof.
 
 ## 5. Manifest
 
 `docs/experiments.md` ("Freeze order and authorship") requires the exact
-hardware the ten-minute budget is measured on and the retry policy, if any,
-to be recorded before the gate runs.
+hardware of the ten-minute budget and the retry policy to be recorded
+before the gate runs.
 
 ### 5.1 Machine
 
-Read on 2026-10-16 with `lscpu` and `/proc/cpuinfo` (`/proc/meminfo`,
-`/sys/devices/system/cpu`), as E4 `protocol.md` §9 did. A different machine
-re-collects these fresh and the budget is then a different budget.
+Read on 2026-10-16 with `lscpu`, `/proc/cpuinfo`, `/proc/meminfo` and
+`/sys/devices/system/cpu`, as E4 `protocol.md` §9 did. A different machine
+re-collects these, and the budget is then a different budget.
 
 | Fact | Value |
 |---|---|
 | CPU | AMD Ryzen 5 5600X (family 25, model 33, stepping 2), x86_64 |
 | Cores / threads | 6 physical, SMT on, 12 logical CPUs (0-11), 1 socket, 1 NUMA node |
 | Caches | L1d 192 KiB and L1i 192 KiB (6 each), L2 3 MiB (6), L3 32 MiB (1) |
-| Clock | minimum 560.8 MHz, maximum 4654.3 MHz; boost enabled (`cpufreq/boost` = 1); driver `amd-pstate-epp`, governor `powersave` |
+| Clock | minimum 560.8 MHz, maximum 4654.3 MHz; boost on; driver `amd-pstate-epp`, governor `powersave` |
 | Memory | 65 752 620 kB (`MemTotal`) |
 | Kernel | Linux 6.17.0-35-generic |
-| Toolchain | the one in `rust-toolchain.toml`, 1.99.1 |
+| Toolchain | `rust-toolchain.toml`, 1.99.1 |
 
-The governor is `powersave` and the clock varies with load. I record it and
-do not change it: the budget is wall-clock on the machine as it is, and
-changing system settings is outside a documentation freeze. The run's own
-record (§5.5) holds the frequencies it saw.
+The governor is recorded, not changed: the budget is wall-clock on the
+machine as it is, and system settings are outside this freeze.
 
-### 5.2 Pinning and exclusion
+### 5.2 Pinning and recorded conditions
 
-The run takes `/tmp/probe-stack.lock` with `flock` (shared across
-repositories; one probe stack per machine) and holds it until all six
-families have run. It runs the whole process under `taskset -c 2`; CPU 2's
-SMT sibling is CPU 8 (`/sys/devices/system/cpu/cpu2/topology/thread_siblings_list`
-reads `2,8`), which stays idle for the run: the search is single-threaded and
-no helper may use CPU 8. **Reason:** the same pin as E4 `protocol.md` §9, so
-a sibling's load cannot shift a ten-minute figure. Before the first family
-starts the harness reads `/proc/loadavg`; if the 1-minute average is at or
-above 18 (1.5 times 12 logical CPUs, the machine-load floor in use) it waits
-and does not start. After start there is no interference test and no
-rejection of a family: the budget is wall-clock, and E4's rejected-attempt
-regime would be a retry.
+The run takes `/tmp/probe-stack.lock` with `flock` (one probe stack per
+machine) and holds it until the last family ends. The search process runs
+under `taskset -c 2`. Nothing reserves CPU 2's SMT sibling, CPU 8
+(`thread_siblings_list` reads `2,8`), and this part does not claim it stays
+idle. Instead the conditions are **recorded, never gating**: a monitor
+pinned to the complement of `{2, 8}` samples every 200 ms, as E4
+`protocol.md` §9 does, CPU 8's idle field in `/proc/stat`, CPU 2's
+`/proc/schedstat` field 8 (time waiting to run) and `/proc/loadavg`, and the
+record keeps the series. Before the first family the harness waits while
+the 1-minute load average is at or above 18 (1.5 times 12 logical CPUs);
+after the start nothing rejects or repeats a family, since that would be a
+retry. **Reason:** the ten-minute budget is a coarse wall-clock bound, not a
+fine-grained timing, so interference is documented beside the result
+rather than filtered out.
 
-### 5.3 Budget, attempt, retry
+### 5.3 Budget and attempt
 
-- **10 minutes of wall-clock per family**, read from a monotonic clock, from
-  the first candidate proposed to the admission or the deadline. It covers
-  proposal, the sample filters, validation, the equivalence and associativity
-  checks and the bound-class measurement (§4), because "admitted" means all
-  of them (`docs/experiments.md`, "Gate", "Conjunctive success condition").
-  Process start, loading the `Program` and writing the record are outside it.
-- **One attempt per family, no retry, no extension** ("A family not admitted
-  within ten minutes is a miss, not a retry with more budget"). A crash or a
-  host fault that stops the run before a family ends stops the run; E3 is
-  re-run from the first family under a recorded cause, and the aborted
-  numbers are void as under the freeze protocol. The retry policy of the rule
-  library is none.
-- Families run one after another in the order of `inputs.md` §3-§8 (quota,
-  sequence, dispatcher, order, wallet, lease), so total wall-clock is at most
+- **10 minutes of wall-clock per family**, on a monotonic clock, from the
+  first candidate proposed to admission or the deadline. It covers
+  enumeration, the stage filters, validation, every check of §3 and the
+  measurement of §4, because "admitted" means all of them. Process start,
+  loading the `Program` and writing the record are outside it.
+- **One attempt per family, no retry, no extension** (`docs/experiments.md`,
+  "Gate"). A harness crash or host fault fails the gate run **closed**: it
+  gives no verdict, and its partial numbers are void. A re-run happens only
+  through a logged amendment (a recorded cause and a commit to the run's
+  record), never as an automatic restart (decision D9). The rule library's
+  retry policy is none.
+- Families run in the order of `inputs.md` §3-§8, so the total is at most
   60 minutes plus setup.
-- On the first `Valid` candidate within the bound class (§4.4) the family is
-  admitted and the clock stops; the search does not look for a smaller one.
-  **Reason:** the enumeration is ordered by size (§2.5), so the first
-  admitted is also the smallest the order reaches.
 
-### 5.4 Leakage rule
+### 5.4 Admission, stopping and miss types
 
-E2's hand-written quota summary (E2 `inputs.md` §2.4, the triple `(a, l, u)`
-with its combine and apply) is hidden from the synthesizer and compared only
-afterwards (#5 ruling). Concretely: the enumerator, the sample filters and
-the checker read the family's `Program`, never the summary; no E2 summary
-code is linked into the synthesizer's build; no E3 document available to
-the run (this one included) states the summary's formulas. This document
-does state the *shape* `clip` and the byte count 24 as it states every shape
-(§2.2, §4.4); that is the known disclosure, and §5.6 reports it with the
-comparison. The comparison runs only after the quota family has ended.
+A candidate is **admitted** iff it passes, in this order: validation
+(§3.1); equivalence and associativity over the checking domain (§3.2,
+§3.3); the stated bound (§4.4 (i)); agreement on the family domain (§3.4);
+and E2's growth rule on its costs (§4.4 (ii)). A candidate failing any
+condition is discarded and the search continues with the next in order.
+The clock stops at the first admission; the search does not look further
+(decision D6).
 
-### 5.5 What the run records
+A family not admitted is a miss of exactly one type, decided by the
+furthest stage any of its candidates reached:
 
-Per family, in a record written after the family ends:
+| Type | Furthest stage reached |
+|---|---|
+| **measured growth** | a candidate failed only E2's growth rule |
+| **correctness** | a candidate passed the stage filters and was rejected for disagreeing with `replay` on the checking domain (multi-call batches or associativity), for its own overflow, or on the family domain |
+| **expressiveness** | no candidate passed the stage filters, and the argument below proves none in the language can |
+| **search** | no candidate passed the stage filters, and no such argument exists: the deadline came, or the capped and pruned enumeration ended |
 
-- the family, `inputs.md` commit and this file's commit, the machine facts
-  of §5.1 as re-read at run time, `taskset` mask, the lock acquisition time;
-- start and end of the budget on the monotonic clock, and the wall-clock
-  frequency samples of CPU 2 at start, middle and end;
-- the candidate log of §2.6 (space size, indices, per-stage counts, pruning
-  counts, admitted index or "none");
-- the outcome: admitted, or the miss reason: deadline reached, enumeration
-  exhausted, `Divergent` at the checker, diverges on the family domain
-  (§4.6), or outside the bound class with the failing quantity;
-- for an admitted candidate: its text, its size, the §3.5 certificate, and
-  per quantity `B`, `C`, `A` at every size: the maximum, and the counts of
-  rising, falling and neutral seeds (§4.1);
-- for quota, the §5.6 comparison.
+A measured value above the stated bound is a defect that stops the run
+(§4.4), not a miss. The record gives the type and what ended the search;
+the verdict counts admissions as `docs/experiments.md` says ("Conjunctive
+success condition"), and the type changes no count (decision D7).
 
-### 5.6 Comparison with E2's quota summary
+**How the two expected misses arise.** Both are expressiveness misses,
+provable from §2.1 against one single-call pair of the checking domain:
 
-After the quota family ends, whatever its outcome, the admitted candidate (if
-any) is compared with E2's hand-written summary: bytes, the combine and
-apply node counts of §4.3 over the same batches, and equality of the two
-denoted transformers on `remaining` in `[0, 1000]` by applying both to every
-store. A difference is reported, not scored.
+- **Wallet.** Every component acting on `Int` has an apply that is
+  monotone non-decreasing in `x` (a translation, a clamp, a constant, a
+  maximum or a minimum), and `ε` is the identity. `debit(3)` maps balance
+  `2` to `2` and `3` to `0` (`inputs.md` §7.2; both stores and the call are
+  in §7.3's domain), which decreases. No `(valid, atom)` for `debit`
+  passes the filter.
+- **Lease.** `per-key(σ)` applies `σ` to each key's row on its own, and `σ`
+  either maps every row to one value (`assign`) or fixes every present row
+  (`fill`, and `ε`). `release(0, 1)` maps holder `1` to `none` and fixes holder `2`
+  (stores `(1, free)` and `(2, free)` and the call are in §8.3's domain).
+  The library expresses `acquire` (insert-if-absent) and `inspect`, but not
+  `release`. This is the honest answer to whether the library can express
+  the lease: it cannot (decision D5).
 
-### 5.7 Threats to validity
+`inputs.md` §7.5 and §8.5 stay expectations: if a candidate of either
+family passes the stage filters, the argument is defective, the type
+follows the table, and the defect is reported. The other four families are
+expected admitted (`inputs.md` §2); a miss there has the type the run
+reaches.
 
-- **The library knows the answer shapes.** `clip` is E2's quota shape and
-  `table` is the finite-monoid shape for the order status; both are standard
-  and in the library. An admission shows the search finds a fill inside a
-  template, which is what #5's ruling asks ("enumerative search over a typed
-  template grammar"), not discovery from scratch.
-- **Scheduling noise.** The governor is `powersave` and one family's ten
-  minutes may cover fewer candidates than another run's. §2.6 makes the
-  indices, not the count at the deadline, the comparable figure.
-- **A solver-free checker is only as exhaustive as `L = 4`.** Batches longer
-  than four are not covered; `T` mutants (`inputs.md` §1, exact up to 3 calls)
-  are rejected because their witnesses have four calls. A flaw at length 5
-  would not be found.
+### 5.5 Leakage rule
 
-## 6. Open questions for the reviewer
+E2's hand-written quota summary (E2 `inputs.md` §2.4) is hidden from the
+synthesizer and compared only afterwards (#5 ruling). The enumerator, the
+stage filters and the checker read the `Program` and the observation
+environments, never that summary, and no E2 summary code is linked into the
+synthesizer's build (`kiln-e2` holds families and generators only). This
+document is not an input of the run, and it does **not** hide the formulas:
+`clamp-shift`'s carrier, combine and apply (§2.1) coincide with E2's
+`(a, l, u)` and its combine and apply. The rule hides E2's code and summary
+text from the synthesizer, not the designer's knowledge (§5.8). The
+comparison of §5.7 runs only after the quota family has ended.
 
-1. **Rule E and rule B (§1.6).** Forbidding `Int` equality with a constant
-   and capping quantity-dependent branches at 6 are the two rules that do
-   the work of "the grammar enforces the ban". Rule B is a judgement.
-   Recommendation: keep both; if the reviewer finds a six-branch staircase
-   that tabulates a family's quantity within the pool, tighten the cap
-   rather than add rules.
-2. **`clip` in the library (§2.2).** It is E2's quota shape. Recommendation:
-   keep it, because removing standard saturation would make a quota miss
-   about the library, and report the leakage in §5.7. An alternative is to
-   express `clip` only as `shift` plus the `clamp` primitive in `apply`, which
-   adds nothing, so I kept the named shape.
-3. **Family-domain agreement as part of admission (§4.6).** `docs/experiments.md`
-   does not list it; I added it because `inputs.md` §10 item 2 needs a
-   checking-domain-valid but wrong candidate to be a miss, and bound-class
-   measurement alone does not compare outcomes. Recommendation: keep it; if
-   rejected, the lease's expected miss rests on the growth test alone.
-4. **First admission stops the clock (§5.3).** Recommendation: keep; the
-   alternative (search for the smallest) invites unequal budgets.
-5. **Joint search cost (§2.4).** Enumerating `combine` fields jointly with
-   13-node holes may be too large to finish in ten minutes for three-field
-   shapes. Recommendation: freeze as written. A search that cannot finish is
-   a measured miss; shrinking the limits after seeing this is exactly what
-   the freeze forbids.
-6. **Bounds (§4.4).** All are decisions with one spare word of headroom.
-   Recommendation: keep; the growth test, not the constant, decides the
-   interesting cases.
-7. **Seed offset `j = 10 000 + i` (§4.2).** Recommendation: keep, to avoid
-   reusing E2's batches as E2 `protocol.md` §6 says.
+### 5.6 What the run records
+
+Per family, written after the family ends:
+
+- the family, the commits of `inputs.md` and this file, the machine facts of
+  §5.1 as re-read at run time, the `taskset` mask, the lock time;
+- the budget's start and end on the monotonic clock, CPU 2's frequency at
+  start, middle and end, and the monitor series of §5.2;
+- the candidate log of §2.7 and the search limits computed from the
+  `Program` (§2.4);
+- admitted, or the miss type of §5.4 with what ended the search and the
+  witness of the furthest rejection;
+- for an admitted candidate: its text, layout and size, the certificate of
+  §3.5, and per quantity `B`, `C`, `A` at every size the maximum and the
+  counts of rising, falling and neutral seeds;
+- for quota, the comparison of §5.7.
+
+### 5.7 Comparison with E2's quota summary
+
+After the quota family ends, whatever its outcome, the admitted candidate
+(if any) is compared with E2's hand-written summary: bytes, combine and
+apply counts over the same batches (in §4.3's units, which add identity-tag
+tests to E2's count of 5 and 2), and equality of the two denoted
+transformers on every `remaining` in `[0, 1000]`. A difference is reported,
+not scored.
+
+### 5.8 Threats to validity
+
+- **The library was designed with knowledge of E2's quota summary.** Its
+  designer knew that E2's quota summary is a clamped translation; a
+  designer of the same project cannot be kept from that. A quota admission
+  therefore shows that the search finds a layout and fills in a library
+  that contains the right component, not that it discovered saturation;
+  likewise for `transform` and `rotate`.
+- **Expected misses decided by the library.** Wallet and lease miss for
+  expressiveness (§5.4), so neither reaches the family-domain agreement or
+  the growth rule. `inputs.md` §10 item 2 hoped the lease would also show
+  that the measurement catches growth; under this library it does not, and
+  the mutants (§3.8) remain the checker's only adversarial test.
+- **An incomplete search.** Pruning and the survivor cap (§2.4, §2.5) can
+  discard the only family-domain-correct term; a miss is scoped to this
+  search.
+- **Scheduling noise.** The governor is `powersave` and CPU 8 is not
+  reserved; the recorded indices (§2.7), not the count at the deadline,
+  are the comparable figure.
+- **`L = 4`.** Batches longer than four are covered only by the sampled
+  family-domain check; a flaw that shows only at length 5 within the
+  checking domain may pass the certificate.
+
+## 6. Decisions (head rulings, 16.10.2026)
+
+- **D1, tabulation is enforced semantically** (§1.6, §3.4;
+  `docs/experiments.md`, "Gate"). Admission also
+  requires agreement with `replay` on the family-domain batches; rules L
+  and M are hygiene. Reason: over a finite domain arithmetic and
+  comparison encode indicators, so no construct rule bans a table.
+- **D2, categoricals by name** (§1.1). Reason: a cardinality rule would
+  classify a small quantity or identifier as enumerable.
+- **D3, a generic library** (§2.1). Components are textbook structures with
+  a source; layout, wiring and terms are search outputs; per-family shapes
+  are gone. Reason: a component fitting one family's expected algebra is a
+  hidden answer.
+- **D4, exact semantics** (§1.3, §1.4, §2.1). Every component is defined in
+  one grammar, `clamp` holds for reversed bounds, and a candidate's own
+  overflow is a typed rejection. Reason: the implementation must not
+  choose meanings.
+- **D5, lease** (§5.4). The library cannot express `release`; the lease is
+  an expected expressiveness miss. Reason: an honest statement of the
+  library's reach.
+- **D6, admission and stopping** (§5.4). The clock stops at the first
+  candidate passing every condition; a failing candidate is discarded and
+  the search continues. Reason: one rule, with no condition that ends a
+  search early.
+- **D7, bounds and miss types** (§4.4, §5.4). Bounds are derived from the
+  library; growth acts on costs only; every miss has one type. Reason: a
+  bound chosen around expected fills decides nothing.
+- **D8, an incomplete search** (§2.3, §2.5, §2.7). Pruning uses frozen
+  observation environments; misses are scoped to this search; the count at
+  the deadline is recorded, not promised. Reason: pruning on samples is not
+  semantic equivalence.
+- **D9, manifest** (§2.5, §5.2, §5.3). One attempt; a crash fails closed;
+  conditions are recorded, not assumed; the order is not smallest-first.
+  Reason: a manifest records what the run is, not what it hopes.
