@@ -119,34 +119,44 @@ impl Store {
     }
 
     /// Whether a row of `table` other than the one at `except_key` holds
-    /// `value` in `column`.
-    pub(crate) fn value_held_by_another_row(
+    /// `tuple` in `columns`.
+    pub(crate) fn tuple_held_by_another_row(
         &self,
         table: &Table,
-        column: &ColumnName,
-        value: &Value,
+        columns: &[ColumnName],
+        tuple: &[Value],
         except_key: &Key,
     ) -> bool {
-        self.keys_holding(table, column, value)
+        self.keys_holding(table, columns, tuple)
             .any(|key| key != except_key)
     }
 
-    /// Whether any row of `table` holds `value` in `column`.
-    pub(crate) fn any_row_holds(&self, table: &Table, column: &ColumnName, value: &Value) -> bool {
-        self.keys_holding(table, column, value).next().is_some()
+    /// Whether any row of `table` holds `tuple` in `columns`.
+    pub(crate) fn any_row_holds(
+        &self,
+        table: &Table,
+        columns: &[ColumnName],
+        tuple: &[Value],
+    ) -> bool {
+        self.keys_holding(table, columns, tuple).next().is_some()
     }
 
     fn keys_holding<'a>(
         &'a self,
         table: &'a Table,
-        column: &'a ColumnName,
-        value: &'a Value,
+        columns: &'a [ColumnName],
+        tuple: &'a [Value],
     ) -> impl Iterator<Item = &'a Key> {
         self.tables
             .get(&table.name)
             .into_iter()
             .flatten()
-            .filter(move |(key, row)| table.column_value(key, row, column) == Some(value))
+            .filter(move |(key, row)| {
+                columns
+                    .iter()
+                    .zip(tuple)
+                    .all(|(column, value)| table.column_value(key, row, column) == Some(value))
+            })
             .map(|(key, _)| key)
     }
 

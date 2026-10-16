@@ -171,7 +171,7 @@ mod kiln_ir_62 {
     pub(super) fn email_unique() -> UniqueConstraint {
         UniqueConstraint {
             table: table("users"),
-            column: column("email"),
+            columns: vec![column("email")],
         }
     }
 
@@ -229,7 +229,7 @@ mod kiln_ir_62 {
                 Outcome::Aborted {
                     reason: AbortReason::UniqueViolation {
                         constraint: email_unique(),
-                        value: text("ada@example.org"),
+                        tuple: vec![text("ada@example.org")],
                     }
                 },
                 committed_with(3),
@@ -462,7 +462,7 @@ mod kiln_ir_64 {
                 Outcome::Aborted {
                     reason: AbortReason::UniqueViolation {
                         constraint: email_unique(),
-                        value: text("ada@example.org"),
+                        tuple: vec![text("ada@example.org")],
                     }
                 },
             ]

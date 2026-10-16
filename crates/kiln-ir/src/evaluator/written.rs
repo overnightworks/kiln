@@ -12,22 +12,26 @@ use crate::ir::{Key, Table};
 use super::{AccessKind, AccessLogEntry, AccessTarget, AccessedColumns};
 
 /// Keys of the rows of `table` the transaction inserted or updated with a
-/// value for `column`, however often it wrote each. An insert writes every
-/// key column through its key (D8); an update never writes one.
+/// value for any of `columns`, however often it wrote each. An insert writes
+/// every key column through its key (D8); an update never writes one.
 pub(super) fn keys_written_on(
     access_log: &[AccessLogEntry],
     table: &Table,
-    column: &ColumnName,
+    columns: &[ColumnName],
 ) -> BTreeSet<Key> {
-    let is_key_column = table.key_position(column).is_some();
+    let names_a_key_column = columns
+        .iter()
+        .any(|column| table.key_position(column).is_some());
     point_keys(access_log, &table.name, |entry| {
-        let names_column = match &entry.columns {
-            AccessedColumns::Named(columns) => columns.contains(column),
+        let names_a_column = match &entry.columns {
+            AccessedColumns::Named(written) => {
+                columns.iter().any(|column| written.contains(column))
+            }
             AccessedColumns::EntireRow => false,
         };
         match entry.kind {
-            AccessKind::Insert => is_key_column || names_column,
-            AccessKind::Update => names_column,
+            AccessKind::Insert => names_a_key_column || names_a_column,
+            AccessKind::Update => names_a_column,
             _ => false,
         }
     })

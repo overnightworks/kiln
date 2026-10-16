@@ -127,17 +127,17 @@ pub enum AbortReason {
         column: ColumnName,
         key: Key,
     },
-    /// The transaction's final state holds `value` in `constraint`'s column
+    /// The transaction's final state holds `tuple` in `constraint`'s columns
     /// on more than one row (D2).
     UniqueViolation {
         constraint: UniqueConstraint,
-        value: Value,
+        tuple: Vec<Value>,
     },
-    /// The transaction's final state holds a row whose `foreign_key` column
-    /// names `value`, a key no row of the referenced table holds (D2).
+    /// The transaction's final state holds a row whose `foreign_key` columns
+    /// name `referenced`, a key no row of the referenced table holds (D2).
     DanglingReference {
         foreign_key: ForeignKey,
-        value: Value,
+        referenced: Key,
     },
     /// The transaction deleted the row at `key` of the table `foreign_key`
     /// references, while its final state still holds a row naming `key` (D2).
