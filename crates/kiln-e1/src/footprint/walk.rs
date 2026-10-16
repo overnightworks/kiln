@@ -43,7 +43,8 @@ struct RangeRead<'e> {
 
 /// Why walking a block stopped short of deciding its terminal.
 enum Halt {
-    /// The evaluator aborts at `at`, which projects a slot holding no row.
+    /// The evaluator aborts at `at`, which projects a slot holding no row or
+    /// a column its key column cannot take.
     /// Inside the body of an iteration whose range may hold no row, it aborts
     /// only when that range holds one: `unless_empty` is the read that bound
     /// the range.
@@ -55,12 +56,16 @@ enum Halt {
 }
 
 impl Halt {
+    fn aborting_at(node: &NodePath) -> Self {
+        Self::Aborts {
+            at: node.clone(),
+            unless_empty: None,
+        }
+    }
+
     fn at(node: &NodePath) -> impl Fn(Unresolvable) -> Self + '_ {
         move |unresolvable| match unresolvable {
-            Unresolvable::AbsentSource => Self::Aborts {
-                at: node.clone(),
-                unless_empty: None,
-            },
+            Unresolvable::AbsentSource => Self::aborting_at(node),
             Unresolvable::Fault(error) => Self::Fault(error),
         }
     }
@@ -395,6 +400,7 @@ impl Walker<'_> {
         node: &NodePath,
     ) -> Result<KeyedAccess, Halt> {
         let operands = self.operands_of(facts, key, node)?;
+        self.abort_on_misfit_key(facts, table, key, node)?;
         let depends_on = track_access(facts, self.schema, &role, &operands, node);
         let target = Target::Row {
             table: table.clone(),
@@ -405,6 +411,38 @@ impl Walker<'_> {
             operands,
             depends_on,
         })
+    }
+
+    /// A key component projecting a column whose declared kind its key column
+    /// cannot take aborts the call before it logs the access: on this path the
+    /// slot's table is the one its binding read (`KILN-IR-82`).
+    fn abort_on_misfit_key(
+        &self,
+        facts: &PathFacts,
+        table: &TableName,
+        key: &[Expr],
+        node: &NodePath,
+    ) -> Result<(), Halt> {
+        let Some(declared) = self.schema.table(table) else {
+            return Ok(());
+        };
+        for (key_column, component) in declared.key_columns().iter().zip(key) {
+            let Expr::Projection { slot, column } = component else {
+                continue;
+            };
+            let read = facts.read_of(*slot, node)?;
+            let source = facts
+                .binding_of(&read)
+                .and_then(|binding| binding.kind.table())
+                .and_then(|source| self.schema.column(source, column));
+            let key_column = declared.column(key_column);
+            if let (Some(source), Some(key_column)) = (source, key_column) {
+                if key_column.key_component_fault_from(source).is_some() {
+                    return Err(Halt::aborting_at(node));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// The evaluator logs a write before it resolves the written columns, so a

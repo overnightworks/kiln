@@ -72,6 +72,13 @@ impl Column {
             _ => Some(KeyComponentFault::WrongKind),
         }
     }
+
+    /// Why a value of the column `source` cannot be this column's component
+    /// of a key: another kind than this column's (D8). Its width is a run-time
+    /// matter.
+    pub fn key_component_fault_from(&self, source: &Column) -> Option<KeyComponentFault> {
+        (!self.kind.is_same_kind_as(&source.kind)).then_some(KeyComponentFault::WrongKind)
+    }
 }
 
 /// Why a key component cannot name a row (D8).

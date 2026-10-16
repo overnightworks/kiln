@@ -16,6 +16,16 @@ pub enum BindingKind {
 }
 
 impl BindingKind {
+    /// The table whose rows the binding holds, if it names one.
+    pub fn table(&self) -> Option<&TableName> {
+        match self {
+            Self::PointRead { table, .. }
+            | Self::PrimaryRange { table }
+            | Self::IndexRange { table } => Some(table),
+            Self::UndeclaredIndexRange(_) => None,
+        }
+    }
+
     fn binds_a_range(&self) -> bool {
         match self {
             Self::PointRead { .. } => false,

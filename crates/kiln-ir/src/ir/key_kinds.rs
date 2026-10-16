@@ -122,6 +122,10 @@ impl<'a> FunctionScope<'a> {
         if let Expr::Literal(value) = expr {
             return column.key_component_fault(value);
         }
+        if let Expr::Projection { slot, column: name } = expr {
+            let table = self.schema.table((*self.slot_tables.get(slot)?)?)?;
+            return column.key_component_fault_from(table.column(name)?);
+        }
         let kind = self.static_kind(expr)?;
         (kind != StaticKind::from(column.kind)).then_some(KeyComponentFault::WrongKind)
     }
@@ -137,10 +141,7 @@ impl<'a> FunctionScope<'a> {
                 .iter()
                 .find(|parameter| &parameter.name == name)
                 .map(|parameter| parameter.kind.into()),
-            Expr::Projection { slot, column } => {
-                let table = self.schema.table((*self.slot_tables.get(slot)?)?)?;
-                table.column(column).map(|column| column.kind.into())
-            }
+            Expr::Projection { .. } => None,
             Expr::Arithmetic(..) => Some(StaticKind::Integer),
         }
     }

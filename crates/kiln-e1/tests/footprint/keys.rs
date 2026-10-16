@@ -1,6 +1,7 @@
 use kiln_e1::{classify_function, Classification, ClassifyError, IndexReadKind, UnknownCause};
 use kiln_ir::{
-    ColumnName, Effect, Expr, FunctionFault, FunctionName, KeyComponentFault, ProgramError, Value,
+    Column, ColumnName, ColumnType, Effect, Expr, Function, FunctionFault, FunctionName,
+    IntegerWidth, KeyComponentFault, KeyDeclaration, Program, ProgramError, Schema, Table, Value,
 };
 
 use super::programs::*;
@@ -451,6 +452,89 @@ mod kiln_e1_27 {
                     fault: KeyComponentFault::WrongKind,
                 },
             }))
+        );
+    }
+
+    const INTEGER: ColumnType = ColumnType::Integer {
+        width: IntegerWidth::I64,
+        domain: None,
+    };
+
+    fn table_keyed_by(name: &str, key: &str, kind: ColumnType) -> Table {
+        let key = ColumnName(key.to_owned());
+        Table {
+            name: table(name),
+            columns: vec![Column {
+                name: key.clone(),
+                kind,
+            }],
+            key: KeyDeclaration::Columns(vec![key]),
+        }
+    }
+
+    fn text_key() -> Expr {
+        Expr::Literal(Value::Text("k".to_owned()))
+    }
+
+    /// Slot 2 is read from `t1`, keyed by text, and then from `t2`, keyed by
+    /// `t2_kind`, so no single table says what a projection of it is. The key
+    /// of `u` is the integer `id`; `c`, the key of `t1` and `t2`, is what the
+    /// slot's row holds.
+    fn slot_rebound_across_tables(t2_kind: ColumnType, t2_key: Expr) -> Program {
+        let plain = |name| table_keyed_by(name, KEY_COLUMN, INTEGER);
+        let present = returns(vec![
+            read("a", literal(1), 1),
+            read("t1", text_key(), 2),
+            read("t2", t2_key, 2),
+            read("u", column_of(2, "c"), 3),
+            read("b", literal(1), 4),
+        ]);
+        let absent = returns(vec![read("b", literal(1), 4)]);
+        Program {
+            schema: Schema {
+                tables: vec![
+                    plain("sel"),
+                    plain("a"),
+                    plain("b"),
+                    plain("u"),
+                    table_keyed_by("t1", "c", ColumnType::Text),
+                    table_keyed_by("t2", "c", t2_kind),
+                ],
+                ..Schema::default()
+            },
+            functions: vec![Function {
+                name: FunctionName(FUNCTION.to_owned()),
+                parameters: Vec::new(),
+                body: branch_on_presence(vec![read("sel", literal(1), 0)], 0, present, absent),
+            }],
+        }
+    }
+
+    fn classification_of(program: &Program) -> Classification {
+        let function = FunctionName(FUNCTION.to_owned());
+        classify_function(program, &function)
+            .unwrap()
+            .classification
+    }
+
+    #[test]
+    fn a_key_projecting_a_column_of_the_wrong_kind_from_a_rebound_slot_ends_the_path_before_its_access(
+    ) {
+        let program = slot_rebound_across_tables(ColumnType::Text, text_key());
+        let classification = classification_of(&program);
+        assert!(
+            matches!(classification, Classification::Unknown { .. }),
+            "{classification:?}"
+        );
+    }
+
+    #[test]
+    fn a_key_projecting_a_column_of_the_right_kind_from_a_rebound_slot_keeps_its_access() {
+        let program = slot_rebound_across_tables(INTEGER, literal(1));
+        let classification = classification_of(&program);
+        assert!(
+            matches!(classification, Classification::Proven { .. }),
+            "{classification:?}"
         );
     }
 }
