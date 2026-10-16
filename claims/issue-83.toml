@@ -3,5 +3,5 @@ agent = "Claude 7264bd79-9315-49ac-a71e-b61805eae392"
 role = "builder"
 base = "21cdfe94acd83d3547c4b74234aa00a1d3353232"
 branch = "claude/issue-83-e3-grammar-freeze"
-scope = ["docs/experiments.md", "experiments/e3-summary-synthesis/protocol.md"]
+scope = ["docs/experiments.md", "experiments/e3-summary-synthesis/grammar.md", "experiments/e3-summary-synthesis/protocol.md"]
 opened_commit = "19fd0a52057246561da99ad87ed3d02a476ea35a"
