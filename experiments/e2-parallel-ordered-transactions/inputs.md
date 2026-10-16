@@ -66,7 +66,7 @@ initial state `x_0`, serial replay (`kiln_ir::replay`) defines
 `x_i = F_i(x_{i-1})` and the outcome `o_i = R_i(x_{i-1})`. For each family
 this document fixes:
 
-- the **summary** `S_i` of one call: a fixed-size value denoting `F_i`;
+- the **summary** `S_i` of one call: a value denoting `F_i`;
 - **combine** `S ⊕ T`: the summary of "first `S`, then `T`", denoting
   `F_T ∘ F_S`;
 - **apply** `apply(S, x)`: the state `F_S(x)`;
@@ -86,14 +86,18 @@ shows that `(S ⊕ T) ⊕ U` and `S ⊕ (T ⊕ U)` are the *same value*, not mer
 two values denoting the same function, because the slice-5/6 property test
 compares values.
 
-**Compactness rule.** Each family's summary has a fixed size in bytes and
-fixed combine and apply costs, stated in its section and independent of
-batch size. A summary whose measured size, or whose measured combine or
-apply cost, grows with batch size fails its family. It is reported as
-failing and never replaced by a fallback (head ruling on #3;
-`docs/experiments.md`, "Admissible bound class"). The representations
-below are the frozen ones: a call list, a closure tree, or any table whose
-length depends on the number of calls summarized is not one of them. If an
+**Compactness rule.** A summary whose measured size, or whose measured
+combine or apply cost, grows with batch size fails its family. It is
+reported as failing and never replaced by a fallback (head ruling on #3;
+`docs/experiments.md`, "Admissible bound class"). The quota and inventory
+summaries have a fixed size in bytes and fixed combine and apply costs,
+stated in their sections and independent of batch size. The account
+summary has no size fixed in advance: it is the best exact representation
+this freeze knows for the guarded family, its size can grow with batch
+length, and that size is a quantity to be measured, never inferred (§4.3,
+head ruling on #70). For every family, size and costs are measured as
+§6 lists them. The representations below are the frozen ones; a call list
+or a closure tree that replays the calls is not one of them. If an
 implementation cannot realise a representation exactly as frozen here,
 this document is defective and is re-frozen, voiding prior results; it is
 not silently changed.
@@ -498,8 +502,12 @@ Final `100`. Combined summary `11`; `apply(11, 20) = 10 + ((10 - 11) mod
 ## 4. Mixed account operations
 
 Heterogeneous operations on a small fixed set of accounts: deposits,
-withdrawals, transfers, and compliance freezes. Every operation's response
-reveals a balance, and a freeze changes what later operations may do.
+withdrawals, transfers, and compliance freezes. A withdrawal or transfer
+succeeds only if its source account holds at least the amount, and
+otherwise aborts with the named reason `insufficient_funds` (head ruling on
+#70; `docs/concept.md` §2.1 uses exactly this abort as the IR's example).
+Every committed money movement reveals a balance, and a freeze changes what
+later operations may do.
 
 ### 4.1 Constants and IR shape
 
@@ -511,9 +519,11 @@ reveals a balance, and a freeze changes what later operations may do.
 
 Schema: table `accounts`, columns `balance` `Integer { width: I64, domain:
 None }` and `status` `Integer { width: I8, domain: None }`; check
-constraints `status AtLeast 0` and `status AtMost 1`. The initial store
-holds exactly the rows `0..=3`. Balances may be negative: this is a ledger
-account with no overdraft check (see §4.6 and open question 1).
+constraints `balance AtLeast 0`, `status AtLeast 0` and `status AtMost 1`.
+The initial store holds exactly the rows `0..=3`, every balance at least
+`0`. The guard keeps every committed balance non-negative, so the balance
+check never fires; it is declared because it states the domain the summary
+below relies on.
 
 ```
 fn deposit(account: Integer(I64), amount: Integer(I64)):
@@ -526,7 +536,14 @@ fn deposit(account: Integer(I64), amount: Integer(I64)):
   return s0.balance + amount
 
 fn withdraw(account: Integer(I64), amount: Integer(I64)):
-  -- as deposit, with `-` in place of `+` in the update and the return
+  if amount < 1:                    abort invalid_amount
+  if amount > 10000:                abort invalid_amount
+  read accounts[account] -> s0
+  if absent s0:                     abort account_not_found
+  if s0.status = 1:                 abort account_frozen
+  if s0.balance < amount:           abort insufficient_funds
+  update accounts[account].balance = s0.balance - amount
+  return s0.balance - amount
 
 fn transfer(from: Integer(I64), to: Integer(I64), amount: Integer(I64)):
   if amount < 1:                    abort invalid_amount
@@ -538,6 +555,7 @@ fn transfer(from: Integer(I64), to: Integer(I64), amount: Integer(I64)):
   if absent s1:                     abort account_not_found
   if s0.status = 1:                 abort account_frozen
   if s1.status = 1:                 abort account_frozen
+  if s0.balance < amount:           abort insufficient_funds
   update accounts[from].balance = s0.balance - amount
   update accounts[to].balance = s1.balance + amount
   return s0.balance - amount
@@ -557,16 +575,26 @@ fn unfreeze(account: Integer(I64)):
   return s0.balance
 ```
 
+`s0.balance < amount` compares a projection with a parameter, a
+`Condition::Compare` with `Relation::Less`; the guard needs no construct
+today's IR lacks. A frozen source is reported as `account_frozen` even when
+its balance is also short, because the status test comes first.
+
 **Guard shape.** Calls naming disjoint accounts do not overlap. Within E2,
 a batch is the class-3 batch over all `K` rows, acquired as one footprint
 at dispatch (`docs/concept.md` §4); the key-equality guard of §3, class 1,
 is not what E2 measures. The in-body guards are the argument tests, account
-presence, and the status tests, in the order listed.
+presence, the status tests, and the funds test, in the order listed.
 
 **Class.** Every committed call returns a balance read from the contended
-row, and every money movement is gated by status reads that a freeze or
-unfreeze in the same batch changes. Neither a claim, a pin, nor an escrow
-draw describes either dependency.
+row, every money movement is gated by status reads that a freeze or
+unfreeze in the same batch changes, and every debit is gated by the exact
+source balance. A claim or a pin describes none of these dependencies. Nor
+does an escrow draw: "Reservations cover *blind* draws only" (§4), and a
+withdrawal or transfer here returns `β_a - x`, the exact balance after it,
+so the read is ordered against every other draw on that row. The funds
+test with a blind response would be §3's class-2 escrow (`balance >= 0`
+"becomes an escrow"); with the revealing response frozen here it is not.
 
 ### 4.2 Outcomes
 
@@ -578,11 +606,16 @@ With `β` the balances and `σ` the statuses before the call:
 | | `a` not in `0..=3` | abort `account_not_found` | none |
 | | `σ_a = 1` | abort `account_frozen` | none |
 | | otherwise | commit `β_a + x` | `β_a += x` |
-| `withdraw(a, x)` | as `deposit` | as `deposit`, committing `β_a - x` | `β_a -= x` |
+| `withdraw(a, x)` | `x < 1` or `x > 10000` | abort `invalid_amount` | none |
+| | `a` not in `0..=3` | abort `account_not_found` | none |
+| | `σ_a = 1` | abort `account_frozen` | none |
+| | `β_a < x` | abort `insufficient_funds` | none |
+| | otherwise | commit `β_a - x` | `β_a -= x` |
 | `transfer(a, b, x)` | `x < 1` or `x > 10000` | abort `invalid_amount` | none |
 | | `a = b` | abort `same_account` | none |
 | | `a` not in `0..=3`, then `b` not in `0..=3` | abort `account_not_found` | none |
 | | `σ_a = 1` or `σ_b = 1` | abort `account_frozen` | none |
+| | `β_a < x` | abort `insufficient_funds` | none |
 | | otherwise | commit `β_a - x` | `β_a -= x`, `β_b += x` |
 | `freeze(a)` | `a` not in `0..=3` | abort `account_not_found` | none |
 | | `σ_a = 1` | abort `already_frozen` | none |
@@ -591,87 +624,180 @@ With `β` the balances and `σ` the statuses before the call:
 | | `σ_a = 0` | abort `not_frozen` | none |
 | | otherwise | commit `β_a` | `σ_a = 0` |
 
-**Bounds and overflow.** Each call changes any one balance by at most
-`10 000`. From initial balances in `[0, 1 000 000]` (§4.5), every balance
-after at most 256 calls lies in `[-2 560 000, 3 560 000]`, and so does every
-intermediate and response value. No `i64` overflow is reachable within the
-frozen inputs. The summary below does not model `i64` overflow; its
-exactness claim is limited to batches whose balances stay within `i64`,
-which the frozen generator guarantees. A status write is a literal `0` or
-`1` and stays inside `I8` and the check constraints.
+A committed debit leaves exactly `β_a - x >= 0`; `withdraw(a, β_a)`
+commits `0`.
+
+**Bounds and overflow.** No committed call makes a balance negative, by the
+funds test, and each call raises any one balance by at most `10 000`. From
+initial balances in `[0, 50 000]` (§4.5), every balance after at most 256
+calls lies in `[0, 2 610 000]`, and so does every intermediate and response
+value. No `i64` overflow is reachable within the frozen inputs. The summary
+below does not model `i64` overflow; its exactness claim is limited to
+batches whose balances stay within `i64`, which the frozen generator
+guarantees, and slice 3's generator test asserts that balance bound (head
+ruling on #70). A status write is a literal `0` or `1` and stays inside
+`I8` and the check constraints.
 
 ### 4.3 Summary, combine and apply
 
-The state is `(σ, β)` with `σ` in `{0,1}^4` and `β` in `Z^4`. Every call's
-transformer has the shape `σ' = g(σ)`, `β' = β + δ(σ)`, where each bit of
-`g` either keeps `σ_i` or sets it to a constant, and `δ` depends on `σ`
-alone, never on `β`:
+The state is `(σ, β)` with `σ` in `{0,1}^4` and `β` in `N^4`, `N` the
+non-negative integers (§4.1's balance check). Every call's transformer has
+the shape `σ' = g(σ)`, `β' = β + t(σ, β)`, where each bit of `g` either
+keeps `σ_i` or sets it to a constant, and the translation `t(σ, β)` in
+`Z^4` is piecewise constant, its pieces cut by thresholds on single
+balances:
 
-- `deposit(a, x)`: gate `(1 - σ_a)`, so `δ_a = x - x σ_a`;
-- `withdraw(a, x)`: `δ_a = -x + x σ_a`;
-- `transfer(a, b, x)`: gate `(1 - σ_a)(1 - σ_b) = 1 - σ_a - σ_b + σ_a σ_b`,
-  so `δ_a = -x·gate` and `δ_b = +x·gate`;
-- `freeze(a)`: `g` sets bit `a` to `1`. The `already_frozen` abort leaves it
-  `1`, which agrees with the formula.
-- `unfreeze(a)`: `g` sets bit `a` to `0`. The `not_frozen` abort leaves it
-  `0`, which agrees with the formula.
-- `account_frozen` aborts are the gate's zero.
+- `deposit(a, x)`: `t_a = x` if `σ_a = 0`, else `0`.
+- `withdraw(a, x)`: `t_a = -x` if `σ_a = 0` and `β_a >= x`, else `0`. The
+  `account_frozen` and `insufficient_funds` aborts are the `else`: they map
+  the state to itself.
+- `transfer(a, b, x)`: `t_a = -x` and `t_b = +x` if `σ_a = σ_b = 0` and
+  `β_a >= x`, else `0`.
+- `freeze(a)`: `g` sets bit `a` to `1`, `t = 0`. The `already_frozen` abort
+  leaves it `1`, which agrees. `unfreeze(a)`: `g` sets bit `a` to `0`,
+  `t = 0`; the `not_frozen` abort agrees likewise.
 - `invalid_amount`, `same_account` and `account_not_found` are decided by
   the arguments, since the key set is fixed (§1), and have summary `ε`.
 
-**Representation.** `S = (keep, set, c)`:
+A composition keeps this shape: a later call's test `β_a + t_a(σ, β) >= x`,
+on the state its prefix left, is a threshold on `β_a` within each piece of
+the prefix. The pieces are not separable per account. A transfer from `a`
+credits `b` only if `β_a >= x`, so after it a debit of `b` succeeds or not
+depending on `β_a` (example A3): `t_b` is a function of `σ` and the whole
+of `β`, not of `(σ_b, β_b)` alone.
 
-- `keep`: a `u8` bit mask; bit `i` set means `σ'_i = σ_i`.
-- `set`: a `u8` bit mask giving `σ'_i` for every bit not kept, normalised so
-  that `set & keep = 0`.
-- `c`: 44 `i64` coefficients. For each account `j` in `0..=3`, it holds 11
-  coefficients of a multilinear polynomial in `σ`, over the monomials `1,
-  σ0, σ1, σ2, σ3, σ0σ1, σ0σ2, σ0σ3, σ1σ2, σ1σ3, σ2σ3`, stored in that order
-  and account-major.
+**Interval diagrams.** The variables are ordered `σ0, σ1, σ2, σ3, β0, β1,
+β2, β3`. An interval diagram is a rooted acyclic graph whose leaves carry
+an integer and whose inner nodes each test one variable. A node's out-edges
+partition its variable's domain into intervals listed in increasing order:
+`{0}` and `{1}` for a status variable, and `[lo_1 = 0, lo_2), …, [lo_e,
+∞)` for a balance variable. Along every path the tested variables strictly
+follow the order. The diagram denotes the function whose value at `(σ, β)`
+is the leaf reached by taking, at each node, the edge whose interval holds
+that variable's value. A diagram is **reduced** when (R1) no two adjacent
+edges of a node lead to the same target, (R2) no node has a single edge,
+and (R3) no two distinct nodes denote the same function.
 
-Size: 2 + 44 × 8 = **354 bytes**. `ε = (0b1111, 0, all zero)`.
+For a fixed variable order, every function `{0,1}^4 × N^4 → Z` that is
+constant on the cells of a finite grid has exactly one reduced diagram, up
+to the naming of its nodes. This is Bryant's canonicity argument for
+reduced ordered binary decision diagrams (R. E. Bryant, "Graph-Based
+Algorithms for Boolean Function Manipulation", IEEE Transactions on
+Computers C-35(8), 1986), with intervals in place of the two Boolean edges.
+By induction from the leaves: a function is tested at the first variable it
+depends on (R2); a value `c` starts a new interval exactly when the
+residual functions at `c - 1` and at `c` differ (a boundary that is not
+forced is forbidden by R1, and a forced one cannot be dropped because an
+edge's target denotes one function); and each edge's target is the node of
+its residual function, which R3 makes unique. Nodes are named canonically
+by numbering them `0, 1, …` in order of first visit in a depth-first
+traversal from the root that follows each node's edges in increasing
+interval order.
+
+**Representation.** `S = (keep, set, D_0, D_1, D_2, D_3)`:
+
+- `keep`, `set`: `u8` bit masks; bit `i` of `keep` set means `σ'_i = σ_i`,
+  and `set` gives `σ'_i` for every bit not kept, normalised so that `set &
+  keep = 0`.
+- `D_j`: the canonically named reduced interval diagram of `t_j`.
+
+The serialised value, which the property test compares and whose length is
+the summary's size, is the two masks followed by each `D_j` in turn: a
+`u32` node count; for a diagram with no inner node, its leaf value as one
+`i64`; otherwise, per node in canonical order, the tested variable (`u8`),
+the edge count (`u32`), and per edge its interval's lower bound (`i64`; the
+upper bound is the next edge's lower bound), a target tag (`u8`: node or
+leaf) and the node index or leaf value (`i64`). Its size is
+
+```
+bytes(S)   = 2 + bytes(D_0) + bytes(D_1) + bytes(D_2) + bytes(D_3)
+bytes(D)   = 12                                  if D is a single leaf
+           = 4 + Σ over nodes (5 + 17 · edges)   otherwise
+```
+
+`ε = (0b1111, 0, leaf 0, leaf 0, leaf 0, leaf 0)`, 50 bytes.
+
+**Atomic summaries.** All masks are `keep = 0b1111`, `set = 0` and all
+diagrams are `leaf 0`, except:
+
+- `deposit(a, x)`: `D_a` = node `σ_a`: `{0}` → leaf `x`, `{1}` → leaf `0`.
+- `withdraw(a, x)`: `D_a` = node `σ_a`: `{0}` → node `β_a` (`[0, x)` → leaf
+  `0`, `[x, ∞)` → leaf `-x`), `{1}` → leaf `0`.
+- `transfer(a, b, x)`, with `p = min(a, b)` and `q = max(a, b)`: `D_a` =
+  node `σ_p`: `{0}` → node `σ_q` (`{0}` → node `β_a` (`[0, x)` → leaf `0`,
+  `[x, ∞)` → leaf `-x`), `{1}` → leaf `0`), `{1}` → leaf `0`. `D_b` is the
+  same with leaf `+x` in place of `-x`.
+- `freeze(a)`: bit `a` cleared in `keep` and set in `set`.
+- `unfreeze(a)`: bit `a` cleared in `keep`, and clear in `set`.
 
 **Apply.** `σ'_i = σ_i` if bit `i` of `keep` is set, else bit `i` of `set`;
-`β'_j = β_j + Σ_M c_{j,M} · Π_{i ∈ M} σ_i`, evaluated at the input `σ`.
+`β'_j = β_j + D_j(σ, β)`, each diagram evaluated at the input `(σ, β)`. An
+evaluation visits at most 8 nodes and picks each edge by binary search over
+that node's intervals.
 
 **Combine.** `S1 ⊕ S2`, with `S1` first:
 
 - `keep = keep1 & keep2`;
 - `set = ((set1 & keep2) | set2) & ~keep`;
-- `c = c1 + subst(c2, S1)`. `subst` rewrites each term `c_{j,M} Π_{i∈M} σ_i`
-  of `S2`, a polynomial in the state *after* `S1`, into the state before
-  it: each `σ_i` with `i` not kept by `S1` is replaced by the constant
-  `set1_i`. A term with any such `set1_i = 0` vanishes. Otherwise its
-  coefficient is added to the monomial `M` minus those replaced bits.
+- `D_j` = the canonically named reduced diagram of `t1_j(σ, β) + t2_j(g1(σ),
+  β + t1(σ, β))`, where `t1`, `g1` are denoted by `S1` and `t2` by `S2`.
 
-*Closure.* Substituting constants never raises a monomial's degree, and every
-atomic `δ` has degree at most 2, so every combined `δ` again has degree at most 2 and fits the
-11 monomials. `g2 ∘ g1` keeps a bit only if both keep it, and otherwise
-takes the last constant written, which is the mask rule above.
+*Correctness.* After `S1` the state is `(g1(σ), β + t1(σ, β))`. Applying
+`S2` gives `(g2(g1(σ)), β + t1(σ, β) + t2(g1(σ), β + t1(σ, β)))`: the mask
+rule is `g2 ∘ g1` (a bit is kept only if both keep it, and otherwise takes
+the last constant written), and the diagrams
+denote exactly the translation above. Within each grid cell of `t1` the
+thresholds of `t2` on `β_a + t1_a` are thresholds on `β_a`, so the
+composite is again constant on the cells of a finite grid and has a reduced
+diagram.
 
-*Correctness.* After `S1`, the state is `(g1(σ), β + δ1(σ))`. Applying `S2`
-gives `(g2(g1(σ)), β + δ1(σ) + δ2(g1(σ)))`, and `subst(c2, S1)` is exactly
-`δ2 ∘ g1` written over the original `σ`.
+*Associativity.* Both groupings of `S1 ⊕ S2 ⊕ S3` denote the same
+transformer, since function composition is associative. The masks are
+determined by `g`, and the canonically named reduced diagrams by `t`, so
+equal transformers have equal serialised values, and both groupings give
+the same value.
 
-*Associativity.* Both groupings denote the same transformer, since function
-composition and vector addition are associative:
-`δ1(σ) + δ2(g1 σ) + δ3(g2 g1 σ)` either way. The representation is
-canonical: the normalised masks are determined by `g`; and a function from
-`{0,1}^4` to `Z` has exactly one multilinear polynomial, by Möbius
-inversion. Equal transformers therefore have equal representations, so
-both groupings give the same value.
+How combine is computed (for example a memoised recursive descent over the
+two diagrams in the manner of Bryant's `apply`) is the implementer's
+choice; its result is fixed by the definition above.
 
-**Bounds.** 354 bytes. Combine visits each of S2's 44 terms once, resolving
-up to 2 substituted bits each, and performs 44 additions with `c1`; apply
-evaluates 44 terms. Each coefficient of a summary of `n` calls is a sum of
-at most 4 terms of magnitude at most `10 000` per call, so `|c| <= 40 000 n`, at most
-`10 240 000` for `n <= 256`. None of this depends on batch size. How
-combine is computed (for example, skipping zero coefficients) is the
-implementer's choice; its result is fixed by the definition above.
+**Value bounds.** Within the frozen inputs every interval lower bound lies
+in `[0, 2 570 000]` (a funds threshold of at most `10 000` shifted by a net
+prefix translation of at most `2 560 000`), and every leaf in `[-2 560 000,
+2 560 000]`; `i64` holds both.
+
+**Size behaviour: not fixed, measured.** Unlike §2.4 and §3.3, this
+representation has no size fixed in advance: its size depends on the calls
+it summarizes, and it **can grow with batch length**. The summary of `n`
+calls `withdraw(0, 2)` has a `D_0` whose `β0` node has `n + 1` edges, one
+per distinct number of successful withdrawals (example A4), so
+`bytes(S)` grows by at least 17 bytes per call. Apply cost grows with the
+edge counts (through the binary searches), and combine cost with the
+diagram sizes. No constant-size exact representation of this family is
+known to this freeze; the source ideation calls the all-or-nothing case
+"much harder": "arbitrary quantities create complicated state-dependent
+success patterns." This freeze states no upper bound on the growth.
+
+Whether the generated batches make it grow is a quantity to measure, not
+to infer from this example: slice 6 reports, for every batch summary and
+every chunk summary the scan builds, `bytes(S)`, the total edge count, and
+the combine and apply operation counts (nodes and edges visited), at every
+batch size. Part B (`protocol.md`) fixes how growth with batch size is
+decided from those measurements. If the measured size or cost grows with
+batch size, the accounts family fails the admissible bound class, E2 fails
+as a whole ("one family failing fails E2 overall"), and the result is
+recorded against `docs/concept.md` §13's second kill criterion. There is
+no fallback: no capped or approximate diagram, no call list, and no serial
+path stands in for the summary. Throughput and correctness are measured and
+reported for the family either way.
 
 **Response rule.** From the prefix state `(σ, β)`, §4.2's table.
 
 ### 4.4 Worked examples
+
+Masks are written with bit 0 rightmost. A diagram is written as nested
+nodes, `node v: interval → target, …`; `D_j = 0` is the single leaf `0`.
+Unless stated, `D_1` to `D_3` are `0`.
 
 **A1** — every outcome. Initial balances `β = (100, 50, 0, 20)`, statuses
 `σ = (0, 0, 1, 0)` (account 2 frozen).
@@ -682,61 +808,111 @@ implementer's choice; its result is fixed by the definition above.
 | 2 | `transfer(0, 2, 40)` | abort `account_frozen` | unchanged |
 | 3 | `unfreeze(2)` | commit 0 | `(130, 50, 0, 20)`; `(0,0,0,0)` |
 | 4 | `transfer(0, 2, 40)` | commit 90 | `(90, 50, 40, 20)`; `(0,0,0,0)` |
-| 5 | `withdraw(1, 70)` | commit -20 | `(90, -20, 40, 20)`; `(0,0,0,0)` |
-| 6 | `freeze(1)` | commit -20 | `(90, -20, 40, 20)`; `(0,1,0,0)` |
-| 7 | `deposit(1, 10)` | abort `account_frozen` | unchanged |
-| 8 | `freeze(1)` | abort `already_frozen` | unchanged |
-| 9 | `unfreeze(3)` | abort `not_frozen` | unchanged |
-| 10 | `transfer(3, 3, 5)` | abort `same_account` | unchanged |
-| 11 | `deposit(0, 0)` | abort `invalid_amount` | unchanged |
-| 12 | `withdraw(4, 5)` | abort `account_not_found` | unchanged |
+| 5 | `withdraw(1, 70)` | abort `insufficient_funds` (`50 < 70`) | unchanged |
+| 6 | `withdraw(1, 50)` | commit 0 (`50 >= 50`) | `(90, 0, 40, 20)`; `(0,0,0,0)` |
+| 7 | `transfer(2, 3, 41)` | abort `insufficient_funds` (`40 < 41`) | unchanged |
+| 8 | `freeze(1)` | commit 0 | `(90, 0, 40, 20)`; `(0,1,0,0)` |
+| 9 | `deposit(1, 10)` | abort `account_frozen` | unchanged |
+| 10 | `withdraw(1, 20000)` | abort `invalid_amount` | unchanged |
+| 11 | `freeze(1)` | abort `already_frozen` | unchanged |
+| 12 | `unfreeze(3)` | abort `not_frozen` | unchanged |
+| 13 | `transfer(3, 3, 5)` | abort `same_account` | unchanged |
+| 14 | `deposit(0, 0)` | abort `invalid_amount` | unchanged |
+| 15 | `withdraw(4, 5)` | abort `account_not_found` | unchanged |
 
-Final `β = (90, -20, 40, 20)`, `σ = (0, 1, 0, 0)`.
+Final `β = (90, 0, 40, 20)`, `σ = (0, 1, 0, 0)`. Row 10 shows the argument
+test ahead of the status test: account 1 is frozen, yet the outcome is
+`invalid_amount`.
 
-Summary derivation, writing only non-zero coefficients and the bits each
-summary overwrites:
+**A2** — a withdrawal fails before a deposit and succeeds after it.
+Initial `β = (30, 0, 0, 0)`, `σ = (0, 0, 0, 0)`.
 
-- `S1`: `δ0 = 30 - 30σ0`.
-- `S2` and `S4`: `δ0 = -40 + 40σ0 + 40σ2 - 40σ0σ2`, `δ2 = 40 - 40σ0 -
-  40σ2 + 40σ0σ2`.
-- `S3`: bit 2 set to `0`.
-- `S1 ⊕ S2`: `δ0 = -10 + 10σ0 + 40σ2 - 40σ0σ2`; `δ2 = 40 - 40σ0 - 40σ2 +
-  40σ0σ2`.
-- `⊕ S3`: the same `δ`, with bit 2 set to `0`.
-- `⊕ S4`: substituting `σ2 = 0` into `S4` gives `δ0 = -40 + 40σ0` and `δ2 = 40 - 40σ0`.
-  The sum is `P = S1 ⊕ … ⊕ S4`: `δ0 = -50 + 50σ0 + 40σ2 - 40σ0σ2`, `δ2 = 80
-  - 80σ0 - 40σ2 + 40σ0σ2`, bit 2 set to `0`.
-- At `σ = (0,0,1,0)`: `δ0 = -50 + 40 = -10` and `δ2 = 80 - 40 = 40`, giving
-  `β = (90, 50, 40, 20)` and `σ = (0,0,0,0)`, which matches row 4. At `σ =
-  (0,0,0,0)` it would give `δ0 = -50` and `δ2 = 80`, the result if account 2 had
-  been open, where both transfers commit.
-- `S5 ⊕ … ⊕ S12`: `S5` gives `δ1 = -70 + 70σ1`; `S6` sets bit 1 to `1`;
-  `S7` (`δ1 = 10 - 10σ1`) vanishes under `σ1 = 1`; `S8` sets bit 1 to `1`;
-  `S9` sets bit 3 to `0`; `S10`-`S12` are `ε`. Result: `δ1 = -70 + 70σ1`,
-  bit 1 set to `1`, bit 3 set to `0`.
-- `P ⊕ (S5 ⊕ … ⊕ S12)`: `P` overwrites only bit 2, which does not occur in `δ1`.
-  Total: `δ0 = -50 + 50σ0 + 40σ2 - 40σ0σ2`, `δ1 = -70 + 70σ1`, `δ2 = 80 -
-  80σ0 - 40σ2 + 40σ0σ2`, `δ3 = 0`; `keep = {0}`, `set1 = 1`, `set2 = 0`,
-  `set3 = 0`.
-- Applied to the initial state, it gives `β = (90, -20, 40, 20)` and `σ =
-  (0, 1, 0, 0)`, the final state above.
+| Batch | Outcomes | Final `β0` |
+|---|---|---|
+| A2a `[withdraw(0, 50), deposit(0, 40), withdraw(0, 50)]` | abort `insufficient_funds` (`30 < 50`), commit 70, commit 20 | 20 |
+| A2b `[deposit(0, 40), withdraw(0, 50), withdraw(0, 50)]` | commit 70, commit 20, abort `insufficient_funds` (`20 < 50`) | 20 |
+| A2c `[withdraw(0, 50), withdraw(0, 50), deposit(0, 40)]` | abort `insufficient_funds`, abort `insufficient_funds`, commit 70 | 70 |
 
-**A2** — order dependence. Initial `β = (100, 50, 0, 20)`, `σ = (0,0,0,0)`.
+The same three calls give three response sequences and two final states.
+
+Summaries of A2a, all with masks `keep = 0b1111`, `set = 0`:
+
+- `S1 = S3` (`withdraw(0, 50)`): `D_0 = node σ0: {0} → node β0: ([0, 50) → 0,
+  [50, ∞) → -50), {1} → 0`; 120 bytes.
+- `S2` (`deposit(0, 40)`): `D_0 = node σ0: {0} → 40, {1} → 0`; 81 bytes.
+- `S1 ⊕ S2`: under `σ0 = 1` both translations are `0`. Under `σ0 = 0`, the
+  deposit adds `40` on every piece: `[0, 50) → 40`, `[50, ∞) → -10`.
+- `(S1 ⊕ S2) ⊕ S3`, under `σ0 = 0`: on `[0, 50)` the state before `S3` is
+  `β0 + 40`, and `S3` succeeds iff `β0 + 40 >= 50`, iff `β0 >= 10`: `[0, 10)
+  → 40`, `[10, 50) → -10`. On `[50, ∞)` the state is `β0 - 10`, and `S3`
+  succeeds iff `β0 >= 60`: `[50, 60) → -10`, `[60, ∞) → -60`. R1 merges the
+  adjacent `-10` intervals.
+- Result: `D_0 = node σ0: {0} → node β0: ([0, 10) → 40, [10, 60) → -10,
+  [60, ∞) → -60), {1} → 0`. Size `2 + (4 + 39 + 56) + 3 · 12 = 137` bytes.
+- Other grouping: `S2 ⊕ S3` under `σ0 = 0` is `[0, 10) → 40`, `[10, ∞) →
+  -10`. Then `S1 ⊕ (S2 ⊕ S3)`: on `[0, 50)`, `S1` adds `0` and `S2 ⊕ S3`
+  reads `β0`, giving `[0, 10) → 40`, `[10, 50) → -10`; on `[50, ∞)`, `S1`
+  adds `-50` and `S2 ⊕ S3` reads `β0 - 50`, giving `[50, 60) → -10`, `[60,
+  ∞) → -60`. After merging, the same value.
+- Responses: the state before call 2 is `apply(S1, ·)`, with `β0 = 30` in
+  `[0, 50)`: `30`, so the deposit commits `70`. Before call 3 it is
+  `apply(S1 ⊕ S2, ·)`: `30 + 40 = 70`, so the withdrawal commits `20`.
+  Final: `30` lies in `[10, 60)`, so `β0 = 30 - 10 = 20`.
+
+**A3** — a transfer couples two accounts. `σ = (0, 0, 0, 0)` throughout.
+
+| Batch | Initial `β` | Outcomes | Final `β` |
+|---|---|---|---|
+| A3a `[transfer(0, 1, 20), withdraw(1, 20)]` | `(30, 0, 0, 0)` | commit 10, commit 0 | `(10, 0, 0, 0)` |
+| A3b the same calls | `(15, 0, 0, 0)` | abort `insufficient_funds`, abort `insufficient_funds` (`0 < 20`) | `(15, 0, 0, 0)` |
+
+The withdrawal from account 1 succeeds or fails according to account 0's
+balance. The combined summary, masks unchanged:
+
+- `D_0` (the transfer alone): `node σ0: {0} → node σ1: ({0} → node β0:
+  ([0, 20) → 0, [20, ∞) → -20), {1} → 0), {1} → 0`.
+- `D_1`, by cases. With `σ1 = 1` both calls abort: `0`. With `σ1 = 0` and
+  `σ0 = 1`, only the withdrawal runs: `W = node β1: [0, 20) → 0, [20, ∞) →
+  -20`. With `σ0 = σ1 = 0` and `β0 < 20`, likewise `W`; with `β0 >= 20`,
+  account 1 holds `β1 + 20 >= 20`, so the withdrawal always succeeds: `+20
+  - 20 = 0`.
+- Canonically named: node 0 `σ0: {0} → 1, {1} → 4`; node 1 `σ1: {0} → 2,
+  {1} → 0`; node 2 `β0: [0, 20) → 3, [20, ∞) → 0`; node 3 `β1: [0, 20) → 0,
+  [20, ∞) → -20`; node 4 `σ1: {0} → 3, {1} → 0`. Node 3 is shared. Size `2 +
+  (4 + 3 · 39) + (4 + 5 · 39) + 2 · 12 = 346` bytes.
+- Apply at A3a's `β = (30, 0, 0, 0)`: `D_0` reaches `β0 = 30 >= 20`, `-20`;
+  `D_1` takes nodes 0, 1, 2 and `β0 = 30` gives `0`. Final `(10, 0, 0, 0)`.
+  At A3b's `β0 = 15`: `D_0` gives `0`; `D_1` reaches node 3 with `β1 = 0`,
+  `0`. Final `(15, 0, 0, 0)`.
+
+**A4** — growth with batch length. Initial `β = (5, 0, 0, 0)`, `σ = (0, 0,
+0, 0)`, batch `[withdraw(0, 2), withdraw(0, 2), withdraw(0, 2)]`: commit 3,
+commit 1, abort `insufficient_funds` (`1 < 2`); final `β0 = 1`.
+
+After `k` calls `withdraw(0, 2)`, under `σ0 = 0`, `t_0 = -2 · min(k,
+⌊β0 / 2⌋)`: if `k < ⌊β0 / 2⌋` the balance `β0 - 2k` is at least `2` and
+the next call succeeds; otherwise the balance is `β0 mod 2 < 2` and it
+fails. So the summary of `n` such calls has `D_0 = node σ0: {0} → node β0:
+([0, 2) → 0, [2, 4) → -2, …, [2n - 2, 2n) → -2(n - 1), [2n, ∞) → -2n), {1}
+→ 0`, with `n + 1` edges whose adjacent leaves differ, so R1 merges none.
+Its size is `103 + 17 n` bytes: 154 for `n = 3`, 4455 for `n = 256`. For
+this batch: `5` lies in `[4, 6)`, so `β0 = 5 - 4 = 1`.
+
+**A5** — status order. Initial `β = (100, 50, 0, 20)`, `σ = (0,0,0,0)`.
 
 | Batch | Outcomes | Final `β0`, `σ0` |
 |---|---|---|
-| A2a `[freeze(0), deposit(0, 10)]` | commit 100, abort `account_frozen` | 100, 1 |
-| A2b `[deposit(0, 10), freeze(0)]` | commit 110, commit 110 | 110, 1 |
+| A5a `[freeze(0), deposit(0, 10)]` | commit 100, abort `account_frozen` | 100, 1 |
+| A5b `[deposit(0, 10), freeze(0)]` | commit 110, commit 110 | 110, 1 |
 
-Summaries: for A2a, `(bit 0 set to 1) ⊕ (δ0 = 10 - 10σ0)`. Substituting
-`σ0 = 1` makes the deposit term vanish, so the combined summary is "bit 0
-set to `1`, `δ = 0`". For A2b, it is `δ0 = 10 - 10σ0` with bit 0 set to
-`1`. At `σ0 = 0` they give `β0 = 100` and `β0 = 110` respectively.
+Both summaries have `keep = 0b1110`, `set = 0b0001`. For A5a the deposit
+is read under `σ0 = 1`, so `D_0 = 0`; for A5b, `D_0 = node σ0: {0} → 10,
+{1} → 0`. At `σ0 = 0` they give `β0 = 100` and `β0 = 110`.
 
 ### 4.5 Input distribution
 
 - **Initial state:** for each account `j = 0..=3` in order, `β_j =
-  uniform(0, 1 000 000)`, then `σ_j = 1` if `uniform(0, 3) = 0`, else `0`.
+  uniform(0, 50 000)`, then `σ_j = 1` if `uniform(0, 3) = 0`, else `0`.
 - **Call mix:** `k = uniform(0, 99)`. `[0, 30)` is `deposit`, `[30, 60)` is
   `withdraw`, `[60, 90)` is `transfer`, `[90, 95)` is `freeze`, and `[95,
   100)` is `unfreeze`.
@@ -755,19 +931,21 @@ account in a money operation; worked example A1 covers both. A quarter of
 the accounts start frozen, and freezes and unfreezes recur, so that status
 gating is exercised at every batch size.
 
-### 4.6 What the account family deliberately leaves out
-
-An insufficient-funds rule ("withdraw or transfer only if `β_a >= x`, else
-abort") is not part of this family. With a blind response, it is the
-escrow of `docs/concept.md` §3, class 2 (`balance >= 0` "becomes an
-escrow"), so it belongs to class 2, not to E2. With a balance-revealing
-response, as here, it is the all-or-nothing reserve that the source
-ideation calls "much harder": "arbitrary quantities create complicated
-state-dependent success patterns." The exact transformer of a chunk then
-has breakpoints throughout `[0, Σ amounts)`. Already for repeated
-`withdraw(·, 2)`, the piecewise-offset form has one piece per call.
-No constant-size exact representation of that variant is known to this
-freeze. Whether E2 should carry it anyway is open question 1.
+**Why the initial balances are at most `50 000`.** The funds guard needs
+the balances near its threshold, because a funds test that never fails is
+not exercised. Each call touches a
+given account's balance with probability `0.3` (a deposit to it, a
+withdrawal from it, a transfer from it, or a transfer to it, each `0.075`),
+so a batch of 256 makes about 77 such moves, of root-mean-square size about
+`5 800` (`amount = uniform(1, 10 000)`), and roughly balanced in sign. The
+balance therefore wanders by about `√77 · 5 800 ≈ 50 000` over a batch of
+256, and by about half that over 64. Starting balances up to `1 000 000`
+would leave most accounts far from `0`, so `insufficient_funds` would
+rarely occur at the gating sizes; `uniform(0, 50 000)`, five times
+`X_MAX`, puts the funds test on both sides of its threshold at every gating
+size. This is an estimate from the stated distribution, not a measurement.
+The summary's size does not depend on the initial state, because a summary
+denotes its calls' transformer on every state.
 
 ## 5. Generator
 
@@ -804,30 +982,24 @@ document.
 |---|---|---|---|---|
 | Quota | `(a, l, u)`, a clipped translation | 24 | 3 add, 2 clamp | 1 add, 1 clamp |
 | Inventory | `d`, a translation mod 91 | 1 | 1 add, 1 conditional subtract | 2 subtract, 1 conditional add |
-| Accounts | `(keep, set, c[44])`, status masks and a degree-2 multilinear `δ` | 354 | 44 terms substituted and added | 44 terms evaluated |
+| Accounts | `(keep, set, D_0..D_3)`, status masks and four reduced interval diagrams | not fixed: `bytes(S)` of §4.3, at least `103 + 17 n` for A4's batch of `n` | grows with the diagrams' sizes | at most 8 nodes and one binary search per node, per diagram |
 
-Each family is measured against its row, in bytes and operation counts. A
-measured size or cost that grows with batch size fails that family (§1,
+Each family is measured against its row, in bytes and operation counts; for
+accounts the row names the measured quantities, not a bound. A measured
+size or cost that grows with batch size fails that family (§1,
 "Compactness rule").
 
 ## 7. Open questions for the reviewer
 
-1. **Accounts and insufficient funds (§4.6).** The frozen default omits an
-   insufficient-funds rule, for two reasons: its blind form is class 2, and
-   its revealing form has no known constant-size summary. The alternative
-   adds the rule to `withdraw` and `transfer`. The family would then be more
-   realistic, and E2 would expect it to fail the size bound under its own
-   rule, which would fail E2 as a whole. Recommendation: keep the default,
-   and record the alternative's expected non-compactness against
-   `docs/concept.md` §13's second kill criterion. Not measuring the
-   alternative is a scope decision for the head, not a result.
-2. **Reading of "conditional inventory" (§3).** The default is TPC-C's
-   conditional restock rule. The alternative reading is an all-or-nothing
-   "sell only if in stock", which is the same hard variant as question 1.
-   Recommendation: keep the default, which is externally pinned and not
-   chosen by this author.
-3. **Overflow outside the frozen inputs (§4.2).** The account summary is
-   exact only while balances stay within `i64`, which the frozen generator
-   guarantees with balances below `3 560 000` in magnitude, far inside
-   `i64`. Recommendation: accept this, and
-   have slice 3's generator test assert the balance bound.
+1. **Variable order of the account diagrams (§4.3).** A reduced diagram's
+   size depends on its variable order, and the frozen order is `σ0, σ1, σ2,
+   σ3, β0, β1, β2, β3`: statuses first, because they gate every movement,
+   then balances by key. Another order may give smaller diagrams on the
+   generated batches. Recommendation: keep this order, fixed before any
+   measurement; choosing an order after seeing sizes would be tuning
+   against a result and would void it.
+2. **How growth is decided (§4.3).** This document fixes what is measured
+   for accounts; the rule that turns sizes at batch sizes 1-256 into
+   "grows with batch size" is not fixed here. Recommendation: part B
+   (`protocol.md`) freezes it, for all three families alike, before any
+   measurement.
