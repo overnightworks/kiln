@@ -332,6 +332,13 @@ For each family, the rule library has ten minutes of wall-clock time to
 propose and check an admitted summary. A family not admitted within ten
 minutes is a miss, not a retry with more budget.
 
+Admission also requires agreement with the reference interpreter (final
+state, every response and abort) on batches drawn from the family's full
+domain, not only over its finite checking domain: a candidate valid only
+over a finite domain may be a table, not a summary. This agreement is a
+sampled check, not a proof; the certificate still reads "valid over the
+declared domains" (`experiments/e3-summary-synthesis/protocol.md`).
+
 ### Rejection check
 
 For every family where a summary is admitted, the builder constructs
