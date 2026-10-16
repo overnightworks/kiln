@@ -353,6 +353,10 @@ impl Walker<'_> {
             end: self.operands_of(facts, range.end, &node)?,
             bound: self.operand(facts, range.bound, &node)?,
         };
+        if let RangeOver::PrimaryKeys(table) = range.over {
+            self.abort_on_misfit_key(facts, table, range.start, &node)?;
+            self.abort_on_misfit_key(facts, table, range.end, &node)?;
+        }
         let (role, kind, target) = match range.over {
             RangeOver::PrimaryKeys(table) => (
                 AccessRole::PrimaryRangeBound,

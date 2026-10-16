@@ -476,20 +476,38 @@ mod kiln_e1_27 {
         Expr::Literal(Value::Text("k".to_owned()))
     }
 
-    /// Slot 2 is read from `t1`, keyed by text, and then from `t2`, keyed by
-    /// `t2_kind`, so no single table says what a projection of it is. The key
-    /// of `u` is the integer `id`; `c`, the key of `t1` and `t2`, is what the
-    /// slot's row holds.
-    fn slot_rebound_across_tables(t2_kind: ColumnType, t2_key: Expr) -> Program {
+    fn point_read_of_u(key: Expr) -> Effect {
+        read("u", key, 3)
+    }
+
+    fn range_over_u_starting_at(key: Expr) -> Effect {
+        read_range("u", key, literal(1), 3)
+    }
+
+    /// Slot 2 is read from `t1`, keyed by text, on one arm and from `t2`,
+    /// keyed by an integer, on the other (the present arm reads it too, into another slot, so the
+    /// arms' accesses stay ordered by inclusion), so no single table says what a
+    /// projection of it is; the present arm reads `bound_on_path` into it. The
+    /// key of `u` is the integer `id`; `c`, the key of `t1` and `t2`, is what
+    /// the slot's row holds.
+    fn slot_bound_by_either_arm(
+        bound_on_path: &str,
+        keyed_by_slot_2: fn(Expr) -> Effect,
+    ) -> Program {
         let plain = |name| table_keyed_by(name, KEY_COLUMN, INTEGER);
+        let reading = |name: &str, into| match name {
+            "t1" => read("t1", text_key(), into),
+            _ => read("t2", literal(1), into),
+        };
+        let other = if bound_on_path == "t1" { "t2" } else { "t1" };
         let present = returns(vec![
             read("a", literal(1), 1),
-            read("t1", text_key(), 2),
-            read("t2", t2_key, 2),
-            read("u", column_of(2, "c"), 3),
+            reading(bound_on_path, 2),
+            reading(other, 5),
+            keyed_by_slot_2(column_of(2, "c")),
             read("b", literal(1), 4),
         ]);
-        let absent = returns(vec![read("b", literal(1), 4)]);
+        let absent = returns(vec![reading(other, 2), read("b", literal(1), 4)]);
         Program {
             schema: Schema {
                 tables: vec![
@@ -498,7 +516,7 @@ mod kiln_e1_27 {
                     plain("b"),
                     plain("u"),
                     table_keyed_by("t1", "c", ColumnType::Text),
-                    table_keyed_by("t2", "c", t2_kind),
+                    table_keyed_by("t2", "c", INTEGER),
                 ],
                 ..Schema::default()
             },
@@ -518,23 +536,27 @@ mod kiln_e1_27 {
     }
 
     #[test]
-    fn a_key_projecting_a_column_of_the_wrong_kind_from_a_rebound_slot_ends_the_path_before_its_access(
+    fn a_key_projecting_a_column_of_the_wrong_kind_from_a_slot_two_arms_bind_ends_the_path_before_its_access(
     ) {
-        let program = slot_rebound_across_tables(ColumnType::Text, text_key());
-        let classification = classification_of(&program);
-        assert!(
-            matches!(classification, Classification::Unknown { .. }),
-            "{classification:?}"
-        );
+        for keyed_by_slot_2 in [point_read_of_u, range_over_u_starting_at] {
+            let program = slot_bound_by_either_arm("t1", keyed_by_slot_2);
+            let classification = classification_of(&program);
+            assert!(
+                matches!(classification, Classification::Unknown { .. }),
+                "{classification:?}"
+            );
+        }
     }
 
     #[test]
-    fn a_key_projecting_a_column_of_the_right_kind_from_a_rebound_slot_keeps_its_access() {
-        let program = slot_rebound_across_tables(INTEGER, literal(1));
-        let classification = classification_of(&program);
-        assert!(
-            matches!(classification, Classification::Proven { .. }),
-            "{classification:?}"
-        );
+    fn a_key_projecting_a_column_of_the_right_kind_from_a_slot_two_arms_bind_keeps_its_access() {
+        for keyed_by_slot_2 in [point_read_of_u, range_over_u_starting_at] {
+            let program = slot_bound_by_either_arm("t2", keyed_by_slot_2);
+            let classification = classification_of(&program);
+            assert!(
+                matches!(classification, Classification::Proven { .. }),
+                "{classification:?}"
+            );
+        }
     }
 }

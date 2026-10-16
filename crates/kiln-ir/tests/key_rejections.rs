@@ -8,8 +8,8 @@ use kiln_ir::{
 };
 use support::world::*;
 use support::{
-    aborted_reason, call_under_test, column, columns_of, integer, parameter, program_with_schema,
-    run_ok, table, text, text_parameter, typed_parameter,
+    aborted_reason, call_under_test, column, columns_of, columns_of_values, committed_response,
+    integer, parameter, program_with_schema, run_ok, table, text, text_parameter, typed_parameter,
 };
 
 mod kiln_ir_79 {
@@ -239,7 +239,10 @@ mod kiln_ir_81 {
 
 mod kiln_ir_82 {
     use super::*;
-    use kiln_ir::{ArithmeticOp, ColumnName, IntegerWidth, Parameter};
+    use kiln_ir::{
+        ArithmeticOp, Column, ColumnName, ColumnType, FunctionName, IntegerWidth, Parameter,
+        Program, Row, Schema, Table,
+    };
 
     /// The effects that carry a key, each with `bad` as the component at
     /// `position` of the key it names and valid components elsewhere.
@@ -325,80 +328,105 @@ mod kiln_ir_82 {
         ]
     }
 
-    /// `Some(column)` when the program is rejected for that key column.
-    fn rejected_key_column(
+    type Rejection = Option<(ColumnName, KeyComponentFault)>;
+
+    /// What validating a program with just that effect says about its key
+    /// column, for each effect that carries a key.
+    fn rejections_by_effect(
         table_name: &str,
         position: usize,
         component: Expr,
-    ) -> Option<(ColumnName, KeyComponentFault)> {
-        for effect in effects_with_component(table_name, position, component) {
-            let mut effects = rows_to_project_from();
-            effects.push(effect);
-            let program =
-                program_with_schema(world_schema(), parameters(), effects, returning_zero());
-            match program.validate() {
-                Err(ProgramError::Function {
-                    fault: FunctionFault::KeyComponent { column, fault, .. },
-                    ..
-                }) => {
-                    return Some((column, fault));
-                }
-                Ok(()) => {}
-                other => panic!("{other:?}"),
-            }
-        }
-        None
+    ) -> Vec<(Effect, Rejection)> {
+        effects_with_component(table_name, position, component)
+            .into_iter()
+            .map(|effect| {
+                let mut effects = rows_to_project_from();
+                effects.push(effect.clone());
+                let program =
+                    program_with_schema(world_schema(), parameters(), effects, returning_zero());
+                let rejection = match program.validate() {
+                    Err(ProgramError::Function {
+                        fault: FunctionFault::KeyComponent { column, fault, .. },
+                        ..
+                    }) => Some((column, fault)),
+                    Ok(()) => None,
+                    other => panic!("{other:?}"),
+                };
+                (effect, rejection)
+            })
+            .collect()
+    }
+
+    /// Every (component, effect) cell whose rejection is not `expected`.
+    fn cells_not_rejected_as(cases: Vec<(&str, usize, Expr, Rejection)>) -> Vec<String> {
+        cases
+            .into_iter()
+            .flat_map(|(table_name, position, component, expected)| {
+                rejections_by_effect(table_name, position, component.clone())
+                    .into_iter()
+                    .filter(|(_, rejection)| *rejection != expected)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(move |(effect, rejection)| {
+                        format!("{component:?} in {effect:?}: {rejection:?}, not {expected:?}")
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
     }
 
     #[test]
     fn a_component_that_can_never_fit_its_column_is_rejected_before_any_call_runs() {
         use KeyComponentFault::{OutsideWidth, WrongKind};
-        let cases = [
-            ("lines", 1, Expr::Literal(text("d")), "d", WrongKind),
-            ("lines", 1, literal(128), "d", OutsideWidth),
+        let rejected = |column_name, fault| Some((column(column_name), fault));
+        let cases = vec![
+            (
+                "lines",
+                1,
+                Expr::Literal(text("d")),
+                rejected("d", WrongKind),
+            ),
+            ("lines", 1, literal(128), rejected("d", OutsideWidth)),
             (
                 "lines",
                 0,
                 literal(i64::from(i32::MIN) - 1),
-                "w",
-                OutsideWidth,
+                rejected("w", OutsideWidth),
             ),
-            ("labels", 0, literal(1), "code", WrongKind),
-            ("lines", 2, param("name"), "o", WrongKind),
-            ("labels", 0, param("count"), "code", WrongKind),
-            ("labels", 0, sum(), "code", WrongKind),
-            ("lines", 1, project(Slot(9), "note"), "d", WrongKind),
-            ("labels", 0, project(Slot(8), "qty"), "code", WrongKind),
+            ("labels", 0, literal(1), rejected("code", WrongKind)),
+            ("lines", 2, param("name"), rejected("o", WrongKind)),
+            ("labels", 0, param("count"), rejected("code", WrongKind)),
+            ("labels", 0, sum(), rejected("code", WrongKind)),
+            (
+                "lines",
+                1,
+                project(Slot(9), "note"),
+                rejected("d", WrongKind),
+            ),
+            (
+                "labels",
+                0,
+                project(Slot(8), "qty"),
+                rejected("code", WrongKind),
+            ),
         ];
 
-        for (table_name, position, component, column_name, fault) in cases {
-            assert_eq!(
-                rejected_key_column(table_name, position, component.clone()),
-                Some((column(column_name), fault)),
-                "{table_name} {component:?}"
-            );
-        }
+        assert_eq!(cells_not_rejected_as(cases), Vec::<String>::new());
     }
 
     #[test]
     fn a_component_that_may_fit_its_column_is_accepted() {
-        let cases = [
-            ("lines", 1, literal(127)),
-            ("labels", 0, Expr::Literal(text("y"))),
-            ("lines", 1, param("count")),
-            ("lines", 1, sum()),
-            ("lines", 1, project(Slot(8), "qty")),
-            ("labels", 0, project(Slot(9), "note")),
-            ("labels", 0, param("name")),
+        let cases = vec![
+            ("lines", 1, literal(127), None),
+            ("labels", 0, Expr::Literal(text("y")), None),
+            ("lines", 1, param("count"), None),
+            ("lines", 1, sum(), None),
+            ("lines", 1, project(Slot(8), "qty"), None),
+            ("labels", 0, project(Slot(9), "note"), None),
+            ("labels", 0, param("name"), None),
         ];
 
-        for (table_name, position, component) in cases {
-            assert_eq!(
-                rejected_key_column(table_name, position, component.clone()),
-                None,
-                "{table_name} {component:?}"
-            );
-        }
+        assert_eq!(cells_not_rejected_as(cases), Vec::<String>::new());
     }
 
     #[test]
@@ -496,5 +524,135 @@ mod kiln_ir_82 {
                 fault: KeyComponentFault::OutsideWidth
             }
         );
+    }
+
+    fn key_table(name: &str, kind: ColumnType) -> Table {
+        Table {
+            name: table(name),
+            columns: vec![Column {
+                name: column("c"),
+                kind,
+            }],
+            key: key_of(&["c"]),
+        }
+    }
+
+    fn range_over(table_name: &str, into: u32, start: Expr, end: Expr) -> Effect {
+        Effect::ReadRange {
+            table: table(table_name),
+            start: vec![start],
+            end: vec![end],
+            bound: literal(5),
+            into: Slot(into),
+        }
+    }
+
+    fn iterate(source: u32, row: u32, body: Vec<Effect>) -> Effect {
+        Effect::Iterate {
+            source: Slot(source),
+            row: Slot(row),
+            body,
+        }
+    }
+
+    /// `text_rows` is empty, `int_rows` and `outer` hold rows; `u` is
+    /// integer-keyed. Both `text_rows` and `int_rows` have a column `c`.
+    fn iteration_row_program(row_sources: Vec<Effect>) -> Program {
+        let schema = Schema {
+            tables: vec![
+                key_table("text_rows", ColumnType::Text),
+                key_table(
+                    "int_rows",
+                    ColumnType::Integer {
+                        width: IntegerWidth::I64,
+                        domain: None,
+                    },
+                ),
+                key_table(
+                    "u",
+                    ColumnType::Integer {
+                        width: IntegerWidth::I64,
+                        domain: None,
+                    },
+                ),
+                key_table(
+                    "outer",
+                    ColumnType::Integer {
+                        width: IntegerWidth::I64,
+                        domain: None,
+                    },
+                ),
+            ],
+            ..Schema::default()
+        };
+        program_with_schema(schema, vec![], row_sources, returning_zero())
+    }
+
+    fn read_u_keyed_by_row_c() -> Effect {
+        Effect::Read {
+            table: table("u"),
+            key: vec![project(Slot(2), "c")],
+            into: Slot(3),
+        }
+    }
+
+    #[test]
+    fn a_projection_from_the_row_of_an_iteration_over_one_table_is_rejected() {
+        let program = iteration_row_program(vec![
+            range_over(
+                "text_rows",
+                0,
+                Expr::Literal(text("a")),
+                Expr::Literal(text("z")),
+            ),
+            iterate(0, 2, vec![read_u_keyed_by_row_c()]),
+        ]);
+
+        assert_eq!(
+            program.validate(),
+            Err(ProgramError::Function {
+                function: FunctionName("under_test".to_owned()),
+                fault: FunctionFault::KeyComponent {
+                    table: table("u"),
+                    column: column("c"),
+                    fault: KeyComponentFault::WrongKind
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn a_projection_from_the_row_of_an_iteration_whose_source_a_later_read_rebinds_is_left_to_the_run(
+    ) {
+        let program = iteration_row_program(vec![
+            range_over(
+                "text_rows",
+                0,
+                Expr::Literal(text("a")),
+                Expr::Literal(text("z")),
+            ),
+            range_over("outer", 1, literal(0), literal(9)),
+            iterate(
+                1,
+                4,
+                vec![
+                    iterate(0, 2, vec![read_u_keyed_by_row_c()]),
+                    range_over("int_rows", 0, literal(0), literal(9)),
+                ],
+            ),
+        ]);
+        let store = Store::containing([("outer", 1), ("outer", 2), ("int_rows", 1)].map(
+            |(table_name, c)| {
+                let row = Row {
+                    columns: columns_of_values([("c", integer(c))]),
+                };
+                (table(table_name), Key(vec![integer(c)]), row)
+            },
+        ));
+
+        let execution = run_ok(&program, &call_under_test(vec![]), &store);
+
+        assert_eq!(program.validate(), Ok(()));
+        assert_eq!(committed_response(&execution), &integer(0));
     }
 }
