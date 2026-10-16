@@ -72,19 +72,19 @@ module; several tests may share it.
 
 ## Unique constraints
 
-- [KILN-IR-39] A unique constraint is declared in the schema on one column of one table. A schema that declares one on an undeclared table or column is rejected with a typed schema error.
-- [KILN-IR-40] A duplicate value that exists only in the middle of a transaction and is gone from its final state commits.
-- [KILN-IR-41] A duplicate value in a transaction's final state aborts the call with a typed reason naming the constraint and the value; the call changes no state and publishes no response.
-- [KILN-IR-42] The unique check runs once at the end of the transaction and logs exactly one constraint lookup, naming the constraint and the unique tuple, per row the transaction wrote that column on, however often it wrote the row; a row the transaction deleted, or wrote without that column, is not checked. The check's logged footprint is those constraint lookups, never a point read, range read or table scan.
+- [KILN-IR-39] A unique constraint is declared in the schema on an ordered list of one or more columns of one table (`KILN-IR-89`; a single column is the list of one). A schema that declares one on an undeclared table or column is rejected with a typed schema error.
+- [KILN-IR-40] A duplicate tuple that exists only in the middle of a transaction and is gone from its final state commits.
+- [KILN-IR-41] A duplicate tuple in a transaction's final state aborts the call with a typed reason naming the constraint and the tuple; the call changes no state and publishes no response.
+- [KILN-IR-42] The unique check runs once at the end of the transaction and logs exactly one constraint lookup, naming the constraint and the unique tuple, per row the transaction wrote any of the constraint's columns on, however often it wrote the row; a row the transaction deleted, or wrote without any of those columns, or that lacks one of them in its final state, is not checked. The check's logged footprint is those constraint lookups, never a point read, range read or table scan.
 
 ## Foreign keys
 
-- [KILN-IR-45] A foreign key is declared in the schema on one column of one table and references another declared table's key, which that table must declare as exactly one column. A schema that declares one on an undeclared table or column, that references an undeclared table, or that references a table keyed by several columns or by none is rejected with a typed schema error.
-- [KILN-IR-46] A row the transaction wrote the foreign-key column on, whose final state names a key that no row of the referenced table holds aborts the call with a typed reason naming the foreign key and the dangling value; the call changes no state.
+- [KILN-IR-45] A foreign key is declared in the schema on an ordered list of one or more columns of one table (a single column is the list of one) and references another declared table's whole primary key (`KILN-IR-87`). A schema that declares one on an undeclared table or column, that references an undeclared table, or whose column count differs from the referenced table's primary key's, a keyless table having none, is rejected with a typed schema error.
+- [KILN-IR-46] A row the transaction wrote any of the foreign key's columns on, whose final state holds all of them and names a key tuple that no row of the referenced table holds aborts the call with a typed reason naming the foreign key and the dangling tuple; the call changes no state.
 - [KILN-IR-47] A reference that is dangling only in the middle of a transaction, because the parent is inserted or the child is repointed or removed before the end, commits.
 - [KILN-IR-48] A parent row the transaction deleted, while a row of the final state still references its key, aborts the call with a typed reason naming the foreign key and the key; the call changes no state.
 - [KILN-IR-49] A parent row the transaction deleted commits when no row of the final state references its key any more, including when the transaction removed or repointed the children first, and when the transaction inserted the parent again.
-- [KILN-IR-50] A child check logs one constraint-origin point read, touching no column, on the referenced table at the referenced key per child row the transaction wrote the foreign-key column on, however often it wrote the row; a child row written without that column is not checked. A parent-deletion check logs one constraint-origin constraint lookup on the child table, naming the foreign key and the deleted key's tuple (the representation the unique check uses), per deleted parent key absent from the final state. Neither logs a range read or table scan.
+- [KILN-IR-50] A child check logs one constraint-origin point read, touching no column, on the referenced table at the referenced key per child row the transaction wrote any of the foreign key's columns on, however often it wrote the row; a child row lacking any of those columns in its final state is not checked. A parent-deletion check logs one constraint-origin constraint lookup on the child table, naming the foreign key and the deleted key's tuple (the representation the unique check uses), per deleted parent key absent from the final state. Neither logs a range read or table scan.
 
 ## Check constraints
 
@@ -100,7 +100,7 @@ module; several tests may share it.
 ## Typed constraint declarations
 
 - [KILN-IR-56] A check constraint whose operand is an integer on an integer column, or text on a text column, is accepted. An operand of the other type is rejected with a typed schema error, because such a comparison would hold or fail for every row regardless of the data.
-- [KILN-IR-57] A foreign key's column must have the kind of the referenced table's key column: an integer column onto an integer key and a text column onto a text key are accepted, any other pairing is rejected with a typed schema error, because no row's key could ever equal its value.
+- [KILN-IR-57] Each column of a foreign key must have the kind of the referenced primary key's column at its position: an integer column onto an integer key and a text column onto a text key are accepted, any other pairing is rejected with a typed schema error, because no row's key could ever equal its value.
 
 ## Replay
 

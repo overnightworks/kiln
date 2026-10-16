@@ -6,6 +6,13 @@
 use super::tables::TpccTable;
 use super::TpccTransaction;
 
+/// Why a step the IR can now express still refuses the lowering: the capabilities
+/// of #61 that have not landed (the other requirements name their own).
+const PENDING_LOWERING: &str = "this lowering is not redone onto it yet and waits on the IR \
+     capabilities of #61 that have not landed: prefix ranges, keyless append, scans and \
+     selection, collection processing, text and formatting, structured responses and the host \
+     boundary";
+
 /// What a step needs from the IR to be lowered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Requirement {
@@ -64,8 +71,8 @@ impl Requirement {
                 let keys = table.composite_foreign_keys();
                 (!keys.is_empty()).then(|| {
                     format!(
-                        "{} must enforce the foreign keys {} (Clause 1.3.1) and the IR has no \
-                         enforcement of a reference by several columns",
+                        "{} must enforce the foreign keys {} (Clause 1.3.1); the IR enforces \
+                         them, but {PENDING_LOWERING}",
                         table.name(),
                         keys.join(", ")
                     )
@@ -123,8 +130,7 @@ impl Requirement {
 fn keyed_by_several(table: TpccTable) -> Option<String> {
     (table.primary_key().len() > 1).then(|| {
         format!(
-            "{} is keyed by ({}): the IR has no faithful compound-key construction and \
-             enforcement, and keys a row by one value",
+            "{} is keyed by ({}); the IR keys a row by several columns, but {PENDING_LOWERING}",
             table.name(),
             table.primary_key().join(", ")
         )
